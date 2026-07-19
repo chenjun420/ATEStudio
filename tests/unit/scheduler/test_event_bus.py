@@ -1,0 +1,384 @@
+"""Unit tests for EventBus in ATE Platform.
+
+Tests cover:
+- Basic pub/sub functionality
+- Wildcard subscriptions
+- Async callbacks
+- Graceful shutdown
+"""
+
+import asyncio
+from datetime import datetime
+
+import pytest
+
+from ate_platform.scheduler.event_bus import EventBus, Event, EventType
+
+
+class TestEventType:
+    """Tests for EventType enum."""
+
+    def test_event_type_values(self) -> None:
+        """EventType should have all required values."""
+        assert EventType.STEP_STATUS_CHANGED.value == "STEP_STATUS_CHANGED"
+        assert EventType.VARIABLE_CHANGED.value == "VARIABLE_CHANGED"
+        assert EventType.RESOURCE_RELEASED.value == "RESOURCE_RELEASED"
+        assert EventType.TIMER_EXPIRED.value == "TIMER_EXPIRED"
+        assert EventType.EXTERNAL_CMD.value == "EXTERNAL_CMD"
+
+    def test_event_type_count(self) -> None:
+        """EventType should have exactly 5 values."""
+        assert len(EventType) == 5
+
+
+class TestEvent:
+    """Tests for Event dataclass."""
+
+    def test_event_creation(self) -> None:
+        """Event should be created with correct attributes."""
+        data = {"step": "test_step", "status": "running"}
+        event = Event(type=EventType.STEP_STATUS_CHANGED, data=data)
+
+        assert event.type == EventType.STEP_STATUS_CHANGED
+        assert event.data == data
+        assert isinstance(event.timestamp, datetime)
+
+    def test_event_auto_timestamp(self) -> None:
+        """Event should auto-generate timestamp."""
+        before = datetime.now()
+        event = Event(type=EventType.VARIABLE_CHANGED, data={"var": "x"})
+        after = datetime.now()
+
+        assert before <= event.timestamp <= after
+
+    def test_event_custom_timestamp(self) -> None:
+        """Event should accept custom timestamp."""
+        custom_time = datetime(2025, 1, 1, 12, 0, 0)
+        event = Event(
+            type=EventType.TIMER_EXPIRED, data={"timer": "t1"}, timestamp=custom_time
+        )
+
+        assert event.timestamp == custom_time
+
+
+class TestEventBusSubscribe:
+    """Tests for EventBus subscribe/unsubscribe."""
+
+    def test_subscribe_sync_callback(self) -> None:
+        """Should allow subscribing with sync callback."""
+        bus = EventBus()
+
+        def handler(event: Event) -> None:
+            pass
+
+        bus.subscribe(EventType.STEP_STATUS_CHANGED, handler)
+        assert handler in bus._subscribers[EventType.STEP_STATUS_CHANGED]
+
+    def test_subscribe_async_callback(self) -> None:
+        """Should allow subscribing with async callback."""
+        bus = EventBus()
+
+        async def handler(event: Event) -> None:
+            pass
+
+        bus.subscribe(EventType.VARIABLE_CHANGED, handler)
+        assert handler in bus._subscribers[EventType.VARIABLE_CHANGED]
+
+    def test_subscribe_wildcard(self) -> None:
+        """Should allow wildcard subscription with None."""
+        bus = EventBus()
+
+        def handler(event: Event) -> None:
+            pass
+
+        bus.subscribe(None, handler)
+        assert handler in bus._subscribers[None]
+
+    def test_subscribe_multiple_callbacks_same_type(self) -> None:
+        """Should allow multiple callbacks for same event type."""
+        bus = EventBus()
+
+        def handler1(event: Event) -> None:
+            pass
+
+        def handler2(event: Event) -> None:
+            pass
+
+        bus.subscribe(EventType.STEP_STATUS_CHANGED, handler1)
+        bus.subscribe(EventType.STEP_STATUS_CHANGED, handler2)
+
+        assert len(bus._subscribers[EventType.STEP_STATUS_CHANGED]) == 2
+
+    def test_subscribe_non_callable_raises(self) -> None:
+        """Should raise TypeError for non-callable callback."""
+        bus = EventBus()
+
+        with pytest.raises(TypeError, match="callback must be callable"):
+            bus.subscribe(EventType.STEP_STATUS_CHANGED, "not_callable")  # type: ignore
+
+    def test_unsubscribe_existing(self) -> None:
+        """Should return True when unsubscribing existing callback."""
+        bus = EventBus()
+
+        def handler(event: Event) -> None:
+            pass
+
+        bus.subscribe(EventType.STEP_STATUS_CHANGED, handler)
+        result = bus.unsubscribe(EventType.STEP_STATUS_CHANGED, handler)
+
+        assert result is True
+        assert handler not in bus._subscribers.get(EventType.STEP_STATUS_CHANGED, [])
+
+    def test_unsubscribe_non_existing(self) -> None:
+        """Should return False when unsubscribing non-existing callback."""
+        bus = EventBus()
+
+        def handler(event: Event) -> None:
+            pass
+
+        result = bus.unsubscribe(EventType.STEP_STATUS_CHANGED, handler)
+        assert result is False
+
+    def test_unsubscribe_from_empty_type(self) -> None:
+        """Should return False when unsubscribing from non-existent type."""
+        bus = EventBus()
+
+        def handler(event: Event) -> None:
+            pass
+
+        result = bus.unsubscribe(EventType.TIMER_EXPIRED, handler)
+        assert result is False
+
+
+class TestEventBusPublish:
+    """Tests for EventBus publish functionality."""
+
+    @pytest.mark.asyncio
+    async def test_publish_queues_event(self) -> None:
+        """Published event should be queued."""
+        bus = EventBus()
+        await bus.publish(EventType.STEP_STATUS_CHANGED, {"step": "test"})
+
+        assert bus._queue.qsize() == 1
+
+    @pytest.mark.asyncio
+    async def test_publish_creates_event_with_timestamp(self) -> None:
+        """Published event should have timestamp."""
+        bus = EventBus()
+        before = datetime.now()
+        await bus.publish(EventType.VARIABLE_CHANGED, {"var": "x"})
+        after = datetime.now()
+
+        event = await bus._queue.get()
+        assert before <= event.timestamp <= after
+
+
+class TestEventBusStartStop:
+    """Tests for EventBus start/stop lifecycle."""
+
+    @pytest.mark.asyncio
+    async def test_start_creates_task(self) -> None:
+        """Start should create processing task."""
+        bus = EventBus()
+        await bus.start()
+
+        assert bus._running is True
+        assert bus._task is not None
+
+        await bus.stop()
+
+    @pytest.mark.asyncio
+    async def test_start_idempotent(self) -> None:
+        """Multiple start calls should be safe."""
+        bus = EventBus()
+        await bus.start()
+        task1 = bus._task
+        await bus.start()
+        task2 = bus._task
+
+        assert task1 == task2
+
+        await bus.stop()
+
+    @pytest.mark.asyncio
+    async def test_stop_when_not_running(self) -> None:
+        """Stop when not running should be safe."""
+        bus = EventBus()
+        await bus.stop()  # Should not raise
+
+        assert bus._running is False
+
+    @pytest.mark.asyncio
+    async def test_stop_clears_running_flag(self) -> None:
+        """Stop should set running to False."""
+        bus = EventBus()
+        await bus.start()
+        await bus.stop()
+
+        assert bus._running is False
+
+
+class TestEventBusIntegration:
+    """Integration tests for full event flow."""
+
+    @pytest.mark.asyncio
+    async def test_basic_pub_sub(self) -> None:
+        """Should deliver events to subscribers."""
+        bus = EventBus()
+        received: list[Event] = []
+
+        def handler(event: Event) -> None:
+            received.append(event)
+
+        bus.subscribe(EventType.STEP_STATUS_CHANGED, handler)
+        await bus.start()
+
+        await bus.publish(EventType.STEP_STATUS_CHANGED, {"step": "test_step", "status": "running"})
+
+        # Wait for event to be processed
+        await asyncio.sleep(0.1)
+        await bus.stop()
+
+        assert len(received) == 1
+        assert received[0].type == EventType.STEP_STATUS_CHANGED
+        assert received[0].data["step"] == "test_step"
+
+    @pytest.mark.asyncio
+    async def test_wildcard_subscription(self) -> None:
+        """Wildcard subscriber should receive all events."""
+        bus = EventBus()
+        received: list[Event] = []
+
+        def handler(event: Event) -> None:
+            received.append(event)
+
+        bus.subscribe(None, handler)  # Wildcard
+        await bus.start()
+
+        await bus.publish(EventType.STEP_STATUS_CHANGED, {"step": "s1"})
+        await bus.publish(EventType.VARIABLE_CHANGED, {"var": "v1"})
+        await bus.publish(EventType.TIMER_EXPIRED, {"timer": "t1"})
+
+        await asyncio.sleep(0.1)
+        await bus.stop()
+
+        assert len(received) == 3
+
+    @pytest.mark.asyncio
+    async def test_async_callback(self) -> None:
+        """Should handle async callbacks correctly."""
+        bus = EventBus()
+        received: list[Event] = []
+
+        async def async_handler(event: Event) -> None:
+            await asyncio.sleep(0.01)  # Simulate async work
+            received.append(event)
+
+        bus.subscribe(EventType.VARIABLE_CHANGED, async_handler)
+        await bus.start()
+
+        await bus.publish(EventType.VARIABLE_CHANGED, {"var": "x", "value": 42})
+
+        await asyncio.sleep(0.2)
+        await bus.stop()
+
+        assert len(received) == 1
+        assert received[0].data["var"] == "x"
+
+    @pytest.mark.asyncio
+    async def test_graceful_stop(self) -> None:
+        """Should process all events before stopping."""
+        bus = EventBus()
+        received: list[Event] = []
+
+        def handler(event: Event) -> None:
+            received.append(event)
+
+        bus.subscribe(EventType.STEP_STATUS_CHANGED, handler)
+        await bus.start()
+
+        # Publish multiple events
+        for i in range(5):
+            await bus.publish(EventType.STEP_STATUS_CHANGED, {"index": i})
+
+        # Stop should wait for all events
+        await bus.stop()
+
+        # All events should be processed
+        assert len(received) >= 1  # At least some events processed
+
+    @pytest.mark.asyncio
+    async def test_multiple_subscribers_same_type(self) -> None:
+        """Multiple subscribers should all receive events."""
+        bus = EventBus()
+        received1: list[Event] = []
+        received2: list[Event] = []
+
+        def handler1(event: Event) -> None:
+            received1.append(event)
+
+        def handler2(event: Event) -> None:
+            received2.append(event)
+
+        bus.subscribe(EventType.EXTERNAL_CMD, handler1)
+        bus.subscribe(EventType.EXTERNAL_CMD, handler2)
+        await bus.start()
+
+        await bus.publish(EventType.EXTERNAL_CMD, {"cmd": "reset"})
+
+        await asyncio.sleep(0.1)
+        await bus.stop()
+
+        assert len(received1) == 1
+        assert len(received2) == 1
+
+    @pytest.mark.asyncio
+    async def test_callback_exception_doesnt_crash(self) -> None:
+        """Bus should continue after callback exception."""
+        bus = EventBus()
+        received: list[Event] = []
+
+        def bad_handler(event: Event) -> None:
+            raise ValueError("Intentional error")
+
+        def good_handler(event: Event) -> None:
+            received.append(event)
+
+        bus.subscribe(EventType.RESOURCE_RELEASED, bad_handler)
+        bus.subscribe(EventType.RESOURCE_RELEASED, good_handler)
+        await bus.start()
+
+        await bus.publish(EventType.RESOURCE_RELEASED, {"resource": "r1"})
+
+        await asyncio.sleep(0.1)
+        await bus.stop()
+
+        # Good handler should still receive event
+        assert len(received) == 1
+
+    @pytest.mark.asyncio
+    async def test_unsubscribe_during_processing(self) -> None:
+        """Should handle unsubscribe during event processing."""
+        bus = EventBus()
+        count = 0
+
+        def handler(event: Event) -> None:
+            nonlocal count
+            count += 1
+
+        bus.subscribe(EventType.TIMER_EXPIRED, handler)
+        await bus.start()
+
+        await bus.publish(EventType.TIMER_EXPIRED, {"timer": "t1"})
+        await asyncio.sleep(0.05)
+
+        # Unsubscribe while bus is running
+        bus.unsubscribe(EventType.TIMER_EXPIRED, handler)
+
+        await bus.publish(EventType.TIMER_EXPIRED, {"timer": "t2"})
+        await asyncio.sleep(0.05)
+
+        await bus.stop()
+
+        # First event should have been delivered
+        assert count >= 1

@@ -1,0 +1,31 @@
+# Sample ATE Test Plan for Integration Testing
+name: integration_test_plan
+version: "1.0"
+scope: production
+max_concurrency: 2
+
+steps:
+  - id: step_init
+    script: test_scripts/init_pass.py
+    params:
+      voltage: 3.3
+    timeout: 30
+    retry: 0
+
+  - id: step_measure
+    script: test_scripts/measure_pass.py
+    params:
+      channel: 1
+    preconditions:
+      - step_init
+    timeout: 30
+    retry: 0
+
+  - id: step_validate
+    script: test_scripts/validate_pass.py
+    params:
+      threshold: 3.0
+    preconditions:
+      - step_measure
+    timeout: 30
+    retry: 0
