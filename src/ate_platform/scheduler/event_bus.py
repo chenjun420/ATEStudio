@@ -1,8 +1,8 @@
 """Event bus for asynchronous event-driven communication in ATE Platform.
 
 This module provides a publish-subscribe event system:
-- EventType: Enum of supported event types
-- Event: Data container for event messages
+- EventType: Enum of supported event types (imported from shared.events)
+- Event: Data container for event messages (imported from shared.events)
 - EventBus: Async event bus with pub/sub support and wildcard subscriptions
 """
 
@@ -11,42 +11,9 @@ import inspect
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum
 from typing import Any
 
-
-class EventType(Enum):
-    """Enumeration of supported event types in the ATE Platform.
-
-    Attributes:
-        STEP_STATUS_CHANGED: A step's execution status has changed
-        VARIABLE_CHANGED: A test variable has been modified
-        RESOURCE_RELEASED: A resource has been released
-        TIMER_EXPIRED: A timer has expired
-        EXTERNAL_CMD: An external command has been received
-    """
-
-    STEP_STATUS_CHANGED = "STEP_STATUS_CHANGED"
-    VARIABLE_CHANGED = "VARIABLE_CHANGED"
-    RESOURCE_RELEASED = "RESOURCE_RELEASED"
-    TIMER_EXPIRED = "TIMER_EXPIRED"
-    EXTERNAL_CMD = "EXTERNAL_CMD"
-
-
-@dataclass
-class Event:
-    """Container for event data.
-
-    Attributes:
-        type: The type of event
-        data: The event payload
-        timestamp: When the event was created (auto-generated if not provided)
-    """
-
-    type: EventType
-    data: dict[str, Any]
-    timestamp: datetime = field(default_factory=datetime.now)
-
+from shared.events import Event, EventType
 
 # Type alias for callback functions (sync or async)
 Callback = Callable[[Event], None] | Callable[[Event], Any]
