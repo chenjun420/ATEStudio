@@ -1,38 +1,11 @@
 """API integration tests for scripts CRUD operations.
 
 Uses httpx AsyncClient with ASGITransport to test the FastAPI endpoints.
+All tests use SQLite in-memory database configured in conftest.py.
 """
 
 import pytest
 import httpx
-from httpx import ASGITransport
-
-from ate_cloud.main import create_app
-from ate_cloud.api.v1 import scripts as scripts_module
-
-
-@pytest.fixture
-def app():
-    """Create a fresh FastAPI app for each test."""
-    return create_app()
-
-
-@pytest.fixture
-async def client(app):
-    """Create an async HTTP client for testing."""
-    transport = ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
-        yield ac
-
-
-@pytest.fixture(autouse=True)
-async def reset_storage():
-    """Reset storage before each test for isolation."""
-    from ate_cloud.storage.memory import MemoryStorage
-    from ate_cloud.schemas.script import ScriptResponse
-
-    # Create fresh storage for each test
-    scripts_module.storage = MemoryStorage[ScriptResponse]()
 
 
 class TestListScripts:
@@ -118,6 +91,20 @@ class TestCreateScript:
         response = await client.post("/api/v1/scripts", json=script_data)
         assert response.status_code == 422  # Validation error
 
+    @pytest.mark.asyncio
+    async def test_create_script_duplicate_name(self, client):
+        """Test creating a script with a duplicate name."""
+        script_data = {
+            "name": "Duplicate Script",
+            "script_path": "/scripts/duplicate.py"
+        }
+        response = await client.post("/api/v1/scripts", json=script_data)
+        assert response.status_code == 201
+
+        # Try to create another script with the same name
+        response = await client.post("/api/v1/scripts", json=script_data)
+        assert response.status_code == 409  # Conflict
+
 
 class TestGetScript:
     """Tests for GET /api/v1/scripts/{id} endpoint."""
@@ -182,6 +169,25 @@ class TestUpdateScript:
         update_data = {"name": "New Name"}
         response = await client.put("/api/v1/scripts/nonexistent-id", json=update_data)
         assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_update_script_duplicate_name(self, client):
+        """Test updating a script name to an already existing name."""
+        # Create two scripts
+        await client.post("/api/v1/scripts", json={
+            "name": "Script One",
+            "script_path": "/scripts/one.py"
+        })
+        create_response = await client.post("/api/v1/scripts", json={
+            "name": "Script Two",
+            "script_path": "/scripts/two.py"
+        })
+        script_id = create_response.json()["id"]
+
+        # Try to update Script Two's name to Script One
+        update_data = {"name": "Script One"}
+        response = await client.put(f"/api/v1/scripts/{script_id}", json=update_data)
+        assert response.status_code == 409  # Conflict
 
 
 class TestDeleteScript:

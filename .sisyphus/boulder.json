@@ -1,0 +1,23 @@
+{
+  "active_plan": "F:\\Workspace\\ATEStudio\\.sisyphus\\plans\\database-integration.md",
+  "started_at": "2026-07-19T11:08:15.162Z",
+  "session_ids": [
+    "ses_087306364ffeRFTvhLAML7eycr"
+  ],
+  "session_origins": {
+    "ses_087306364ffeRFTvhLAML7eycr": "direct"
+  },
+  "plan_name": "database-integration",
+  "agent": "atlas",
+  "task_sessions": {
+    "todo:2": {
+      "task_key": "todo:2",
+      "task_label": "2",
+      "task_title": "数据库连接池和会话管理",
+      "session_id": "ses_085de29cdffeeyE8Hbo7O7xPsa",
+      "agent": "Sisyphus-Junior",
+      "category": "deep",
+      "updated_at": "2026-07-19T11:30:11.933Z"
+    }
+  }
+}
