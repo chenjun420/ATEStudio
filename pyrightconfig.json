@@ -1,0 +1,9 @@
+{
+  "include": ["src"],
+  "exclude": ["**/tests/**"],
+  "typeCheckingMode": "strict",
+  "reportMissingTypeStubs": false,
+  "reportUnknownMemberType": "warning",
+  "reportUnknownVariableType": "warning",
+  "reportPrivateUsage": "warning"
+}
