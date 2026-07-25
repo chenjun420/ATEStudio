@@ -1,4 +1,9 @@
-"""Digital Multimeter (DMM) driver implementation."""
+"""Digital Multimeter (DMM) driver implementation — HAL + MAL layers.
+
+DMMHALDriver: SCPI/VISA communication layer only.
+DMMAbstraction: Semantic measurement methods that delegate to DMMHALDriver.
+MockDMMDriver: Mock driver for testing without real hardware (kept for Task 5 migration).
+"""
 
 from __future__ import annotations
 
@@ -6,7 +11,8 @@ import random
 from typing import TYPE_CHECKING
 
 from ate_platform.drivers import DriverRegistry
-from ate_platform.drivers.base import InstrumentDriver
+from ate_platform.drivers.base_hal import BaseDriver
+from ate_platform.drivers.base_mal import BaseAbstraction
 
 if TYPE_CHECKING:
     import pyvisa
@@ -15,68 +21,91 @@ if TYPE_CHECKING:
 DMM_DRIVER_NAME = "dmm"
 
 
-class DMMDriver(InstrumentDriver):
-    """Digital Multimeter driver using SCPI commands.
+# ---------------------------------------------------------------------------
+# HAL Layer — SCPI commands only
+# ---------------------------------------------------------------------------
 
-    Supports standard DMM measurements: voltage, current, resistance.
+
+class DMMHALDriver(BaseDriver):
+    """DMM HAL driver — pure SCPI/VISA communication.
+
+    Routes SCPI commands to the instrument. No semantic methods.
     """
 
-    def measure_voltage(self, channel: int = 1) -> float:
+
+# ---------------------------------------------------------------------------
+# MAL Layer — Semantic measurement methods
+# ---------------------------------------------------------------------------
+
+
+class DMMAbstraction(BaseAbstraction):
+    """DMM MAL abstraction — semantic measurement methods.
+
+    Translates high-level measurement requests into SCPI commands
+    via the injected DMMHALDriver.
+    """
+
+    def measure_voltage(self, range: str | None = None) -> float:
         """Measure DC voltage.
 
         Args:
-            channel: Measurement channel (default: 1).
+            range: Optional range string (e.g., "10", "100"). If provided,
+                   sends CONF:VOLT:DC <range> before measuring.
 
         Returns:
             Measured voltage in volts.
-
-        Raises:
-            RuntimeError: If not connected to instrument.
         """
-        if channel > 1:
-            response = self.query(f"MEAS:VOLT:DC? (@{channel})")
-        else:
-            response = self.query("MEAS:VOLT:DC?")
+        if range is not None:
+            self._driver.write(f"CONF:VOLT:DC {range}")
+        response = self._driver.query("MEAS:VOLT:DC?")
         return float(response.strip())
 
-    def measure_current(self, channel: int = 1) -> float:
+    def measure_current(self, range: str | None = None) -> float:
         """Measure DC current.
 
         Args:
-            channel: Measurement channel (default: 1).
+            range: Optional range string. If provided, sends CONF:CURR:DC <range>
+                   before measuring.
 
         Returns:
             Measured current in amperes.
-
-        Raises:
-            RuntimeError: If not connected to instrument.
         """
-        if channel > 1:
-            response = self.query(f"MEAS:CURR:DC? (@{channel})")
-        else:
-            response = self.query("MEAS:CURR:DC?")
+        if range is not None:
+            self._driver.write(f"CONF:CURR:DC {range}")
+        response = self._driver.query("MEAS:CURR:DC?")
         return float(response.strip())
 
-    def measure_resistance(self, channel: int = 1) -> float:
+    def measure_resistance(self, range: str | None = None) -> float:
         """Measure resistance.
 
         Args:
-            channel: Measurement channel (default: 1).
+            range: Optional range string. If provided, sends CONF:RES <range>
+                   before measuring.
 
         Returns:
             Measured resistance in ohms.
-
-        Raises:
-            RuntimeError: If not connected to instrument.
         """
-        if channel > 1:
-            response = self.query(f"MEAS:RES? (@{channel})")
-        else:
-            response = self.query("MEAS:RES?")
+        if range is not None:
+            self._driver.write(f"CONF:RES {range}")
+        response = self._driver.query("MEAS:RES?")
         return float(response.strip())
 
 
-class MockDMMDriver(InstrumentDriver):
+# ---------------------------------------------------------------------------
+# Backward-compatible alias — deprecated, use DMMHALDriver + DMMAbstraction
+# ---------------------------------------------------------------------------
+
+# DMMDriver kept as backward-compatible alias for DMMHALDriver.
+# New code should use DMMHALDriver (HAL) + DMMAbstraction (MAL) separately.
+DMMDriver = DMMHALDriver
+
+
+# ---------------------------------------------------------------------------
+# Mock driver — kept for Task 5 migration to auto-mock factory
+# ---------------------------------------------------------------------------
+
+
+class MockDMMDriver(BaseDriver):
     """Mock DMM driver for testing without real hardware.
 
     Simulates realistic measurement values with small random variations.
@@ -118,7 +147,7 @@ class MockDMMDriver(InstrumentDriver):
             msg = "Not connected to any instrument. Call connect() first."
             raise RuntimeError(msg)
 
-    def query(self, command: str, delay: float = 0.1) -> str:  # noqa: PLW0221
+    def query(self, command: str, delay: float | None = None) -> str:  # noqa: PLW0221
         """Mock query - returns simulated responses.
 
         Args:
@@ -214,5 +243,5 @@ class MockDMMDriver(InstrumentDriver):
 
 
 # Register drivers when module is imported
-DriverRegistry.register_driver(DMM_DRIVER_NAME, DMMDriver)
+DriverRegistry.register(DMM_DRIVER_NAME, hal_cls=DMMHALDriver, mal_cls=DMMAbstraction)
 DriverRegistry.register_driver(f"mock_{DMM_DRIVER_NAME}", MockDMMDriver)

@@ -1,4 +1,9 @@
-"""Programmable Power Supply Unit (PSU) driver implementation."""
+"""Programmable Power Supply Unit (PSU) driver implementation — HAL + MAL layers.
+
+PSUHALDriver: SCPI/VISA communication layer only.
+PSUAbstraction: Semantic control methods that delegate to PSUHALDriver.
+MockPSUDriver: Mock driver for testing without real hardware (kept for Task 5 migration).
+"""
 
 from __future__ import annotations
 
@@ -6,7 +11,8 @@ import random
 from typing import TYPE_CHECKING
 
 from ate_platform.drivers import DriverRegistry
-from ate_platform.drivers.base import InstrumentDriver
+from ate_platform.drivers.base_hal import BaseDriver
+from ate_platform.drivers.base_mal import BaseAbstraction
 
 if TYPE_CHECKING:
     import pyvisa
@@ -16,102 +22,80 @@ PSU_DRIVER_NAME = "psu"
 MOCK_PSU_DRIVER_NAME = "mock_psu"
 
 
-class PSUDriver(InstrumentDriver):
-    """Programmable Power Supply driver using SCPI commands.
+# ---------------------------------------------------------------------------
+# HAL Layer — SCPI commands only
+# ---------------------------------------------------------------------------
 
-    Supports voltage/current setting and output control.
+
+class PSUHALDriver(BaseDriver):
+    """PSU HAL driver — pure SCPI/VISA communication.
+
+    Routes SCPI commands to the instrument. No semantic methods.
     """
 
-    def set_voltage(self, channel: int, voltage: float) -> None:
-        """Set output voltage for a channel.
+
+# ---------------------------------------------------------------------------
+# MAL Layer — Semantic control methods
+# ---------------------------------------------------------------------------
+
+
+class PSUAbstraction(BaseAbstraction):
+    """PSU MAL abstraction — semantic control methods.
+
+    Translates high-level control requests into SCPI commands
+    via the injected PSUHALDriver.
+    """
+
+    def set_voltage(self, voltage: float) -> None:
+        """Set output voltage.
 
         Args:
-            channel: Output channel number.
             voltage: Target voltage in volts.
-
-        Raises:
-            RuntimeError: If not connected to instrument.
         """
-        self.write(f"INST:NSEL {channel}")
-        self.write(f"VOLT {voltage}")
+        self._driver.write(f"VOLT {voltage}")
 
-    def set_current_limit(self, channel: int, current: float) -> None:
-        """Set current limit for a channel.
+    def set_current(self, current: float) -> None:
+        """Set current limit.
 
         Args:
-            channel: Output channel number.
             current: Current limit in amperes.
-
-        Raises:
-            RuntimeError: If not connected to instrument.
         """
-        self.write(f"INST:NSEL {channel}")
-        self.write(f"CURR {current}")
+        self._driver.write(f"CURR {current}")
 
-    def output_on(self, channel: int = 1) -> None:
-        """Turn on output for a channel.
+    def enable_output(self, enable: bool = True) -> None:
+        """Enable or disable output.
 
         Args:
-            channel: Output channel number (default: 1).
-
-        Raises:
-            RuntimeError: If not connected to instrument.
+            enable: True to enable, False to disable.
         """
-        if channel > 1:
-            self.write(f"INST:NSEL {channel}")
-        self.write("OUTP ON")
+        self._driver.write(f"OUTP {'ON' if enable else 'OFF'}")
 
-    def output_off(self, channel: int = 1) -> None:
-        """Turn off output for a channel.
-
-        Args:
-            channel: Output channel number (default: 1).
-
-        Raises:
-            RuntimeError: If not connected to instrument.
-        """
-        if channel > 1:
-            self.write(f"INST:NSEL {channel}")
-        self.write("OUTP OFF")
-
-    def measure_current(self, channel: int = 1) -> float:
-        """Measure output current for a channel.
-
-        Args:
-            channel: Output channel number (default: 1).
+    def measure_output(self) -> tuple[float, float]:
+        """Measure output voltage and current.
 
         Returns:
-            Measured current in amperes.
-
-        Raises:
-            RuntimeError: If not connected to instrument.
+            Tuple of (voltage, current).
         """
-        if channel > 1:
-            response = self.query(f"MEAS:CURR? (@{channel})")
-        else:
-            response = self.query("MEAS:CURR?")
-        return float(response.strip())
-
-    def measure_voltage(self, channel: int = 1) -> float:
-        """Measure output voltage for a channel.
-
-        Args:
-            channel: Output channel number (default: 1).
-
-        Returns:
-            Measured voltage in volts.
-
-        Raises:
-            RuntimeError: If not connected to instrument.
-        """
-        if channel > 1:
-            response = self.query(f"MEAS:VOLT? (@{channel})")
-        else:
-            response = self.query("MEAS:VOLT?")
-        return float(response.strip())
+        voltage = float(self._driver.query("MEAS:VOLT?").strip())
+        current = float(self._driver.query("MEAS:CURR?").strip())
+        return voltage, current
 
 
-class MockPSUDriver(InstrumentDriver):
+# ---------------------------------------------------------------------------
+# Backward-compatible alias — deprecated, use PSUHALDriver + PSUAbstraction
+# ---------------------------------------------------------------------------
+
+# PSUDriver kept as backward-compatible alias for PSUHALDriver.
+# New code should use PSUHALDriver (HAL) + PSUAbstraction (MAL) separately.
+PSUDriver = PSUHALDriver
+
+
+# ---------------------------------------------------------------------------
+# Mock driver — kept for Task 5 migration to auto-mock factory
+# ---------------------------------------------------------------------------
+
+
+class MockPSUDriver(BaseDriver):
     """Mock PSU driver for testing without real hardware.
 
     Simulates realistic PSU behavior with voltage/current tracking.
@@ -169,7 +153,7 @@ class MockPSUDriver(InstrumentDriver):
         self._check_connected()
         self._process_write_command(command)
 
-    def query(self, command: str, delay: float = 0.1) -> str:  # noqa: PLW0221
+    def query(self, command: str, delay: float | None = None) -> str:  # noqa: PLW0221
         """Mock query - returns simulated responses.
 
         Args:
@@ -345,5 +329,5 @@ class MockPSUDriver(InstrumentDriver):
 
 
 # Register drivers when module is imported
-DriverRegistry.register_driver(PSU_DRIVER_NAME, PSUDriver)
+DriverRegistry.register(PSU_DRIVER_NAME, hal_cls=PSUHALDriver, mal_cls=PSUAbstraction)
 DriverRegistry.register_driver(MOCK_PSU_DRIVER_NAME, MockPSUDriver)
