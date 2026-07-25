@@ -1,0 +1,100 @@
+# ATE Test Plan with Loop Constructs
+# Demonstrates FOR, WHILE, and FOREACH loop types
+
+name: loop_test_plan
+version: "1.0"
+scope:
+  environment: production
+  variables:
+    channel_count: 4
+    max_retries: 3
+max_concurrency: 2
+
+steps:
+  # Initial setup step
+  - id: setup
+    script: test_scripts/setup.py
+    params:
+      mode: full
+    timeout: 30
+    export_outputs: true
+
+  # FOR loop: repeat a measurement N times
+  - id: repeat_measurement
+    loop_type: FOR
+    count: 5
+    execution_mode: SERIAL
+    steps:
+      - id: measure_iteration
+        script: test_scripts/measure.py
+        params:
+          iteration: "{{ loop.index }}"
+        timeout: 60
+        retry: 1
+        export_outputs: true
+
+  # FOREACH loop: measure each channel in parallel
+  - id: channel_sweep
+    loop_type: FOREACH
+    collection: channels
+    iterator_var: channel
+    execution_mode: PARALLEL
+    steps:
+      - id: measure_channel
+        script: test_scripts/measure_channel.py
+        params:
+          channel: "{{ channel }}"
+          voltage: 3.3
+        timeout: 30
+      - id: validate_channel
+        script: test_scripts/validate.py
+        params:
+          channel: "{{ channel }}"
+          threshold: 3.0
+        preconditions:
+          - measure_channel
+        timeout: 30
+
+  # WHILE loop: poll until condition is met
+  - id: wait_for_stable
+    loop_type: WHILE
+    condition: "result.stability_score < 0.95"
+    max_iterations: 50
+    steps:
+      - id: poll_status
+        script: test_scripts/poll_stability.py
+        params:
+          interval: 1
+        timeout: 10
+
+  # Nested loops: outer FOR with inner FOREACH
+  - id: multi_dut_test
+    loop_type: FOR
+    count: 3
+    steps:
+      - id: dut_sweep
+        loop_type: FOREACH
+        collection: voltage_levels
+        iterator_var: voltage
+        execution_mode: PARALLEL
+        steps:
+          - id: apply_voltage
+            script: test_scripts/apply_voltage.py
+            params:
+              voltage: "{{ voltage }}"
+            timeout: 15
+          - id: measure_dut
+            script: test_scripts/measure_dut.py
+            params:
+              voltage: "{{ voltage }}"
+            preconditions:
+              - apply_voltage
+            timeout: 30
+            export_outputs: true
+
+  # Final cleanup step
+  - id: cleanup
+    script: test_scripts/cleanup.py
+    preconditions:
+      - setup
+    timeout: 30
