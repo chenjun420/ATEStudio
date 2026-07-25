@@ -25,10 +25,16 @@ class TestEventType:
         assert EventType.RESOURCE_RELEASED.value == "RESOURCE_RELEASED"
         assert EventType.TIMER_EXPIRED.value == "TIMER_EXPIRED"
         assert EventType.EXTERNAL_CMD.value == "EXTERNAL_CMD"
+        assert EventType.STEP_STARTED.value == "STEP_STARTED"
+        assert EventType.STEP_COMPLETED.value == "STEP_COMPLETED"
+        assert EventType.LOOP_ITERATION_STARTED.value == "LOOP_ITERATION_STARTED"
+        assert EventType.LOOP_ITERATION_COMPLETED.value == "LOOP_ITERATION_COMPLETED"
+        assert EventType.EXECUTION_STARTED.value == "EXECUTION_STARTED"
+        assert EventType.EXECUTION_COMPLETED.value == "EXECUTION_COMPLETED"
 
     def test_event_type_count(self) -> None:
-        """EventType should have exactly 5 values."""
-        assert len(EventType) == 5
+        """EventType should have exactly 11 values."""
+        assert len(EventType) == 11
 
 
 class TestEvent:
@@ -382,3 +388,176 @@ class TestEventBusIntegration:
 
         # First event should have been delivered
         assert count >= 1
+
+
+class TestSubscriberExceptionIsolation:
+    """Tests for per-subscriber exception isolation in _dispatch_event."""
+
+    @pytest.mark.asyncio
+    async def test_subscriber_exception_isolation(self) -> None:
+        """A failing subscriber must not prevent other subscribers from receiving events."""
+        bus = EventBus()
+        received1: list[Event] = []
+        received3: list[Event] = []
+
+        def handler1(event: Event) -> None:
+            received1.append(event)
+
+        def handler2(event: Event) -> None:
+            raise ValueError("Intentional subscriber failure")
+
+        def handler3(event: Event) -> None:
+            received3.append(event)
+
+        bus.subscribe(EventType.STEP_STATUS_CHANGED, handler1)
+        bus.subscribe(EventType.STEP_STATUS_CHANGED, handler2)
+        bus.subscribe(EventType.STEP_STATUS_CHANGED, handler3)
+        await bus.start()
+
+        await bus.publish(EventType.STEP_STATUS_CHANGED, {"step": "s1"})
+
+        await asyncio.sleep(0.1)
+        await bus.stop()
+
+        # handler1 and handler3 must still receive the event
+        assert len(received1) == 1
+        assert len(received3) == 1
+        assert received1[0].data["step"] == "s1"
+        assert received3[0].data["step"] == "s1"
+
+
+class TestPublishSyncQueuing:
+    """Tests for publish_sync event queuing when no loop is available."""
+
+    @pytest.mark.asyncio
+    async def test_publish_sync_queuing(self) -> None:
+        """Events published via publish_sync before set_event_loop should be delivered after loop is set."""
+        bus = EventBus()
+        received: list[Event] = []
+
+        def handler(event: Event) -> None:
+            received.append(event)
+
+        bus.subscribe(EventType.VARIABLE_CHANGED, handler)
+
+        # Simulate publish_sync from a non-async thread where no loop is available
+        # by directly appending to the pending queue (the production path when
+        # publish_sync is called from a worker thread with no loop set).
+        bus._pending_queue.append((EventType.VARIABLE_CHANGED, {"var": "x"}))
+        bus._pending_queue.append((EventType.VARIABLE_CHANGED, {"var": "y"}))
+
+        # Verify events are in the pending queue
+        assert len(bus._pending_queue) == 2
+
+        # Start the bus and set the event loop — should drain pending events
+        await bus.start()
+        loop = asyncio.get_running_loop()
+        bus.set_event_loop(loop)
+
+        # Wait for queued events to be processed
+        await asyncio.sleep(0.2)
+        await bus.stop()
+
+        # Both events should have been delivered
+        assert len(received) == 2
+        assert received[0].data["var"] == "x"
+        assert received[1].data["var"] == "y"
+
+    @pytest.mark.asyncio
+    async def test_publish_sync_with_loop_delivers_immediately(self) -> None:
+        """publish_sync with loop already set should deliver events immediately."""
+        bus = EventBus()
+        received: list[Event] = []
+
+        def handler(event: Event) -> None:
+            received.append(event)
+
+        bus.subscribe(EventType.STEP_COMPLETED, handler)
+        await bus.start()
+        bus.set_event_loop(asyncio.get_running_loop())
+
+        bus.publish_sync(EventType.STEP_COMPLETED, {"step": "s1"})
+
+        await asyncio.sleep(0.1)
+        await bus.stop()
+
+        assert len(received) == 1
+        assert received[0].data["step"] == "s1"
+
+    @pytest.mark.asyncio
+    async def test_publish_sync_from_worker_thread_queues(self) -> None:
+        """publish_sync from a worker thread with no loop set should queue events."""
+        import threading
+
+        bus = EventBus()
+
+        # Publish from a background thread where no loop is available
+        def publish_from_thread() -> None:
+            bus.publish_sync(EventType.VARIABLE_CHANGED, {"var": "thread_val"})
+
+        thread = threading.Thread(target=publish_from_thread)
+        thread.start()
+        thread.join(timeout=2.0)
+
+        # Event should be in the pending queue, not dropped
+        assert len(bus._pending_queue) == 1
+        assert bus._pending_queue[0][0] == EventType.VARIABLE_CHANGED
+        assert bus._pending_queue[0][1]["var"] == "thread_val"
+
+
+class TestEventBusStats:
+    """Tests for EventBus.stats property."""
+
+    @pytest.mark.asyncio
+    async def test_stats_property(self) -> None:
+        """Stats counters should accurately reflect publish/deliver/drop operations."""
+        bus = EventBus()
+
+        # Initial stats
+        assert bus.stats == {"published": 0, "delivered": 0, "dropped": 0, "pending": 0}
+
+        received: list[Event] = []
+
+        def good_handler(event: Event) -> None:
+            received.append(event)
+
+        def bad_handler(event: Event) -> None:
+            raise RuntimeError("fail")
+
+        bus.subscribe(EventType.STEP_STATUS_CHANGED, good_handler)
+        bus.subscribe(EventType.STEP_STATUS_CHANGED, bad_handler)
+        await bus.start()
+
+        # Publish 2 events — each dispatched to 2 subscribers (1 good, 1 bad)
+        await bus.publish(EventType.STEP_STATUS_CHANGED, {"step": "s1"})
+        await bus.publish(EventType.STEP_STATUS_CHANGED, {"step": "s2"})
+
+        await asyncio.sleep(0.1)
+        await bus.stop()
+
+        stats = bus.stats
+        assert stats["published"] == 2
+        # 2 events × 2 subscribers = 4 dispatch attempts
+        assert stats["delivered"] == 2  # good_handler succeeded twice
+        assert stats["dropped"] == 2  # bad_handler failed twice
+        assert stats["pending"] == 0
+
+    @pytest.mark.asyncio
+    async def test_stats_pending_counts_queued_events(self) -> None:
+        """Stats.pending should reflect events queued in _pending_queue."""
+        import threading
+
+        bus = EventBus()
+
+        # Queue events from a worker thread where no loop is available
+        def publish_from_thread() -> None:
+            bus.publish_sync(EventType.VARIABLE_CHANGED, {"var": "a"})
+            bus.publish_sync(EventType.VARIABLE_CHANGED, {"var": "b"})
+            bus.publish_sync(EventType.VARIABLE_CHANGED, {"var": "c"})
+
+        thread = threading.Thread(target=publish_from_thread)
+        thread.start()
+        thread.join(timeout=2.0)
+
+        assert bus.stats["pending"] == 3
+        assert bus.stats["published"] == 0  # publish_sync without loop doesn't increment published
