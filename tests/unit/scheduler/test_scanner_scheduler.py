@@ -6,6 +6,11 @@ Tests cover:
 - Step readiness detection
 - STEP_READY event emission
 - Deadlock detection
+- Reactive dispatch (event-driven step evaluation)
+- Dependency index building
+- Pending dispatch deduplication
+- Emergency scan (watchdog fallback)
+- Variable/resource change triggers
 """
 
 import asyncio
@@ -28,7 +33,7 @@ class TestScannerSchedulerInit:
     """Tests for ScannerScheduler initialization."""
 
     def test_init_with_defaults(self) -> None:
-        """Should initialize with default scan interval."""
+        """Should initialize with default scan interval (5.0s)."""
         event_bus = EventBus()
         registry = StepRegistry()
         evaluator = ConditionEvaluator({}, None, None)
@@ -68,7 +73,7 @@ class TestScannerSchedulerInit:
 
     def test_default_constants(self) -> None:
         """Should have expected default constants."""
-        assert ScannerScheduler.DEFAULT_SCAN_INTERVAL == 0.1
+        assert ScannerScheduler.DEFAULT_SCAN_INTERVAL == 5.0
         assert ScannerScheduler.DEADLOCK_THRESHOLD == 100
 
 
@@ -203,7 +208,7 @@ class TestScannerSchedulerStepReady:
 
     @pytest.mark.asyncio
     async def test_emits_step_ready_for_unconditional_step(self) -> None:
-        """Should emit STEP_READY for step with no conditions."""
+        """Should emit STEP_STARTED for step with no conditions."""
         event_bus = EventBus()
         registry = StepRegistry(event_bus=event_bus)
         evaluator = ConditionEvaluator({}, None, None)
@@ -227,7 +232,7 @@ class TestScannerSchedulerStepReady:
         def handler(event: Event) -> None:
             received.append(event)
 
-        event_bus.subscribe(EventType.STEP_STATUS_CHANGED, handler)
+        event_bus.subscribe(EventType.STEP_STARTED, handler)
 
         await event_bus.start()
         await scheduler.start()
@@ -238,14 +243,14 @@ class TestScannerSchedulerStepReady:
         await scheduler.stop()
         await event_bus.stop()
 
-        # Should have received STEP_READY event
-        step_ready_events = [e for e in received if e.data.get("event") == "STEP_READY"]
-        assert len(step_ready_events) == 1
-        assert step_ready_events[0].data["step_id"] == "step1"
+        # Should have received STEP_STARTED event
+        step_started_events = [e for e in received if e.type == EventType.STEP_STARTED]
+        assert len(step_started_events) == 1
+        assert step_started_events[0].data["step_id"] == "step1"
 
     @pytest.mark.asyncio
     async def test_does_not_emit_for_non_pending_step(self) -> None:
-        """Should not emit STEP_READY for non-pending steps."""
+        """Should not emit STEP_STARTED for non-pending steps."""
         event_bus = EventBus()
         registry = StepRegistry(event_bus=event_bus)
         evaluator = ConditionEvaluator({}, None, None)
@@ -270,7 +275,7 @@ class TestScannerSchedulerStepReady:
         def handler(event: Event) -> None:
             received.append(event)
 
-        event_bus.subscribe(EventType.STEP_STATUS_CHANGED, handler)
+        event_bus.subscribe(EventType.STEP_STARTED, handler)
 
         await event_bus.start()
         await scheduler.start()
@@ -281,13 +286,13 @@ class TestScannerSchedulerStepReady:
         await scheduler.stop()
         await event_bus.stop()
 
-        # Should not have received STEP_READY event
-        step_ready_events = [e for e in received if e.data.get("event") == "STEP_READY"]
-        assert len(step_ready_events) == 0
+        # Should not have received STEP_STARTED event
+        step_started_events = [e for e in received if e.type == EventType.STEP_STARTED]
+        assert len(step_started_events) == 0
 
     @pytest.mark.asyncio
     async def test_emits_step_ready_after_condition_met(self) -> None:
-        """Should emit STEP_READY after condition becomes true."""
+        """Should emit STEP_STARTED after condition becomes true."""
         event_bus = EventBus()
         registry = StepRegistry(event_bus=event_bus)
 
@@ -320,7 +325,7 @@ class TestScannerSchedulerStepReady:
         def handler(event: Event) -> None:
             received.append(event)
 
-        event_bus.subscribe(EventType.STEP_STATUS_CHANGED, handler)
+        event_bus.subscribe(EventType.STEP_STARTED, handler)
 
         await event_bus.start()
         await scheduler.start()
@@ -331,14 +336,14 @@ class TestScannerSchedulerStepReady:
         await scheduler.stop()
         await event_bus.stop()
 
-        # Should have received STEP_READY for step2
-        step_ready_events = [e for e in received if e.data.get("event") == "STEP_READY"]
-        step_ids = [e.data["step_id"] for e in step_ready_events]
+        # Should have received STEP_STARTED for step2
+        step_started_events = [e for e in received if e.type == EventType.STEP_STARTED]
+        step_ids = [e.data["step_id"] for e in step_started_events]
         assert "step2" in step_ids
 
     @pytest.mark.asyncio
     async def test_does_not_duplicate_notifications(self) -> None:
-        """Should not emit duplicate STEP_READY events."""
+        """Should not emit duplicate STEP_STARTED events."""
         event_bus = EventBus()
         registry = StepRegistry(event_bus=event_bus)
         evaluator = ConditionEvaluator({}, None, None)
@@ -362,7 +367,7 @@ class TestScannerSchedulerStepReady:
         def handler(event: Event) -> None:
             received.append(event)
 
-        event_bus.subscribe(EventType.STEP_STATUS_CHANGED, handler)
+        event_bus.subscribe(EventType.STEP_STARTED, handler)
 
         await event_bus.start()
         await scheduler.start()
@@ -373,9 +378,9 @@ class TestScannerSchedulerStepReady:
         await scheduler.stop()
         await event_bus.stop()
 
-        # Should have received exactly one STEP_READY event
-        step_ready_events = [e for e in received if e.data.get("event") == "STEP_READY"]
-        assert len(step_ready_events) == 1
+        # Should have received exactly one STEP_STARTED event
+        step_started_events = [e for e in received if e.type == EventType.STEP_STARTED]
+        assert len(step_started_events) == 1
 
 
 class TestScannerSchedulerDeadlockDetection:
@@ -383,7 +388,7 @@ class TestScannerSchedulerDeadlockDetection:
 
     @pytest.mark.asyncio
     async def test_deadlock_detection_emits_event(self) -> None:
-        """Should emit event when deadlock detected."""
+        """Should emit event when deadlock detected via emergency scan."""
         event_bus = EventBus()
         registry = StepRegistry(event_bus=event_bus)
         evaluator = ConditionEvaluator({}, None, None)
@@ -397,7 +402,7 @@ class TestScannerSchedulerDeadlockDetection:
             evaluator=evaluator,
             variable_space=variable_space,
             resource_manager=resource_manager,
-            scan_interval=0.01,  # Very fast scanning
+            scan_interval=0.01,  # Fast scanning for deadlock test
         )
 
         # Force deadlock threshold to low value
@@ -417,14 +422,14 @@ class TestScannerSchedulerDeadlockDetection:
         await event_bus.start()
         await scheduler.start()
 
-        # Wait for deadlock detection
-        await asyncio.sleep(0.2)
+        # Wait for deadlock detection (need enough scans at 0.01s interval)
+        await asyncio.sleep(0.3)
 
         await scheduler.stop()
         await event_bus.stop()
 
         # Should have received DEADLOCK_DETECTED event
-        deadlock_events = [e for e in received if e.data.get("event") == "DEADLOCK_DETECTED"]
+        deadlock_events = [e for e in received if e.data.get("command") == "DEADLOCK_DETECTED"]
         assert len(deadlock_events) >= 1
 
 
@@ -539,10 +544,10 @@ class TestScannerSchedulerEventHandlers:
         await event_bus.start()
         scheduler._setup_event_handlers()
 
-        # Publish step completion event
+        # Publish step completion event with normalized schema
         await event_bus.publish(
             EventType.STEP_STATUS_CHANGED,
-            {"step_id": "step1", "new_status": "PASSED"},
+            {"step_id": "step1", "old_status": "RUNNING", "new_status": "PASSED"},
         )
 
         # Wait for event processing
@@ -567,3 +572,634 @@ class TestDeadlockDetectedError:
         """Should preserve exception message."""
         error = DeadlockDetectedError("Test deadlock message")
         assert str(error) == "Test deadlock message"
+
+
+# ── New tests for reactive dispatch (Task 2) ──────────────────────────
+
+
+class TestDependencyIndex:
+    """Tests for compile_plan() dependency index building."""
+
+    def test_build_index_with_step_dependency(self) -> None:
+        """compile_plan should index step_id → dependent steps."""
+        event_bus = EventBus()
+        registry = StepRegistry()
+        evaluator = ConditionEvaluator({}, None, None)
+        variable_space = VariableSpace()
+        resource_manager = ResourceManager()
+
+        scheduler = ScannerScheduler(
+            event_bus=event_bus,
+            registry=registry,
+            evaluator=evaluator,
+            variable_space=variable_space,
+            resource_manager=resource_manager,
+        )
+
+        steps: list[tuple[str, Condition | None]] = [
+            ("step1", None),
+            ("step2", Condition(step="step1", status="PASSED")),
+            ("step3", Condition(step="step1", status="PASSED")),
+        ]
+        scheduler.compile_plan(steps)
+
+        index = scheduler._dependency_index
+        assert "step1" in index
+        assert index["step1"] == {"step2", "step3"}
+
+    def test_build_index_with_variable_dependency(self) -> None:
+        """compile_plan should index variable → dependent steps."""
+        event_bus = EventBus()
+        registry = StepRegistry()
+        evaluator = ConditionEvaluator({}, None, None)
+        variable_space = VariableSpace()
+        resource_manager = ResourceManager()
+
+        scheduler = ScannerScheduler(
+            event_bus=event_bus,
+            registry=registry,
+            evaluator=evaluator,
+            variable_space=variable_space,
+            resource_manager=resource_manager,
+        )
+
+        steps: list[tuple[str, Condition | None]] = [
+            ("step1", Condition(expression="${scope.voltage} > 3.0")),
+            ("step2", Condition(expression="${scope.temperature} < 100")),
+        ]
+        scheduler.compile_plan(steps)
+
+        index = scheduler._dependency_index
+        assert "scope.voltage" in index
+        assert index["scope.voltage"] == {"step1"}
+        assert "scope.temperature" in index
+        assert index["scope.temperature"] == {"step2"}
+
+    def test_build_index_with_resource_dependency(self) -> None:
+        """compile_plan should index resource → dependent steps."""
+        event_bus = EventBus()
+        registry = StepRegistry()
+        evaluator = ConditionEvaluator({}, None, None)
+        variable_space = VariableSpace()
+        resource_manager = ResourceManager()
+
+        scheduler = ScannerScheduler(
+            event_bus=event_bus,
+            registry=registry,
+            evaluator=evaluator,
+            variable_space=variable_space,
+            resource_manager=resource_manager,
+        )
+
+        steps: list[tuple[str, Condition | None]] = [
+            ("step1", Condition(resource_available=["DMM_CH1"])),
+            ("step2", Condition(resource_available=["DMM_CH1", "PSU_CH1"])),
+        ]
+        scheduler.compile_plan(steps)
+
+        index = scheduler._dependency_index
+        assert "DMM_CH1" in index
+        assert index["DMM_CH1"] == {"step1", "step2"}
+        assert "PSU_CH1" in index
+        assert index["PSU_CH1"] == {"step2"}
+
+    def test_build_index_no_condition(self) -> None:
+        """compile_plan should not index steps without conditions."""
+        event_bus = EventBus()
+        registry = StepRegistry()
+        evaluator = ConditionEvaluator({}, None, None)
+        variable_space = VariableSpace()
+        resource_manager = ResourceManager()
+
+        scheduler = ScannerScheduler(
+            event_bus=event_bus,
+            registry=registry,
+            evaluator=evaluator,
+            variable_space=variable_space,
+            resource_manager=resource_manager,
+        )
+
+        steps: list[tuple[str, Condition | None]] = [
+            ("step1", None),
+            ("step2", None),
+        ]
+        scheduler.compile_plan(steps)
+
+        assert len(scheduler._dependency_index) == 0
+
+    def test_build_index_clears_previous(self) -> None:
+        """compile_plan should clear previous index before building."""
+        event_bus = EventBus()
+        registry = StepRegistry()
+        evaluator = ConditionEvaluator({}, None, None)
+        variable_space = VariableSpace()
+        resource_manager = ResourceManager()
+
+        scheduler = ScannerScheduler(
+            event_bus=event_bus,
+            registry=registry,
+            evaluator=evaluator,
+            variable_space=variable_space,
+            resource_manager=resource_manager,
+        )
+
+        steps1: list[tuple[str, Condition | None]] = [
+            ("step1", Condition(step="step0", status="PASSED")),
+        ]
+        scheduler.compile_plan(steps1)
+        assert len(scheduler._dependency_index) == 1
+
+        steps2: list[tuple[str, Condition | None]] = [
+            ("stepA", Condition(step="stepB", status="PASSED")),
+        ]
+        scheduler.compile_plan(steps2)
+        assert "step0" not in scheduler._dependency_index
+        assert "stepB" in scheduler._dependency_index
+
+
+class TestReactiveDispatch:
+    """Tests for reactive dispatch via event handlers."""
+
+    @pytest.mark.asyncio
+    async def test_step_status_change_triggers_dependent_dispatch(self) -> None:
+        """on_step_status_changed should trigger dispatch for dependent steps."""
+        event_bus = EventBus()
+        registry = StepRegistry(event_bus=event_bus)
+        evaluator = ConditionEvaluator({}, None, None)
+        variable_space = VariableSpace(event_bus=event_bus)
+        resource_manager = ResourceManager()
+
+        scheduler = ScannerScheduler(
+            event_bus=event_bus,
+            registry=registry,
+            evaluator=evaluator,
+            variable_space=variable_space,
+            resource_manager=resource_manager,
+        )
+
+        # Register step1 (prerequisite) and step2 (depends on step1)
+        registry.register("step1")
+        registry.register("step2", Condition(step="step1", status="PASSED"))
+
+        # Build dependency index
+        scheduler.compile_plan([
+            ("step1", None),
+            ("step2", Condition(step="step1", status="PASSED")),
+        ])
+
+        # Set up event bus loop for reactive dispatch
+        await event_bus.start()
+
+        # Start scheduler (subscribes handlers)
+        scheduler._setup_event_handlers()
+
+        # Track STEP_STARTED events
+        received: list[Event] = []
+        def handler(event: Event) -> None:
+            received.append(event)
+        event_bus.subscribe(EventType.STEP_STARTED, handler)
+
+        # Mark step1 as PASSED — this should trigger reactive dispatch for step2
+        registry.update_status("step1", StepStatus.PASSED)
+
+        # Wait for event processing
+        await asyncio.sleep(0.2)
+
+        # step2 should have been dispatched
+        step_started = [e for e in received if e.type == EventType.STEP_STARTED]
+        step_ids = [e.data.get("step_id") for e in step_started]
+        assert "step2" in step_ids
+
+        await event_bus.stop()
+
+    @pytest.mark.asyncio
+    async def test_variable_change_triggers_dispatch(self) -> None:
+        """on_variable_changed should trigger dispatch for variable-dependent steps."""
+        event_bus = EventBus()
+        registry = StepRegistry(event_bus=event_bus)
+        evaluator = ConditionEvaluator({}, None, None)
+        variable_space = VariableSpace(event_bus=event_bus)
+        resource_manager = ResourceManager()
+
+        scheduler = ScannerScheduler(
+            event_bus=event_bus,
+            registry=registry,
+            evaluator=evaluator,
+            variable_space=variable_space,
+            resource_manager=resource_manager,
+        )
+
+        # Register a step that depends on a variable expression
+        registry.register("step_voltage", Condition(expression="${scope.voltage} > 3.0"))
+
+        # Build dependency index
+        scheduler.compile_plan([
+            ("step_voltage", Condition(expression="${scope.voltage} > 3.0")),
+        ])
+
+        await event_bus.start()
+        scheduler._setup_event_handlers()
+
+        # Track STEP_STARTED events
+        received: list[Event] = []
+        def handler(event: Event) -> None:
+            received.append(event)
+        event_bus.subscribe(EventType.STEP_STARTED, handler)
+
+        # Set the variable — should fire VARIABLE_CHANGED and trigger dispatch
+        variable_space.set("scope.voltage", 5.0)
+
+        # Wait for event processing
+        await asyncio.sleep(0.2)
+
+        # step_voltage should have been dispatched
+        step_started = [e for e in received if e.type == EventType.STEP_STARTED]
+        step_ids = [e.data.get("step_id") for e in step_started]
+        assert "step_voltage" in step_ids
+
+        await event_bus.stop()
+
+    @pytest.mark.asyncio
+    async def test_resource_release_triggers_dispatch(self) -> None:
+        """on_resource_released should trigger dispatch for resource-blocked steps."""
+        event_bus = EventBus()
+        registry = StepRegistry(event_bus=event_bus)
+        evaluator = ConditionEvaluator({}, None, None)
+        variable_space = VariableSpace()
+        resource_manager = ResourceManager(event_bus=event_bus)
+
+        # Give ConditionEvaluator access to resource_manager
+        evaluator_with_rm = ConditionEvaluator(
+            {}, resource_manager=resource_manager, variable_space=None,
+        )
+
+        scheduler = ScannerScheduler(
+            event_bus=event_bus,
+            registry=registry,
+            evaluator=evaluator_with_rm,
+            variable_space=variable_space,
+            resource_manager=resource_manager,
+        )
+
+        # Register a step that needs DMM_CH1
+        registry.register("step_resource", Condition(resource_available=["DMM_CH1"]))
+
+        # Build dependency index
+        scheduler.compile_plan([
+            ("step_resource", Condition(resource_available=["DMM_CH1"])),
+        ])
+
+        # Acquire and then release the resource to trigger event
+        resource_manager.acquire("DMM_CH1", "other_step")
+
+        await event_bus.start()
+        scheduler._setup_event_handlers()
+
+        # Track STEP_STARTED events
+        received: list[Event] = []
+        def handler(event: Event) -> None:
+            received.append(event)
+        event_bus.subscribe(EventType.STEP_STARTED, handler)
+
+        # Release resource — should fire RESOURCE_RELEASED and trigger dispatch
+        resource_manager.release("DMM_CH1", "other_step")
+
+        # Wait for event processing
+        await asyncio.sleep(0.2)
+
+        # step_resource should have been dispatched
+        step_started = [e for e in received if e.type == EventType.STEP_STARTED]
+        step_ids = [e.data.get("step_id") for e in step_started]
+        assert "step_resource" in step_ids
+
+        await event_bus.stop()
+
+
+class TestPendingDispatchDedup:
+    """Tests for _pending_dispatch deduplication."""
+
+    @pytest.mark.asyncio
+    async def test_pending_dispatch_prevents_duplicate(self) -> None:
+        """Steps in _pending_dispatch should not be re-dispatched."""
+        event_bus = EventBus()
+        registry = StepRegistry(event_bus=event_bus)
+        evaluator = ConditionEvaluator({}, None, None)
+        variable_space = VariableSpace(event_bus=event_bus)
+        resource_manager = ResourceManager()
+
+        scheduler = ScannerScheduler(
+            event_bus=event_bus,
+            registry=registry,
+            evaluator=evaluator,
+            variable_space=variable_space,
+            resource_manager=resource_manager,
+        )
+
+        # Register step2 that depends on step1
+        registry.register("step1")
+        registry.register("step2", Condition(step="step1", status="PASSED"))
+
+        scheduler.compile_plan([
+            ("step1", None),
+            ("step2", Condition(step="step1", status="PASSED")),
+        ])
+
+        # Manually add step2 to pending_dispatch
+        scheduler._pending_dispatch.add("step2")
+
+        await event_bus.start()
+        scheduler._setup_event_handlers()
+
+        # Track events
+        received: list[Event] = []
+        def handler(event: Event) -> None:
+            received.append(event)
+        event_bus.subscribe(EventType.STEP_STARTED, handler)
+
+        # Mark step1 as PASSED — handler should see step2 already pending
+        registry.update_status("step1", StepStatus.PASSED)
+
+        # Wait for event processing
+        await asyncio.sleep(0.2)
+
+        # step2 should NOT be dispatched because it was in _pending_dispatch
+        step_started = [e for e in received if e.type == EventType.STEP_STARTED
+                        and e.data.get("step_id") == "step2"]
+        assert len(step_started) == 0
+
+        await event_bus.stop()
+
+    @pytest.mark.asyncio
+    async def test_dispatch_removes_from_pending(self) -> None:
+        """After dispatch, step should be removed from _pending_dispatch."""
+        event_bus = EventBus()
+        registry = StepRegistry(event_bus=event_bus)
+        evaluator = ConditionEvaluator({}, None, None)
+        variable_space = VariableSpace(event_bus=event_bus)
+        resource_manager = ResourceManager()
+
+        scheduler = ScannerScheduler(
+            event_bus=event_bus,
+            registry=registry,
+            evaluator=evaluator,
+            variable_space=variable_space,
+            resource_manager=resource_manager,
+        )
+
+        registry.register("step1")
+        scheduler.compile_plan([("step1", None)])
+
+        await event_bus.start()
+        scheduler._setup_event_handlers()
+
+        # Add step1 to pending, then dispatch it
+        scheduler._pending_dispatch.add("step1")
+        await scheduler._dispatch_step("step1")
+
+        # Should have been removed from pending_dispatch
+        assert "step1" not in scheduler._pending_dispatch
+        # Should be in notified_ready now
+        assert "step1" in scheduler._notified_ready
+
+        await event_bus.stop()
+
+
+class TestEmergencyScan:
+    """Tests for the emergency scan (watchdog fallback)."""
+
+    @pytest.mark.asyncio
+    async def test_emergency_scan_dispatches_unconditional_step(self) -> None:
+        """_emergency_scan should dispatch ready steps."""
+        event_bus = EventBus()
+        registry = StepRegistry(event_bus=event_bus)
+        evaluator = ConditionEvaluator({}, None, None)
+        variable_space = VariableSpace()
+        resource_manager = ResourceManager()
+
+        scheduler = ScannerScheduler(
+            event_bus=event_bus,
+            registry=registry,
+            evaluator=evaluator,
+            variable_space=variable_space,
+            resource_manager=resource_manager,
+        )
+
+        registry.register("step1")
+
+        await event_bus.start()
+
+        # Track events
+        received: list[Event] = []
+        def handler(event: Event) -> None:
+            received.append(event)
+        event_bus.subscribe(EventType.STEP_STARTED, handler)
+
+        # Run emergency scan directly
+        await scheduler._emergency_scan()
+
+        # Wait for event processing
+        await asyncio.sleep(0.1)
+
+        step_started = [e for e in received if e.type == EventType.STEP_STARTED]
+        assert len(step_started) >= 1
+        assert any(e.data.get("step_id") == "step1" for e in step_started)
+
+        await event_bus.stop()
+
+    @pytest.mark.asyncio
+    async def test_emergency_scan_skips_notified_steps(self) -> None:
+        """_emergency_scan should skip steps already notified."""
+        event_bus = EventBus()
+        registry = StepRegistry(event_bus=event_bus)
+        evaluator = ConditionEvaluator({}, None, None)
+        variable_space = VariableSpace()
+        resource_manager = ResourceManager()
+
+        scheduler = ScannerScheduler(
+            event_bus=event_bus,
+            registry=registry,
+            evaluator=evaluator,
+            variable_space=variable_space,
+            resource_manager=resource_manager,
+        )
+
+        registry.register("step1")
+        scheduler._notified_ready.add("step1")
+
+        await event_bus.start()
+
+        received: list[Event] = []
+        def handler(event: Event) -> None:
+            received.append(event)
+        event_bus.subscribe(EventType.STEP_STARTED, handler)
+
+        await scheduler._emergency_scan()
+        await asyncio.sleep(0.1)
+
+        # No new STEP_STARTED for step1
+        step_started = [e for e in received if e.type == EventType.STEP_STARTED
+                        and e.data.get("step_id") == "step1"]
+        assert len(step_started) == 0
+
+        await event_bus.stop()
+
+    @pytest.mark.asyncio
+    async def test_emergency_scan_skips_pending_dispatch(self) -> None:
+        """_emergency_scan should skip steps in _pending_dispatch."""
+        event_bus = EventBus()
+        registry = StepRegistry(event_bus=event_bus)
+        evaluator = ConditionEvaluator({}, None, None)
+        variable_space = VariableSpace()
+        resource_manager = ResourceManager()
+
+        scheduler = ScannerScheduler(
+            event_bus=event_bus,
+            registry=registry,
+            evaluator=evaluator,
+            variable_space=variable_space,
+            resource_manager=resource_manager,
+        )
+
+        registry.register("step1")
+        scheduler._pending_dispatch.add("step1")
+
+        await event_bus.start()
+
+        received: list[Event] = []
+        def handler(event: Event) -> None:
+            received.append(event)
+        event_bus.subscribe(EventType.STEP_STARTED, handler)
+
+        await scheduler._emergency_scan()
+        await asyncio.sleep(0.1)
+
+        step_started = [e for e in received if e.type == EventType.STEP_STARTED
+                        and e.data.get("step_id") == "step1"]
+        assert len(step_started) == 0
+
+        await event_bus.stop()
+
+
+class TestScanLoopWatchdog:
+    """Tests for the watchdog scan loop behavior."""
+
+    @pytest.mark.asyncio
+    async def test_scan_interval_is_5_seconds_default(self) -> None:
+        """Default scan interval should be 5.0 seconds."""
+        event_bus = EventBus()
+        registry = StepRegistry()
+        evaluator = ConditionEvaluator({}, None, None)
+        variable_space = VariableSpace()
+        resource_manager = ResourceManager()
+
+        scheduler = ScannerScheduler(
+            event_bus=event_bus,
+            registry=registry,
+            evaluator=evaluator,
+            variable_space=variable_space,
+            resource_manager=resource_manager,
+        )
+
+        assert scheduler._scan_interval == 5.0
+
+    @pytest.mark.asyncio
+    async def test_scan_loop_stops_promptly(self) -> None:
+        """The scan loop should stop promptly when stop() is called."""
+        event_bus = EventBus()
+        registry = StepRegistry()
+        evaluator = ConditionEvaluator({}, None, None)
+        variable_space = VariableSpace()
+        resource_manager = ResourceManager()
+
+        scheduler = ScannerScheduler(
+            event_bus=event_bus,
+            registry=registry,
+            evaluator=evaluator,
+            variable_space=variable_space,
+            resource_manager=resource_manager,
+            scan_interval=0.1,  # Fast for test
+        )
+
+        await scheduler.start()
+        # Stop should complete quickly (within timeout)
+        await scheduler.stop()
+
+        assert scheduler._running is False
+
+
+class TestForceScan:
+    """Tests for force_scan()."""
+
+    @pytest.mark.asyncio
+    async def test_force_scan_triggers_emergency_scan(self) -> None:
+        """force_scan should schedule an emergency scan."""
+        event_bus = EventBus()
+        registry = StepRegistry(event_bus=event_bus)
+        evaluator = ConditionEvaluator({}, None, None)
+        variable_space = VariableSpace()
+        resource_manager = ResourceManager()
+
+        scheduler = ScannerScheduler(
+            event_bus=event_bus,
+            registry=registry,
+            evaluator=evaluator,
+            variable_space=variable_space,
+            resource_manager=resource_manager,
+        )
+
+        registry.register("step1")
+
+        await event_bus.start()
+
+        received: list[Event] = []
+        def handler(event: Event) -> None:
+            received.append(event)
+        event_bus.subscribe(EventType.STEP_STARTED, handler)
+
+        # Store the loop reference on event bus so force_scan can use it
+        event_bus.set_event_loop(asyncio.get_running_loop())
+
+        # Trigger force scan
+        scheduler.force_scan()
+
+        await asyncio.sleep(0.2)
+
+        step_started = [e for e in received if e.type == EventType.STEP_STARTED]
+        assert len(step_started) >= 1
+        assert any(e.data.get("step_id") == "step1" for e in step_started)
+
+        await event_bus.stop()
+
+
+class TestScannerSchedulerStatusNewFields:
+    """Tests for new status fields added in Task 2."""
+
+    @pytest.mark.asyncio
+    async def test_status_includes_new_fields(self) -> None:
+        """get_status should include pending_dispatch_count and dependency_index_size."""
+        event_bus = EventBus()
+        registry = StepRegistry()
+        evaluator = ConditionEvaluator({}, None, None)
+        variable_space = VariableSpace()
+        resource_manager = ResourceManager()
+
+        scheduler = ScannerScheduler(
+            event_bus=event_bus,
+            registry=registry,
+            evaluator=evaluator,
+            variable_space=variable_space,
+            resource_manager=resource_manager,
+        )
+
+        # Build index
+        scheduler.compile_plan([
+            ("step1", Condition(step="step0", status="PASSED")),
+        ])
+
+        status = scheduler.get_status()
+        assert "pending_dispatch_count" in status
+        assert status["pending_dispatch_count"] == 0
+        assert "dependency_index_size" in status
+        assert status["dependency_index_size"] == 1
+        assert "last_dispatch_time" in status
+        assert status["last_dispatch_time"] == 0.0

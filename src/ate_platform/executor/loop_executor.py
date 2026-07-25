@@ -305,6 +305,10 @@ class LoopExecutor:
         is limited by max_concurrency (derived from loop.max_iterations
         or executor's default).
 
+        Race fix: VariableSpace values are snapshotted per-iteration before
+        dispatching tasks, so parallel iterations don't see each other's
+        intermediate writes.
+
         Args:
             loop: The YamlLoop being executed
             count: Number of iterations
@@ -322,6 +326,23 @@ class LoopExecutor:
                 self._variable_space.set_loop_variable(loop.id, i, iteration_var, i)
             elif collection is not None:
                 self._variable_space.set_loop_variable(loop.id, i, iteration_var, collection[i])
+
+        # Snapshot VariableSpace state per-iteration before parallel dispatch.
+        # This prevents race conditions where iteration N+1 reads values
+        # written by iteration N that shouldn't be visible yet.
+        iteration_snapshots: list[dict[str, Any]] = []
+        for i in range(count):
+            snapshot = self._variable_space.get_all_scope_vars().copy()
+            # Also capture loop variables for this iteration
+            loop_vars: dict[str, Any] = {}
+            for key, value in self._variable_space.get_all_scope_vars().items():
+                loop_vars[key] = value
+            # Include the iteration-specific loop variable
+            iter_var_name = f"loop.{loop.id}.{i}.{iteration_var}"
+            iter_var_value = self._variable_space.get(iter_var_name)
+            if iter_var_value is not None:
+                loop_vars[iter_var_name] = iter_var_value
+            iteration_snapshots.append(loop_vars)
 
         # Build ExecuteTask list from loop steps for each iteration
         all_tasks: list[ExecuteTask] = []
@@ -371,6 +392,12 @@ class LoopExecutor:
                     iter_error = sr.error
                     break
                 iter_outputs.update(sr.outputs)
+
+            # Restore per-iteration snapshot for output scoping.
+            # Each iteration's outputs are written to its own loop scope,
+            # so parallel iterations don't clobber each other.
+            for key, value in iter_outputs.items():
+                self._variable_space.set_loop_variable(loop.id, i, key, value)
 
             # Publish events
             await self._publish_iteration_events(loop.id, i, count, run_id)

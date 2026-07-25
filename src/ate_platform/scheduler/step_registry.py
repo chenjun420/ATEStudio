@@ -13,10 +13,15 @@ from __future__ import annotations
 
 import threading
 from dataclasses import asdict
+from typing import TYPE_CHECKING
 
 from ..types import Condition, StepStatus
 from .condition_evaluator import ConditionEvaluator
 from .event_bus import EventBus, EventType
+
+if TYPE_CHECKING:
+    from .resource_manager import ResourceManager
+    from .variable_space import VariableSpace
 
 
 class StepRegistry:
@@ -124,12 +129,22 @@ class StepRegistry:
 
             return self._steps[step_id]
 
-    def get_ready_steps(self) -> list[str]:
+    def get_ready_steps(
+        self,
+        variable_space: "VariableSpace | None" = None,
+        resource_manager: "ResourceManager | None" = None,
+    ) -> list[str]:
         """Get list of steps that are ready to execute.
 
         A step is ready if:
         - Its status is PENDING
         - It has no condition, OR its condition evaluates to True
+
+        Args:
+            variable_space: Optional VariableSpace for resolving variable
+                references in expression conditions.
+            resource_manager: Optional ResourceManager for checking
+                resource availability conditions.
 
         Returns:
             List of step IDs that are ready to execute
@@ -155,7 +170,11 @@ class StepRegistry:
                         step_results[sid] = {"status": st, "outputs": {}}
 
                     # Create a temporary evaluator with current state
-                    evaluator = ConditionEvaluator(step_results)  # type: ignore[arg-type]
+                    evaluator = ConditionEvaluator(
+                        step_results,  # type: ignore[arg-type]
+                        resource_manager=resource_manager,
+                        variable_space=variable_space,
+                    )
 
                     if evaluator.evaluate(condition):
                         ready_steps.append(step_id)
