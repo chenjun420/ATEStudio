@@ -7,21 +7,20 @@ import pytest
 from ate_platform.drivers import DriverRegistry
 from ate_platform.drivers.base_hal import BaseDriver
 from ate_platform.drivers.base_mal import BaseAbstraction
+from ate_platform.drivers.capabilities import DMMCapabilities, PSUCapabilities
 from ate_platform.drivers.examples.dmm import (
     DMM_DRIVER_NAME,
     DMMHALDriver,
     DMMAbstraction,
     DMMDriver,
-    MockDMMDriver,
 )
 from ate_platform.drivers.examples.psu import (
-    MOCK_PSU_DRIVER_NAME,
     PSU_DRIVER_NAME,
     PSUHALDriver,
     PSUAbstraction,
     PSUDriver,
-    MockPSUDriver,
 )
+from ate_platform.drivers.mock_factory import MockDriverFactory
 
 
 # ---------------------------------------------------------------------------
@@ -47,6 +46,20 @@ class TestDMMAbstraction:
     def test_is_base_abstraction_subclass(self) -> None:
         """DMMAbstraction should be a BaseAbstraction subclass."""
         assert issubclass(DMMAbstraction, BaseAbstraction)
+
+    def test_capabilities_classvar(self) -> None:
+        """DMMAbstraction should have DMMCapabilities as capabilities ClassVar."""
+        assert DMMAbstraction.capabilities is DMMCapabilities
+
+    def test_get_capabilities_returns_model(self) -> None:
+        """get_capabilities should return a DMMCapabilities instance."""
+        mock_driver = MagicMock(spec=BaseDriver)
+        abstraction = DMMAbstraction(driver=mock_driver)
+        caps = abstraction.get_capabilities()
+        assert isinstance(caps, DMMCapabilities)
+        assert caps.channels == 1
+        assert caps.max_voltage == 1000.0
+        assert caps.resolution_digits == 6.5
 
     def test_measure_voltage_calls_driver_query(self) -> None:
         """measure_voltage should call self._driver.query with MEAS:VOLT:DC?."""
@@ -142,6 +155,20 @@ class TestPSUAbstraction:
         """PSUAbstraction should be a BaseAbstraction subclass."""
         assert issubclass(PSUAbstraction, BaseAbstraction)
 
+    def test_capabilities_classvar(self) -> None:
+        """PSUAbstraction should have PSUCapabilities as capabilities ClassVar."""
+        assert PSUAbstraction.capabilities is PSUCapabilities
+
+    def test_get_capabilities_returns_model(self) -> None:
+        """get_capabilities should return a PSUCapabilities instance."""
+        mock_driver = MagicMock(spec=BaseDriver)
+        abstraction = PSUAbstraction(driver=mock_driver)
+        caps = abstraction.get_capabilities()
+        assert isinstance(caps, PSUCapabilities)
+        assert caps.channels == 1
+        assert caps.max_voltage == 30.0
+        assert caps.has_remote_sense is False
+
     def test_set_voltage_calls_driver_write(self) -> None:
         """set_voltage should call self._driver.write with VOLT command."""
         mock_driver = MagicMock(spec=BaseDriver)
@@ -203,215 +230,139 @@ class TestPSUAbstraction:
 
 
 # ---------------------------------------------------------------------------
-# Mock DMM driver tests (kept for backward compat)
+# Mock driver tests via MockDriverFactory
 # ---------------------------------------------------------------------------
 
 
-class TestMockDMMDriver:
-    """Tests for MockDMMDriver."""
+class TestMockDMMViaFactory:
+    """Tests for auto-generated DMM mock driver via MockDriverFactory."""
 
     def test_connect_and_disconnect(self) -> None:
         """Test connection lifecycle."""
-        driver = MockDMMDriver()
-        assert not driver.is_connected
+        dmm = MockDriverFactory.create_mock(DMMAbstraction)
+        assert not dmm.is_connected
 
-        driver.connect("MOCK::DMM::INSTR")
-        assert driver.is_connected
-        assert driver.address == "MOCK::DMM::INSTR"
+        dmm.connect("MOCK::DMM::INSTR")
+        assert dmm.is_connected
+        assert dmm.address == "MOCK::DMM::INSTR"
 
-        driver.disconnect()
-        assert not driver.is_connected
-        assert driver.address == ""
+        dmm.disconnect()
+        assert not dmm.is_connected
+        assert dmm.address == ""
 
     def test_measure_voltage_returns_float(self) -> None:
         """Test voltage measurement returns valid float."""
-        driver = MockDMMDriver()
-        driver.connect("MOCK::DMM::INSTR")
+        dmm = MockDriverFactory.create_mock(DMMAbstraction)
+        dmm.connect("MOCK::DMM::INSTR")
 
-        voltage = driver.measure_voltage()
+        voltage = dmm.measure_voltage()
         assert isinstance(voltage, float)
         # Voltage should be one of the typical values with variation
         assert 3.0 <= voltage <= 25.0
 
     def test_measure_current_returns_float(self) -> None:
         """Test current measurement returns valid float."""
-        driver = MockDMMDriver()
-        driver.connect("MOCK::DMM::INSTR")
+        dmm = MockDriverFactory.create_mock(DMMAbstraction)
+        dmm.connect("MOCK::DMM::INSTR")
 
-        current = driver.measure_current()
+        current = dmm.measure_current()
         assert isinstance(current, float)
         assert 0.05 <= current <= 2.5
 
     def test_measure_resistance_returns_float(self) -> None:
         """Test resistance measurement returns valid float."""
-        driver = MockDMMDriver()
-        driver.connect("MOCK::DMM::INSTR")
+        dmm = MockDriverFactory.create_mock(DMMAbstraction)
+        dmm.connect("MOCK::DMM::INSTR")
 
-        resistance = driver.measure_resistance()
+        resistance = dmm.measure_resistance()
         assert isinstance(resistance, float)
         assert 50.0 <= resistance <= 15000.0
 
-    def test_measure_with_channel(self) -> None:
-        """Test measurements with channel parameter."""
-        driver = MockDMMDriver()
-        driver.connect("MOCK::DMM::INSTR")
-
-        # Channel 2 should work
-        voltage = driver.measure_voltage(channel=2)
-        assert isinstance(voltage, float)
-
-        current = driver.measure_current(channel=2)
-        assert isinstance(current, float)
-
     def test_operations_fail_when_not_connected(self) -> None:
         """Test that operations fail when not connected."""
-        driver = MockDMMDriver()
+        dmm = MockDriverFactory.create_mock(DMMAbstraction)
 
         with pytest.raises(RuntimeError, match="Not connected"):
-            driver.measure_voltage()
+            dmm.measure_voltage()
 
-        with pytest.raises(RuntimeError, match="Not connected"):
-            driver.query("MEAS:VOLT:DC?")
+    def test_custom_mock_values(self) -> None:
+        """Test that configurable mock values are returned."""
+        dmm = MockDriverFactory.create_mock(
+            DMMAbstraction,
+            mock_values={"MEAS:VOLT:DC?": "3.141592"},
+        )
+        dmm.connect("MOCK::DMM::INSTR")
 
-    def test_context_manager(self) -> None:
-        """Test context manager usage."""
-        with MockDMMDriver() as driver:
-            driver.connect("MOCK::DMM::INSTR")
-            assert driver.is_connected
-
-        # Should be disconnected after exiting context
-        assert not driver.is_connected
-
-
-# ---------------------------------------------------------------------------
-# Mock PSU driver tests (kept for backward compat)
-# ---------------------------------------------------------------------------
+        voltage = dmm.measure_voltage()
+        assert voltage == 3.141592
 
 
-class TestMockPSUDriver:
-    """Tests for MockPSUDriver."""
+class TestMockPSUViaFactory:
+    """Tests for auto-generated PSU mock driver via MockDriverFactory."""
 
     def test_connect_and_disconnect(self) -> None:
         """Test connection lifecycle."""
-        driver = MockPSUDriver()
-        assert not driver.is_connected
+        psu = MockDriverFactory.create_mock(PSUAbstraction)
+        assert not psu.is_connected
 
-        driver.connect("MOCK::PSU::INSTR")
-        assert driver.is_connected
+        psu.connect("MOCK::PSU::INSTR")
+        assert psu.is_connected
 
-        driver.disconnect()
-        assert not driver.is_connected
+        psu.disconnect()
+        assert not psu.is_connected
 
-    def test_set_voltage(self) -> None:
-        """Test setting voltage."""
-        driver = MockPSUDriver()
-        driver.connect("MOCK::PSU::INSTR")
+    def test_set_voltage_and_measure(self) -> None:
+        """Test setting voltage and measuring output."""
+        psu = MockDriverFactory.create_mock(PSUAbstraction)
+        psu.connect("MOCK::PSU::INSTR")
 
-        driver.set_voltage(channel=1, voltage=5.0)
-        state = driver.get_channel_state(1)
-        assert state["voltage"] == 5.0
+        psu.set_voltage(5.0)
+        psu.enable_output(True)
+
+        voltage, current = psu.measure_output()
+        assert isinstance(voltage, float)
+        assert isinstance(current, float)
+        # Should be near set voltage with small variation
+        assert 4.8 <= voltage <= 5.2
+
+    def test_measure_output_when_off_returns_zero(self) -> None:
+        """Test that measurement returns zero when output is off."""
+        psu = MockDriverFactory.create_mock(PSUAbstraction)
+        psu.connect("MOCK::PSU::INSTR")
+
+        psu.set_voltage(12.0)
+        # Output is off by default
+        voltage, current = psu.measure_output()
+        assert voltage == 0.0
+        assert current == 0.0
 
     def test_set_current_limit(self) -> None:
         """Test setting current limit."""
-        driver = MockPSUDriver()
-        driver.connect("MOCK::PSU::INSTR")
+        psu = MockDriverFactory.create_mock(PSUAbstraction)
+        psu.connect("MOCK::PSU::INSTR")
 
-        driver.set_current_limit(channel=1, current=2.5)
-        state = driver.get_channel_state(1)
-        assert state["current_limit"] == 2.5
-
-    def test_output_on_off(self) -> None:
-        """Test output control."""
-        driver = MockPSUDriver()
-        driver.connect("MOCK::PSU::INSTR")
-
-        # Output should start off
-        state = driver.get_channel_state(1)
-        assert state["output_on"] is False
-
-        # Turn on
-        driver.output_on(channel=1)
-        state = driver.get_channel_state(1)
-        assert state["output_on"] is True
-
-        # Turn off
-        driver.output_off(channel=1)
-        state = driver.get_channel_state(1)
-        assert state["output_on"] is False
-
-    def test_measure_current_when_off(self) -> None:
-        """Test current measurement when output is off."""
-        driver = MockPSUDriver()
-        driver.connect("MOCK::PSU::INSTR")
-        driver.set_voltage(channel=1, voltage=5.0)
-        driver.output_off(channel=1)
-
-        current = driver.measure_current(channel=1)
-        assert current == 0.0
-
-    def test_measure_current_when_on(self) -> None:
-        """Test current measurement when output is on."""
-        driver = MockPSUDriver()
-        driver.connect("MOCK::PSU::INSTR")
-        driver.set_voltage(channel=1, voltage=5.0)
-        driver.output_on(channel=1)
-
-        current = driver.measure_current(channel=1)
-        assert isinstance(current, float)
-        # Should draw some current when on
-        assert 0.0 <= current <= 1.0
-
-    def test_measure_voltage_when_off(self) -> None:
-        """Test voltage measurement when output is off."""
-        driver = MockPSUDriver()
-        driver.connect("MOCK::PSU::INSTR")
-        driver.set_voltage(channel=1, voltage=12.0)
-        driver.output_off(channel=1)
-
-        voltage = driver.measure_voltage(channel=1)
-        assert voltage == 0.0
-
-    def test_measure_voltage_when_on(self) -> None:
-        """Test voltage measurement when output is on."""
-        driver = MockPSUDriver()
-        driver.connect("MOCK::PSU::INSTR")
-        driver.set_voltage(channel=1, voltage=12.0)
-        driver.output_on(channel=1)
-
-        voltage = driver.measure_voltage(channel=1)
-        assert isinstance(voltage, float)
-        # Should be near set voltage with small variation
-        assert 11.5 <= voltage <= 12.5
-
-    def test_multiple_channels(self) -> None:
-        """Test independent channel control."""
-        driver = MockPSUDriver()
-        driver.connect("MOCK::PSU::INSTR")
-
-        # Set different voltages on different channels
-        driver.set_voltage(channel=1, voltage=5.0)
-        driver.set_voltage(channel=2, voltage=12.0)
-
-        state1 = driver.get_channel_state(1)
-        state2 = driver.get_channel_state(2)
-
-        assert state1["voltage"] == 5.0
-        assert state2["voltage"] == 12.0
-
-        # Turn on only channel 1
-        driver.output_on(channel=1)
-        assert driver.get_channel_state(1)["output_on"] is True
-        assert driver.get_channel_state(2)["output_on"] is False
+        psu.set_current(2.5)
+        # Current limit is tracked but not directly readable through MAL API
+        # This test just verifies it doesn't raise
 
     def test_operations_fail_when_not_connected(self) -> None:
         """Test that operations fail when not connected."""
-        driver = MockPSUDriver()
+        psu = MockDriverFactory.create_mock(PSUAbstraction)
 
         with pytest.raises(RuntimeError, match="Not connected"):
-            driver.set_voltage(channel=1, voltage=5.0)
+            psu.set_voltage(5.0)
 
-        with pytest.raises(RuntimeError, match="Not connected"):
-            driver.output_on()
+    def test_custom_mock_values(self) -> None:
+        """Test that configurable mock values are returned."""
+        psu = MockDriverFactory.create_mock(
+            PSUAbstraction,
+            mock_values={"MEAS:VOLT?": "12.000000", "MEAS:CURR?": "0.500000"},
+        )
+        psu.connect("MOCK::PSU::INSTR")
+
+        voltage, current = psu.measure_output()
+        assert voltage == 12.0
+        assert current == 0.5
 
 
 # ---------------------------------------------------------------------------
@@ -431,17 +382,12 @@ class TestDriverRegistry:
             DriverRegistry.register(DMM_DRIVER_NAME, hal_cls=DMMHALDriver, mal_cls=DMMAbstraction)
         if PSU_DRIVER_NAME not in current:
             DriverRegistry.register(PSU_DRIVER_NAME, hal_cls=PSUHALDriver, mal_cls=PSUAbstraction)
-        if MOCK_PSU_DRIVER_NAME not in current:
-            DriverRegistry.register_driver(MOCK_PSU_DRIVER_NAME, MockPSUDriver)
-        if f"mock_{DMM_DRIVER_NAME}" not in current:
-            DriverRegistry.register_driver(f"mock_{DMM_DRIVER_NAME}", MockDMMDriver)
 
     def test_list_drivers(self) -> None:
         """Test listing registered drivers."""
         drivers = DriverRegistry.list_drivers()
         assert DMM_DRIVER_NAME in drivers
         assert PSU_DRIVER_NAME in drivers
-        assert MOCK_PSU_DRIVER_NAME in drivers
 
     def test_get_dmm_driver_mal(self) -> None:
         """Test retrieving DMM driver returns DMMAbstraction by default."""
@@ -462,16 +408,6 @@ class TestDriverRegistry:
         """Test retrieving PSU HAL driver with layer='hal'."""
         driver_class = DriverRegistry.get_driver(PSU_DRIVER_NAME, layer="hal")
         assert driver_class is PSUHALDriver
-
-    def test_get_mock_psu_driver(self) -> None:
-        """Test retrieving mock PSU driver class."""
-        driver_class = DriverRegistry.get_driver(MOCK_PSU_DRIVER_NAME)
-        assert driver_class is MockPSUDriver
-
-    def test_get_mock_dmm_driver(self) -> None:
-        """Test retrieving mock DMM driver class."""
-        driver_class = DriverRegistry.get_driver(f"mock_{DMM_DRIVER_NAME}")
-        assert driver_class is MockDMMDriver
 
     def test_get_unknown_driver_raises(self) -> None:
         """Test that unknown driver raises KeyError."""

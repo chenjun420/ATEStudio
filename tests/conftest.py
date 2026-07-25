@@ -38,17 +38,12 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
                 DMM_DRIVER_NAME,
                 DMMHALDriver,
                 DMMAbstraction,
-                MockDMMDriver,
             )
             from ate_platform.drivers.examples.psu import (
-                MOCK_PSU_DRIVER_NAME,
                 PSU_DRIVER_NAME,
                 PSUHALDriver,
                 PSUAbstraction,
-                MockPSUDriver,
             )
 
             DriverRegistry.register(DMM_DRIVER_NAME, hal_cls=DMMHALDriver, mal_cls=DMMAbstraction)
             DriverRegistry.register(PSU_DRIVER_NAME, hal_cls=PSUHALDriver, mal_cls=PSUAbstraction)
-            DriverRegistry.register_driver(MOCK_PSU_DRIVER_NAME, MockPSUDriver)
-            DriverRegistry.register_driver(f"mock_{DMM_DRIVER_NAME}", MockDMMDriver)

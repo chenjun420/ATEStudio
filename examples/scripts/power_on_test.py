@@ -1,6 +1,6 @@
 """Power-on test script using PSU driver.
 
-This script demonstrates a power-on test using the MockPSUDriver.
+This script demonstrates a power-on test using the MockDriverFactory.
 It sets voltage/current limits, turns on the output, and validates
 the output is stable.
 
@@ -8,7 +8,7 @@ Usage:
     python -m examples.run_test power_on_test --mock
     
 Expected behavior:
-    - Connects to mock PSU
+    - Connects to mock PSU via MockDriverFactory
     - Sets voltage and current limit
     - Turns on output
     - Verifies voltage/current readings
@@ -16,7 +16,8 @@ Expected behavior:
 """
 
 from ate_platform.executor.context_proxy import ContextProxy, measure
-from ate_platform.drivers.examples.psu import MockPSUDriver
+from ate_platform.drivers.examples.psu import PSUAbstraction
+from ate_platform.drivers.mock_factory import MockDriverFactory
 from ate_platform.types import StepResult, StepStatus
 
 
@@ -44,23 +45,22 @@ def main(context: ContextProxy) -> StepResult:
     
     context.log("info", f"Starting power-on test: {target_voltage}V @ {current_limit}A max")
     
-    # Create and connect to mock PSU
-    psu = MockPSUDriver()
+    # Create and connect to mock PSU via factory
+    psu = MockDriverFactory.create_mock(PSUAbstraction)
     psu.connect("MOCK::PSU")
     
     try:
         # Configure PSU
-        psu.set_voltage(channel, target_voltage)
-        psu.set_current_limit(channel, current_limit)
-        context.log("info", f"Configured channel {channel}: {target_voltage}V, {current_limit}A limit")
+        psu.set_voltage(target_voltage)
+        psu.set_current(current_limit)
+        context.log("info", f"Configured: {target_voltage}V, {current_limit}A limit")
         
         # Turn on output
-        psu.output_on(channel)
-        context.log("info", f"Output enabled on channel {channel}")
+        psu.enable_output(True)
+        context.log("info", "Output enabled")
         
-        # Wait briefly (simulated) then measure
-        measured_voltage = psu.measure_voltage(channel)
-        measured_current = psu.measure_current(channel)
+        # Measure
+        measured_voltage, measured_current = psu.measure_output()
         
         context.log("info", f"Measured: {measured_voltage:.4f}V, {measured_current:.4f}A")
         
@@ -99,7 +99,7 @@ def main(context: ContextProxy) -> StepResult:
             
     finally:
         # Always turn off output and disconnect
-        psu.output_off(channel)
+        psu.enable_output(False)
         psu.disconnect()
         context.log("info", "Output disabled and disconnected")
 
