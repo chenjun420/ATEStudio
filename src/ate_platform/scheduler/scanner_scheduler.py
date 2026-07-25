@@ -7,8 +7,9 @@ Key features:
 - Event-driven scanning loop (100ms default interval)
 - Subscribes to VARIABLE_CHANGED, STEP_STATUS_CHANGED, RESOURCE_RELEASED
 - Detects ready steps via StepRegistry.get_ready_steps()
-- Emits STEP_READY events when conditions are met
+- Emits STEP_STARTED events when conditions are met
 - Deadlock detection (cyclic scan without progress)
+- Loop-aware scanning: YamlLoop steps are executed via LoopExecutor
 """
 
 from __future__ import annotations
@@ -16,14 +17,18 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
-from typing import Any
+from dataclasses import asdict
+from typing import TYPE_CHECKING, Any
 
-from ..types import Condition
+from ..types import Condition, LoopResult, StepStatus
 from .condition_evaluator import ConditionEvaluator
 from .event_bus import Event, EventBus, EventType
 from .resource_manager import ResourceManager
 from .step_registry import StepRegistry
 from .variable_space import VariableSpace
+
+if TYPE_CHECKING:
+    from ..executor.step_executor import StepExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +79,7 @@ class ScannerScheduler:
         variable_space: VariableSpace,
         resource_manager: ResourceManager,
         scan_interval: float = DEFAULT_SCAN_INTERVAL,
+        step_executor: StepExecutor | None = None,
     ) -> None:
         """Initialize the scanner scheduler.
 
@@ -84,6 +90,8 @@ class ScannerScheduler:
             variable_space: VariableSpace for variable resolution
             resource_manager: ResourceManager for resource availability
             scan_interval: Time between scans in seconds (default 100ms)
+            step_executor: Optional StepExecutor for step execution.
+                Defaults to ProcessStepExecutor if not provided.
         """
         self._event_bus: EventBus = event_bus
         self._registry: StepRegistry = registry
@@ -91,6 +99,18 @@ class ScannerScheduler:
         self._variable_space: VariableSpace = variable_space
         self._resource_manager: ResourceManager = resource_manager
         self._scan_interval: float = scan_interval
+
+        # Step executor — defaults to ProcessStepExecutor
+        if step_executor is not None:
+            self._step_executor: StepExecutor = step_executor
+        else:
+            from ..executor.step_executor import ProcessStepExecutor
+
+            self._step_executor = ProcessStepExecutor(
+                max_workers=4,
+                script_timeout=60.0,
+                event_bus=event_bus,
+            )
 
         # Runtime state
         self._running: bool = False
@@ -224,8 +244,10 @@ class ScannerScheduler:
         """Perform a single scan of all step conditions.
 
         Checks each pending step to see if its conditions are met,
-        and emits STEP_READY events for newly ready steps.
+        and emits STEP_STARTED events for newly ready steps.
         """
+        from shared.events import StepStartedData
+
         # Get all steps that are ready to execute
         ready_steps = self._registry.get_ready_steps()
 
@@ -241,7 +263,7 @@ class ScannerScheduler:
             await self._handle_potential_deadlock()
             return
 
-        # Emit STEP_READY for newly ready steps
+        # Emit STEP_STARTED for newly ready steps
         newly_ready = [s for s in ready_steps if s not in self._notified_ready]
 
         for step_id in newly_ready:
@@ -255,14 +277,14 @@ class ScannerScheduler:
             # Mark as notified to avoid duplicate events
             self._notified_ready.add(step_id)
 
-            # Emit STEP_READY event
+            # Emit STEP_STARTED event with normalized schema
+            event_data = asdict(StepStartedData(
+                step_id=step_id,
+                condition=str(condition) if condition else None,
+            ))
             await self._event_bus.publish(
-                EventType.STEP_STATUS_CHANGED,  # Using existing event type
-                {
-                    "event": "STEP_READY",
-                    "step_id": step_id,
-                    "condition": str(condition) if condition else None,
-                }
+                EventType.STEP_STARTED,
+                event_data,
             )
 
             logger.debug("Step ready: %s", step_id)
@@ -284,8 +306,10 @@ class ScannerScheduler:
     async def _handle_potential_deadlock(self) -> None:
         """Handle a potential deadlock situation.
 
-        Logs a warning and could optionally emit a deadlock event.
+        Logs a warning and emits an EXTERNAL_CMD event with deadlock details.
         """
+        from shared.events import ExternalCmdData
+
         all_steps = self._registry.get_all_steps()
         pending_steps = [
             sid for sid, status in all_steps.items()
@@ -302,14 +326,17 @@ class ScannerScheduler:
         # Reset the counter to allow continued operation
         self._consecutive_no_progress = 0
 
-        # Optionally emit a deadlock event
-        await self._event_bus.publish(
-            EventType.EXTERNAL_CMD,
-            {
-                "event": "DEADLOCK_DETECTED",
+        # Emit a deadlock event with normalized schema
+        event_data = asdict(ExternalCmdData(
+            command="DEADLOCK_DETECTED",
+            payload={
                 "pending_steps": pending_steps,
                 "consecutive_scans": self._consecutive_no_progress,
-            }
+            },
+        ))
+        await self._event_bus.publish(
+            EventType.EXTERNAL_CMD,
+            event_data,
         )
 
     def force_scan(self) -> None:
@@ -320,6 +347,53 @@ class ScannerScheduler:
         # The scan loop will naturally pick up changes on next iteration
         # This is a no-op that could be enhanced with an explicit trigger
         pass
+
+    async def execute_loop_step(
+        self,
+        loop: Any,
+        run_id: str | None = None,
+    ) -> LoopResult:
+        """Execute a YamlLoop step using LoopExecutor.
+
+        When the scheduler encounters a YamlLoop step, this method creates
+        a LoopExecutor and executes the loop. After completion, the loop
+        step is marked as PASSED/FAILED in the StepRegistry and the result
+        is stored in VariableSpace under loop.<loop_id>.result.
+
+        Args:
+            loop: The YamlLoop to execute
+            run_id: Optional execution run identifier
+
+        Returns:
+            LoopResult with aggregated status and per-iteration results
+        """
+        from ..executor.loop_executor import LoopExecutor
+
+        # Create a LoopExecutor with the scheduler's step executor
+        loop_executor = LoopExecutor(
+            executor=self._step_executor,
+            event_bus=self._event_bus,
+            variable_space=self._variable_space,
+        )
+
+        # Mark the loop step as RUNNING in the registry
+        try:
+            self._registry.update_status(loop.id, StepStatus.RUNNING)
+        except KeyError:
+            # Loop step not registered — register it first
+            self._registry.register(loop.id)
+            self._registry.update_status(loop.id, StepStatus.RUNNING)
+
+        # Execute the loop
+        result = await loop_executor.execute_loop(loop, run_id=run_id)
+
+        # Update the registry with the loop's final status
+        try:
+            self._registry.update_status(loop.id, result.status)
+        except KeyError:
+            pass
+
+        return result
 
     def get_status(self) -> dict[str, Any]:
         """Get current scheduler status for monitoring.
