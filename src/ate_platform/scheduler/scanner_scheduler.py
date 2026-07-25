@@ -6,7 +6,7 @@ step conditions and notifies when steps become ready for execution.
 Key features:
 - Reactive dispatch: event handlers trigger immediate step evaluation
 - Watchdog scan loop (5s default interval) as safety net only
-- Subscribes to VARIABLE_CHANGED, STEP_STATUS_CHANGED, RESOURCE_RELEASED
+- Subscribes to MEASUREMENT_RECORDED, STEP_STATUS_CHANGED, RESOURCE_RELEASED
 - Detects ready steps via StepRegistry.get_ready_steps()
 - Emits STEP_STARTED events when conditions are met
 - Deadlock detection (cyclic scan without progress)
@@ -256,7 +256,7 @@ class ScannerScheduler:
         # Variable changed handler — triggers dispatch for variable-dependent steps
         def on_variable_changed(event: Event) -> None:
             name = event.data.get("name", "unknown")
-            logger.debug("Variable changed: %s — evaluating dependents", name)
+            logger.debug("Measurement recorded: %s — evaluating dependents", name)
             scheduler_self._schedule_dispatch_for_key(name)
 
         # Step status changed handler — triggers _evaluate_dependents and dispatch
@@ -281,8 +281,8 @@ class ScannerScheduler:
             logger.debug("Resource released: %s — evaluating dependents", resource_id)
             scheduler_self._schedule_dispatch_for_key(resource_id)
 
-        # Store handlers
-        self._handlers[EventType.VARIABLE_CHANGED] = on_variable_changed
+        # Store handlers — MEASUREMENT_RECORDED replaces deprecated VARIABLE_CHANGED
+        self._handlers[EventType.MEASUREMENT_RECORDED] = on_variable_changed
         self._handlers[EventType.STEP_STATUS_CHANGED] = on_step_status_changed
         self._handlers[EventType.RESOURCE_RELEASED] = on_resource_released
 
@@ -522,9 +522,9 @@ class ScannerScheduler:
     async def _handle_potential_deadlock(self) -> None:
         """Handle a potential deadlock situation.
 
-        Logs a warning and emits an EXTERNAL_CMD event with deadlock details.
+        Logs a warning and emits a DEADLOCK_DETECTED alarm event with severity/recoverable.
         """
-        from shared.events import ExternalCmdData
+        from shared.events import DeadlockDetectedData
 
         all_steps = self._registry.get_all_steps()
         pending_steps = [
@@ -542,16 +542,15 @@ class ScannerScheduler:
         # Reset the counter to allow continued operation
         self._consecutive_no_progress = 0
 
-        # Emit a deadlock event with normalized schema
-        event_data = asdict(ExternalCmdData(
-            command="DEADLOCK_DETECTED",
-            payload={
-                "pending_steps": pending_steps,
-                "consecutive_scans": self._consecutive_no_progress,
-            },
+        # Emit a DEADLOCK_DETECTED alarm event with normalized schema
+        event_data = asdict(DeadlockDetectedData(
+            pending_steps=pending_steps,
+            consecutive_scans=self._consecutive_no_progress,
+            severity="critical",
+            recoverable=False,
         ))
         await self._event_bus.publish(
-            EventType.EXTERNAL_CMD,
+            EventType.DEADLOCK_DETECTED,
             event_data,
         )
 

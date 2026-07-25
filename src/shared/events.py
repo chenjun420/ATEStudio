@@ -1,62 +1,173 @@
 """Event types for ATE Platform.
 
-This module defines event-related types:
-- EventType: Enum of supported event types
-- Event: Data container for event messages
+This module defines event-related types aligned with TEMS A4 categories:
+- EventCategory: TEMS A4 classification (EVENT, MEASUREMENT, ALARM)
+- EventType: Enum of supported event types, each mapped to a category
+- Event: Data container for event messages with category field
 - Typed event data classes for each EventType
 """
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
+
+
+class EventCategory(Enum):
+    """TEMS A4-aligned event classification.
+
+    Every EventType belongs to exactly one category:
+    - EVENT: Step lifecycle events (started, completed, failed, skipped, etc.)
+    - MEASUREMENT: Instrument readings and variable recordings
+    - ALARM: Timeout, deadlock, and resource exhaustion conditions
+    """
+
+    EVENT = "event"
+    MEASUREMENT = "measurement"
+    ALARM = "alarm"
 
 
 class EventType(Enum):
     """Enumeration of supported event types in the ATE Platform.
 
+    Each event type is mapped to an EventCategory via EVENT_TYPE_CATEGORIES.
+
     Attributes:
-        STEP_STATUS_CHANGED: A step's execution status has changed
-        VARIABLE_CHANGED: A test variable has been modified
-        RESOURCE_RELEASED: A resource has been released
-        TIMER_EXPIRED: A timer has expired
-        EXTERNAL_CMD: An external command has been received
-        STEP_STARTED: A step has started execution
-        STEP_COMPLETED: A step has completed execution
-        LOOP_ITERATION_STARTED: A loop iteration has started
-        LOOP_ITERATION_COMPLETED: A loop iteration has completed
-        EXECUTION_STARTED: Plan execution has started
-        EXECUTION_COMPLETED: Plan execution has completed
+        STEP_STATUS_CHANGED: A step's execution status has changed (EVENT)
+        STEP_STARTED: A step has started execution (EVENT)
+        STEP_COMPLETED: A step has completed execution (EVENT)
+        STEP_FAILED: A step has failed execution (EVENT)
+        STEP_SKIPPED: A step was skipped (EVENT)
+        STEP_TIMEOUT: A step timed out (ALARM)
+        MEASUREMENT_RECORDED: A measurement/variable has been recorded (MEASUREMENT)
+        VARIABLE_CHANGED: Deprecated alias for MEASUREMENT_RECORDED (MEASUREMENT)
+        RESOURCE_RELEASED: A resource has been released (EVENT)
+        RESOURCE_TIMEOUT: A resource acquisition timed out (ALARM)
+        CONDITION_TIMEOUT: A condition wait timed out (ALARM)
+        TIMER_EXPIRED: A timer has expired (EVENT)
+        EXTERNAL_CMD: An external command has been received (EVENT)
+        LOOP_ITERATION_STARTED: A loop iteration has started (EVENT)
+        LOOP_ITERATION_COMPLETED: A loop iteration has completed (EVENT)
+        EXECUTION_STARTED: Plan execution has started (EVENT)
+        EXECUTION_COMPLETED: Plan execution has completed (EVENT)
+        EXECUTION_PAUSED: Plan execution has been paused (EVENT)
+        DEADLOCK_DETECTED: A deadlock was detected (ALARM)
+        WORKER_EXHAUSTED: A worker pool is exhausted (ALARM)
     """
 
+    # EVENT category — step lifecycle
     STEP_STATUS_CHANGED = "STEP_STATUS_CHANGED"
-    VARIABLE_CHANGED = "VARIABLE_CHANGED"
-    RESOURCE_RELEASED = "RESOURCE_RELEASED"
-    TIMER_EXPIRED = "TIMER_EXPIRED"
-    EXTERNAL_CMD = "EXTERNAL_CMD"
     STEP_STARTED = "STEP_STARTED"
     STEP_COMPLETED = "STEP_COMPLETED"
+    STEP_FAILED = "STEP_FAILED"
+    STEP_SKIPPED = "STEP_SKIPPED"
     LOOP_ITERATION_STARTED = "LOOP_ITERATION_STARTED"
     LOOP_ITERATION_COMPLETED = "LOOP_ITERATION_COMPLETED"
     EXECUTION_STARTED = "EXECUTION_STARTED"
     EXECUTION_COMPLETED = "EXECUTION_COMPLETED"
+    EXECUTION_PAUSED = "EXECUTION_PAUSED"
+    RESOURCE_RELEASED = "RESOURCE_RELEASED"
+    TIMER_EXPIRED = "TIMER_EXPIRED"
+    EXTERNAL_CMD = "EXTERNAL_CMD"
+
+    # MEASUREMENT category — instrument readings / variable recordings
+    MEASUREMENT_RECORDED = "measurement_recorded"
+    VARIABLE_CHANGED = "measurement_recorded"  # Deprecated alias — same wire value
+
+    # ALARM category — timeout / exhaustion / deadlock
+    STEP_TIMEOUT = "STEP_TIMEOUT"
+    CONDITION_TIMEOUT = "CONDITION_TIMEOUT"
+    RESOURCE_TIMEOUT = "RESOURCE_TIMEOUT"
+    DEADLOCK_DETECTED = "DEADLOCK_DETECTED"
+    WORKER_EXHAUSTED = "WORKER_EXHAUSTED"
+
+    @classmethod
+    def _missing_(cls, value: object) -> EventType | None:
+        """Handle VARIABLE_CHANGED deprecation when accessed by string value.
+
+        When code looks up EventType("measurement_recorded"), Python returns
+        the first member with that value — MEASUREMENT_RECORDED. This is correct.
+        The VARIABLE_CHANGED alias exists only for source-level backward compat.
+        """
+        return None
+
+
+# Category mapping: every EventType → exactly one EventCategory
+EVENT_TYPE_CATEGORIES: dict[EventType, EventCategory] = {
+    # EVENT category
+    EventType.STEP_STATUS_CHANGED: EventCategory.EVENT,
+    EventType.STEP_STARTED: EventCategory.EVENT,
+    EventType.STEP_COMPLETED: EventCategory.EVENT,
+    EventType.STEP_FAILED: EventCategory.EVENT,
+    EventType.STEP_SKIPPED: EventCategory.EVENT,
+    EventType.LOOP_ITERATION_STARTED: EventCategory.EVENT,
+    EventType.LOOP_ITERATION_COMPLETED: EventCategory.EVENT,
+    EventType.EXECUTION_STARTED: EventCategory.EVENT,
+    EventType.EXECUTION_COMPLETED: EventCategory.EVENT,
+    EventType.EXECUTION_PAUSED: EventCategory.EVENT,
+    EventType.RESOURCE_RELEASED: EventCategory.EVENT,
+    EventType.TIMER_EXPIRED: EventCategory.EVENT,
+    EventType.EXTERNAL_CMD: EventCategory.EVENT,
+    # MEASUREMENT category
+    EventType.MEASUREMENT_RECORDED: EventCategory.MEASUREMENT,
+    EventType.VARIABLE_CHANGED: EventCategory.MEASUREMENT,
+    # ALARM category
+    EventType.STEP_TIMEOUT: EventCategory.ALARM,
+    EventType.CONDITION_TIMEOUT: EventCategory.ALARM,
+    EventType.RESOURCE_TIMEOUT: EventCategory.ALARM,
+    EventType.DEADLOCK_DETECTED: EventCategory.ALARM,
+    EventType.WORKER_EXHAUSTED: EventCategory.ALARM,
+}
+
+
+def get_event_category(event_type: EventType) -> EventCategory:
+    """Get the TEMS A4 category for an event type.
+
+    Args:
+        event_type: The event type to look up.
+
+    Returns:
+        The EventCategory for this event type.
+
+    Raises:
+        KeyError: If the event type has no category mapping.
+    """
+    return EVENT_TYPE_CATEGORIES[event_type]
+
+
+def _warn_variable_changed_deprecated() -> None:
+    """Emit a DeprecationWarning for VARIABLE_CHANGED usage."""
+    warnings.warn(
+        "EventType.VARIABLE_CHANGED is deprecated — use EventType.MEASUREMENT_RECORDED instead. "
+        "VARIABLE_CHANGED will be removed in a future release.",
+        DeprecationWarning,
+        stacklevel=3,
+    )
 
 
 @dataclass
 class Event:
-    """Container for event data.
+    """Container for event data with TEMS A4 category.
 
     Attributes:
         type: The type of event
+        category: TEMS A4 category (auto-derived from type if not provided)
         data: The event payload
         timestamp: When the event was created (auto-generated if not provided)
     """
 
     type: EventType
     data: dict[str, Any]
+    category: EventCategory = field(default=None)  # type: ignore[assignment]
     timestamp: datetime = field(default_factory=datetime.now)
+
+    def __post_init__(self) -> None:
+        """Auto-derive category from event type if not explicitly set."""
+        if self.category is None:
+            self.category = get_event_category(self.type)
 
 
 # ---------------------------------------------------------------------------
@@ -114,20 +225,62 @@ class StepCompletedData:
 
 
 @dataclass
-class VariableChangedData:
-    """Data for VARIABLE_CHANGED events.
+class StepFailedData:
+    """Data for STEP_FAILED events.
+
+    Attributes:
+        step_id: The step that failed
+        error: Error message describing the failure
+        run_id: Execution run identifier
+    """
+
+    step_id: str
+    error: str | None = None
+    run_id: str | None = None
+
+
+@dataclass
+class StepSkippedData:
+    """Data for STEP_SKIPPED events.
+
+    Attributes:
+        step_id: The step that was skipped
+        reason: Optional reason for skipping
+        run_id: Execution run identifier
+    """
+
+    step_id: str
+    reason: str | None = None
+    run_id: str | None = None
+
+
+@dataclass
+class MeasurementRecordedData:
+    """Data for MEASUREMENT_RECORDED events (TEMS A4 measurement category).
+
+    Replaces VariableChangedData with additional instrument metadata.
 
     Attributes:
         name: Variable name with scope prefix (e.g. 'scope.voltage')
         old_value: Previous value (None if variable was created)
         new_value: New value
+        timestamp: Measurement timestamp as Unix epoch float
+        unit: Measurement unit (e.g. 'V', 'A', 'Ω') or None
+        instrument_id: Instrument that produced the measurement (e.g. 'DMM_CH1') or None
         run_id: Execution run identifier
     """
 
     name: str
     old_value: Any = None
     new_value: Any = None
+    timestamp: float = 0.0
+    unit: str | None = None
+    instrument_id: str | None = None
     run_id: str | None = None
+
+
+# Backward-compatible alias — code referencing VariableChangedData still works
+VariableChangedData = MeasurementRecordedData
 
 
 @dataclass
@@ -241,12 +394,133 @@ class ExecutionCompletedData:
     duration_seconds: float = 0.0
 
 
+@dataclass
+class ExecutionPausedData:
+    """Data for EXECUTION_PAUSED events.
+
+    Attributes:
+        run_id: Execution run identifier
+        reason: Optional reason for the pause
+    """
+
+    run_id: str
+    reason: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Alarm data classes — severity + recoverable fields
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class StepTimeoutData:
+    """Data for STEP_TIMEOUT alarm events.
+
+    Attributes:
+        step_id: The step that timed out
+        timeout_seconds: Configured timeout duration
+        severity: Alarm severity level
+        recoverable: Whether the condition is recoverable
+        run_id: Execution run identifier
+    """
+
+    step_id: str
+    timeout_seconds: float = 0.0
+    severity: Literal["warning", "critical"] = "critical"
+    recoverable: bool = False
+    run_id: str | None = None
+
+
+@dataclass
+class ConditionTimeoutData:
+    """Data for CONDITION_TIMEOUT alarm events.
+
+    Attributes:
+        step_id: The step whose condition timed out
+        condition: The condition expression that was not met
+        timeout_seconds: How long the condition was waited for
+        severity: Alarm severity level
+        recoverable: Whether the condition is recoverable
+        run_id: Execution run identifier
+    """
+
+    step_id: str
+    condition: str | None = None
+    timeout_seconds: float = 0.0
+    severity: Literal["warning", "critical"] = "warning"
+    recoverable: bool = True
+    run_id: str | None = None
+
+
+@dataclass
+class ResourceTimeoutData:
+    """Data for RESOURCE_TIMEOUT alarm events.
+
+    Attributes:
+        resource_id: The resource that could not be acquired
+        owner_id: The owner that held the resource (if known)
+        timeout_seconds: How long the acquisition was attempted
+        severity: Alarm severity level
+        recoverable: Whether the condition is recoverable
+        run_id: Execution run identifier
+    """
+
+    resource_id: str
+    owner_id: str | None = None
+    timeout_seconds: float = 0.0
+    severity: Literal["warning", "critical"] = "warning"
+    recoverable: bool = True
+    run_id: str | None = None
+
+
+@dataclass
+class DeadlockDetectedData:
+    """Data for DEADLOCK_DETECTED alarm events.
+
+    Attributes:
+        pending_steps: List of step IDs that are still pending
+        consecutive_scans: Number of consecutive scans without progress
+        severity: Alarm severity level
+        recoverable: Whether the condition is recoverable
+        run_id: Execution run identifier
+    """
+
+    pending_steps: list[str] = field(default_factory=list)
+    consecutive_scans: int = 0
+    severity: Literal["warning", "critical"] = "critical"
+    recoverable: bool = False
+    run_id: str | None = None
+
+
+@dataclass
+class WorkerExhaustedData:
+    """Data for WORKER_EXHAUSTED alarm events.
+
+    Attributes:
+        pool_name: Name of the exhausted worker pool
+        active_workers: Number of currently active workers
+        max_workers: Maximum worker pool size
+        severity: Alarm severity level
+        recoverable: Whether the condition is recoverable
+        run_id: Execution run identifier
+    """
+
+    pool_name: str = "default"
+    active_workers: int = 0
+    max_workers: int = 0
+    severity: Literal["warning", "critical"] = "warning"
+    recoverable: bool = True
+    run_id: str | None = None
+
+
 # Mapping from EventType to its typed data class
 EVENT_DATA_CLASSES: dict[EventType, type] = {
+    # EVENT category
     EventType.STEP_STATUS_CHANGED: StepStatusChangedData,
     EventType.STEP_STARTED: StepStartedData,
     EventType.STEP_COMPLETED: StepCompletedData,
-    EventType.VARIABLE_CHANGED: VariableChangedData,
+    EventType.STEP_FAILED: StepFailedData,
+    EventType.STEP_SKIPPED: StepSkippedData,
     EventType.RESOURCE_RELEASED: ResourceReleasedData,
     EventType.TIMER_EXPIRED: TimerExpiredData,
     EventType.EXTERNAL_CMD: ExternalCmdData,
@@ -254,4 +528,14 @@ EVENT_DATA_CLASSES: dict[EventType, type] = {
     EventType.LOOP_ITERATION_COMPLETED: LoopIterationCompletedData,
     EventType.EXECUTION_STARTED: ExecutionStartedData,
     EventType.EXECUTION_COMPLETED: ExecutionCompletedData,
+    EventType.EXECUTION_PAUSED: ExecutionPausedData,
+    # MEASUREMENT category
+    EventType.MEASUREMENT_RECORDED: MeasurementRecordedData,
+    EventType.VARIABLE_CHANGED: MeasurementRecordedData,
+    # ALARM category
+    EventType.STEP_TIMEOUT: StepTimeoutData,
+    EventType.CONDITION_TIMEOUT: ConditionTimeoutData,
+    EventType.RESOURCE_TIMEOUT: ResourceTimeoutData,
+    EventType.DEADLOCK_DETECTED: DeadlockDetectedData,
+    EventType.WORKER_EXHAUSTED: WorkerExhaustedData,
 }

@@ -4,6 +4,10 @@ In local mode (NATS unavailable), events published via publish_event()
 go directly to the asyncio.Queue, enabling SSE streaming without NATS.
 When NATS is available, events are also published to JetStream for
 cross-process delivery and Last-Event-ID replay.
+
+TEMS A4 category support:
+- SSE `event:` line is set to the event's category (event, measurement, alarm)
+- This enables frontend clients to filter by category using EventSource
 """
 
 import asyncio
@@ -15,7 +19,16 @@ from typing import Any
 
 from nats.aio.client import Client as NatsClient
 
+from shared.events import EVENT_TYPE_CATEGORIES, EventType
+
 logger = logging.getLogger(__name__)
+
+# Mapping from EventType value string to SSE category string
+# Used when the bridge receives event_type as a string (from API endpoints)
+_EVENT_TYPE_TO_SSE_CATEGORY: dict[str, str] = {
+    et.value: EVENT_TYPE_CATEGORIES[et].value
+    for et in EVENT_TYPE_CATEGORIES
+}
 
 
 class SSEBridge:
@@ -156,17 +169,25 @@ class SSEBridge:
         In NATS mode, also publishes to JetStream subject
         ate.status.{run_id}.{event_type}.
 
+        The SSE `event:` line is set to the TEMS A4 category derived from
+        the event_type (event, measurement, or alarm). If the event_type
+        is not recognized, defaults to "event".
+
         Args:
             run_id: The execution run identifier.
-            event_type: The event type (e.g., EXECUTION_STARTED).
+            event_type: The event type (e.g., EXECUTION_STARTED, MEASUREMENT_RECORDED).
             data: The event payload.
         """
         self._event_counter += 1
         event_id = f"{run_id}-{self._event_counter}"
 
+        # Derive SSE category from event type string
+        sse_category = _EVENT_TYPE_TO_SSE_CATEGORY.get(event_type, "event")
+
         event: dict[str, Any] = {
             "id": event_id,
             "type": event_type,
+            "category": sse_category,
             "run_id": run_id,
             "data": data,
             "timestamp": time.time(),

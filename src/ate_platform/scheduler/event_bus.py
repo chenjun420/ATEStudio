@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from shared.events import Event, EventType
+from shared.events import Event, EventCategory, EventType, get_event_category
 
 logger = logging.getLogger(__name__)
 
@@ -187,13 +187,20 @@ class EventBus:
         """Publish an event to all subscribers.
 
         The event is queued and will be processed asynchronously by the event loop.
+        The event's category is auto-derived from its type and validated.
 
         Args:
             event_type: The type of event
             data: The event payload
+
+        Raises:
+            ValueError: If the event type has no category mapping
         """
+        # Validate that the event type has a category mapping
+        category = get_event_category(event_type)
+
         self._published += 1
-        event = Event(type=event_type, data=data)
+        event = Event(type=event_type, data=data, category=category)
         await self._queue.put(event)
 
     async def start(self) -> None:

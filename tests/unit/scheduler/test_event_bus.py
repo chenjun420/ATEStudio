@@ -21,7 +21,9 @@ class TestEventType:
     def test_event_type_values(self) -> None:
         """EventType should have all required values."""
         assert EventType.STEP_STATUS_CHANGED.value == "STEP_STATUS_CHANGED"
-        assert EventType.VARIABLE_CHANGED.value == "VARIABLE_CHANGED"
+        # VARIABLE_CHANGED is a deprecated alias — same wire value as MEASUREMENT_RECORDED
+        assert EventType.VARIABLE_CHANGED.value == "measurement_recorded"
+        assert EventType.MEASUREMENT_RECORDED.value == "measurement_recorded"
         assert EventType.RESOURCE_RELEASED.value == "RESOURCE_RELEASED"
         assert EventType.TIMER_EXPIRED.value == "TIMER_EXPIRED"
         assert EventType.EXTERNAL_CMD.value == "EXTERNAL_CMD"
@@ -31,10 +33,26 @@ class TestEventType:
         assert EventType.LOOP_ITERATION_COMPLETED.value == "LOOP_ITERATION_COMPLETED"
         assert EventType.EXECUTION_STARTED.value == "EXECUTION_STARTED"
         assert EventType.EXECUTION_COMPLETED.value == "EXECUTION_COMPLETED"
+        # New TEMS A4 event types
+        assert EventType.STEP_FAILED.value == "STEP_FAILED"
+        assert EventType.STEP_SKIPPED.value == "STEP_SKIPPED"
+        assert EventType.EXECUTION_PAUSED.value == "EXECUTION_PAUSED"
+        assert EventType.STEP_TIMEOUT.value == "STEP_TIMEOUT"
+        assert EventType.CONDITION_TIMEOUT.value == "CONDITION_TIMEOUT"
+        assert EventType.RESOURCE_TIMEOUT.value == "RESOURCE_TIMEOUT"
+        assert EventType.DEADLOCK_DETECTED.value == "DEADLOCK_DETECTED"
+        assert EventType.WORKER_EXHAUSTED.value == "WORKER_EXHAUSTED"
 
     def test_event_type_count(self) -> None:
-        """EventType should have exactly 11 values."""
-        assert len(EventType) == 11
+        """EventType should have exactly 19 unique values.
+
+        VARIABLE_CHANGED is a deprecated alias of MEASUREMENT_RECORDED (same
+        value), so Python's Enum counts them as one member. The alias is still
+        accessible as EventType.VARIABLE_CHANGED.
+        """
+        assert len(EventType) == 19
+        # Verify the deprecated alias is still accessible
+        assert EventType.VARIABLE_CHANGED is EventType.MEASUREMENT_RECORDED
 
 
 class TestEvent:

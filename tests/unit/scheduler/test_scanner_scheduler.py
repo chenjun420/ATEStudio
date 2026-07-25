@@ -417,7 +417,7 @@ class TestScannerSchedulerDeadlockDetection:
         def handler(event: Event) -> None:
             received.append(event)
 
-        event_bus.subscribe(EventType.EXTERNAL_CMD, handler)
+        event_bus.subscribe(EventType.DEADLOCK_DETECTED, handler)
 
         await event_bus.start()
         await scheduler.start()
@@ -428,8 +428,8 @@ class TestScannerSchedulerDeadlockDetection:
         await scheduler.stop()
         await event_bus.stop()
 
-        # Should have received DEADLOCK_DETECTED event
-        deadlock_events = [e for e in received if e.data.get("command") == "DEADLOCK_DETECTED"]
+        # Should have received DEADLOCK_DETECTED alarm event
+        deadlock_events = [e for e in received if e.type == EventType.DEADLOCK_DETECTED]
         assert len(deadlock_events) >= 1
 
 
@@ -513,7 +513,7 @@ class TestScannerSchedulerEventHandlers:
         await scheduler.start()
 
         assert len(scheduler._handlers) == 3
-        assert EventType.VARIABLE_CHANGED in scheduler._handlers
+        assert EventType.MEASUREMENT_RECORDED in scheduler._handlers
         assert EventType.STEP_STATUS_CHANGED in scheduler._handlers
         assert EventType.RESOURCE_RELEASED in scheduler._handlers
 

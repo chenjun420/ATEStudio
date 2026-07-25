@@ -72,7 +72,7 @@ async def stream_execution_events(
             async for event in bridge.replay_from_jetstream(run_id, last_id):
                 yield ServerSentEvent(
                     data=json.dumps(event.get("data", {})),
-                    event=event.get("type", "update"),
+                    event=event.get("category", "event"),
                     id=event.get("id"),
                 )
 
@@ -84,7 +84,7 @@ async def stream_execution_events(
                 event = await asyncio.wait_for(queue.get(), timeout=30.0)
                 yield ServerSentEvent(
                     data=json.dumps(event.get("data", {})),
-                    event=event.get("type", "update"),
+                    event=event.get("category", "event"),
                     id=event.get("id"),
                 )
             except asyncio.TimeoutError:

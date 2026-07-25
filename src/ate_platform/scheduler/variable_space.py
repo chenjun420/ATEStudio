@@ -59,8 +59,8 @@ class VariableSpace:
         """Initialize an empty variable space.
 
         Args:
-            event_bus: Optional EventBus for publishing VARIABLE_CHANGED events.
-                When provided, set() will fire VARIABLE_CHANGED events.
+            event_bus: Optional EventBus for publishing MEASUREMENT_RECORDED events.
+                When provided, set() will fire MEASUREMENT_RECORDED events.
         """
         self._scope: dict[str, Any] = {}
         self._steps: dict[str, dict[str, Any]] = {}
@@ -126,7 +126,7 @@ class VariableSpace:
     def set(self, name: str, value: Any) -> None:
         """Set a variable value with whitelist validation.
 
-        Fires VARIABLE_CHANGED event if event_bus is configured.
+        Fires MEASUREMENT_RECORDED event if event_bus is configured.
 
         Args:
             name: Variable name with scope prefix (e.g., 'scope.voltage')
@@ -190,16 +190,19 @@ class VariableSpace:
                     old_value = self._loop[loop_id].get(remaining)
                 self._loop[loop_id][remaining] = value
 
-        # Fire VARIABLE_CHANGED event outside the lock
+        # Fire MEASUREMENT_RECORDED event outside the lock
         if self._event_bus is not None:
-            from shared.events import EventType, VariableChangedData
+            import time as _time
 
-            event_data = asdict(VariableChangedData(
+            from shared.events import EventType, MeasurementRecordedData
+
+            event_data = asdict(MeasurementRecordedData(
                 name=name,
                 old_value=old_value,
                 new_value=value,
+                timestamp=_time.time(),
             ))
-            self._event_bus.publish_sync(EventType.VARIABLE_CHANGED, event_data)
+            self._event_bus.publish_sync(EventType.MEASUREMENT_RECORDED, event_data)
 
     def resolve(self, expression: str) -> str:
         """Resolve variable references in an expression.
