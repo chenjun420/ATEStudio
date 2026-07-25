@@ -8,6 +8,7 @@ Key features:
 - Timeout-based waiting
 - Ownership tracking
 - Deadlock detection via timeout
+- Event publishing on resource release
 
 Typical usage:
     rm = ResourceManager()
@@ -16,10 +17,16 @@ Typical usage:
         rm.release('DMM_CH1', 'step1')
 """
 
+from __future__ import annotations
+
 import threading
-from typing import override
+from dataclasses import asdict
+from typing import TYPE_CHECKING, Any, override
 
 from ..exceptions import ResourceAcquireError
+
+if TYPE_CHECKING:
+    from .event_bus import EventBus
 
 
 class ResourceManager:
@@ -46,11 +53,17 @@ class ResourceManager:
         True
     """
 
-    def __init__(self) -> None:
-        """Initialize the resource manager with empty lock and owner mappings."""
+    def __init__(self, event_bus: EventBus | None = None) -> None:
+        """Initialize the resource manager with empty lock and owner mappings.
+
+        Args:
+            event_bus: Optional EventBus for publishing RESOURCE_RELEASED events.
+                When provided, release() will fire RESOURCE_RELEASED events.
+        """
         self._locks: dict[str, threading.Lock] = {}
         self._owners: dict[str, str] = {}
         self._lock: threading.Lock = threading.Lock()  # Protects _locks and _owners
+        self._event_bus: EventBus | None = event_bus
 
     def acquire(
         self, resource_id: str, owner_id: str, timeout: float | None = None
@@ -122,6 +135,7 @@ class ResourceManager:
 
         Thread-safe release that verifies ownership before releasing.
         Only the actual owner can release the resource.
+        Fires RESOURCE_RELEASED event if event_bus is configured.
 
         Args:
             resource_id: Unique identifier for the resource
@@ -155,6 +169,16 @@ class ResourceManager:
 
         # Release the lock (outside global lock to avoid deadlock)
         self._locks[resource_id].release()
+
+        # Fire RESOURCE_RELEASED event outside the lock
+        if self._event_bus is not None:
+            from shared.events import EventType, ResourceReleasedData
+
+            event_data = asdict(ResourceReleasedData(
+                resource_id=resource_id,
+                owner_id=owner_id,
+            ))
+            self._event_bus.publish_sync(EventType.RESOURCE_RELEASED, event_data)
 
     def is_available(self, resource_id: str) -> bool:
         """Check if a resource is available (not held by any owner).

@@ -121,7 +121,7 @@ class TestFullWorkflowIntegration:
         # Verify plan metadata
         assert plan.name == "integration_test_plan"
         assert plan.version == "1.0"
-        assert plan.scope == "production"
+        assert plan.scope == {"name": "production"}
         assert plan.max_concurrency == 2
 
         # Verify steps
@@ -210,14 +210,14 @@ class TestFullWorkflowIntegration:
         # Register a step with no conditions
         step_registry.register("independent_step")
 
-        # Track STEP_READY events
+        # Track STEP_STARTED events
         ready_events: list[dict[str, Any]] = []
 
         def capture_ready_event(event: Event) -> None:
-            if event.data.get("event") == "STEP_READY":
+            if event.type == EventType.STEP_STARTED:
                 ready_events.append(event.data)
 
-        event_bus.subscribe(EventType.STEP_STATUS_CHANGED, capture_ready_event)
+        event_bus.subscribe(EventType.STEP_STARTED, capture_ready_event)
 
         # Start scheduler
         await scheduler.start()
@@ -424,10 +424,10 @@ class TestFullWorkflowIntegration:
         ready_events: list[tuple[float, str]] = []
 
         def track_ready_event(event: Event) -> None:
-            if event.data.get("event") == "STEP_READY":
+            if event.type == EventType.STEP_STARTED:
                 ready_events.append((time.time(), str(event.data["step_id"])))
 
-        event_bus.subscribe(EventType.STEP_STATUS_CHANGED, track_ready_event)
+        event_bus.subscribe(EventType.STEP_STARTED, track_ready_event)
 
         await scheduler.start()
 
@@ -709,11 +709,11 @@ class TestSchedulingLatency:
         latencies: list[float] = []
 
         def track_latency(event: Event) -> None:
-            if event.data.get("event") == "STEP_READY":
+            if event.type == EventType.STEP_STARTED:
                 latency = time.time() - start_time
                 latencies.append(latency)
 
-        event_bus.subscribe(EventType.STEP_STATUS_CHANGED, track_latency)
+        event_bus.subscribe(EventType.STEP_STARTED, track_latency)
 
         # Register multiple independent steps
         for i in range(10):

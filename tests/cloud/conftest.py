@@ -68,8 +68,9 @@ async def db_session(test_engine: AsyncEngine) -> AsyncGenerator[AsyncSession, N
 
 @pytest.fixture
 def app(db_session: AsyncSession) -> FastAPI:
-    """Create a FastAPI app with test database session override."""
+    """Create a FastAPI app with test database session override and SSE bridge."""
     from ate_cloud.db import get_db
+    from ate_cloud.nats.sse_bridge import SSEBridge
 
     app = create_app()
 
@@ -78,6 +79,9 @@ def app(db_session: AsyncSession) -> FastAPI:
         yield db_session
 
     app.dependency_overrides[get_db] = override_get_db
+
+    # Attach SSE bridge to app state (lifespan doesn't run in tests)
+    app.state.sse_bridge = SSEBridge(nc=None)
 
     return app
 

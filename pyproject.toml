@@ -19,6 +19,8 @@ dependencies = [
     "asyncpg>=0.29.0",
     "aiomysql>=0.2.0",
     "alembic>=1.13.0",
+    "sse-starlette>=2.0.0",
+    "gitpython>=3.1.0",
 ]
 
 [project.optional-dependencies]
@@ -50,7 +52,7 @@ strict = true
 warn_return_any = true
 warn_unused_configs = true
 [[tool.mypy.overrides]]
-module = ["pyvisa", "pyvisa.*", "nats", "nats.*", "aiosqlite", "httpx", "sqlalchemy", "sqlalchemy.*", "asyncpg"]
+module = ["pyvisa", "pyvisa.*", "nats", "nats.*", "aiosqlite", "httpx", "sqlalchemy", "sqlalchemy.*", "asyncpg", "git", "git.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

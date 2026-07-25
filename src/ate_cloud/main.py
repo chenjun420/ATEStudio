@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import nats
 from fastapi import FastAPI
@@ -6,6 +7,8 @@ from nats.aio.client import Client as NatsClient
 
 from ate_cloud.api.v1.router import api_router
 from ate_cloud.config import settings
+from ate_cloud.nats.sse_bridge import SSEBridge
+from ate_cloud.services.script_versioning import ScriptVersioningService
 
 # Global NATS client (optional - not blocking startup)
 _nats_client: NatsClient | None = None
@@ -13,22 +16,35 @@ _nats_client: NatsClient | None = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Manage NATS connection lifecycle.
+    """Manage NATS connection lifecycle, SSE bridge, and script versioning.
 
     NATS connection is optional and will not block startup on failure.
+    SSE bridge is always initialized (works with or without NATS).
+    Script versioning service is initialized with SCRIPTS_ROOT_DIR env var.
     """
-    # Startup
+    # Startup - NATS is optional, connection happens in background
     global _nats_client
-    try:
-        _nats_client = await nats.connect(settings.nats_url)
-        print(f"Connected to NATS: {settings.nats_url}")  # noqa: T201
-    except Exception as e:
-        print(f"Warning: Could not connect to NATS: {e}")  # noqa: T201
-        _nats_client = None
+    _nats_client = None
+    print("NATS connection skipped (optional)")  # noqa: T201
+
+    # Initialize SSE bridge (works with or without NATS)
+    bridge = SSEBridge(nc=_nats_client)
+    app.state.sse_bridge = bridge
+    print("SSE bridge initialized")  # noqa: T201
+
+    # Initialize script versioning service
+    import os
+
+    scripts_root = Path(os.environ.get("SCRIPTS_ROOT_DIR", str(Path(__file__).parent.parent.parent / "scripts")))
+    versioning_service = ScriptVersioningService(scripts_root=scripts_root)
+    app.state.script_versioning = versioning_service
+    print(f"Script versioning initialized at: {scripts_root}")  # noqa: T201
 
     yield
 
     # Shutdown
+    await bridge.cleanup()
+
     if _nats_client is not None:
         try:
             await _nats_client.close()

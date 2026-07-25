@@ -9,7 +9,10 @@ Thread Safety:
     All status operations are protected by threading.Lock.
 """
 
+from __future__ import annotations
+
 import threading
+from dataclasses import asdict
 
 from ..types import Condition, StepStatus
 from .condition_evaluator import ConditionEvaluator
@@ -75,7 +78,8 @@ class StepRegistry:
     def update_status(self, step_id: str, status: StepStatus) -> None:
         """Update the status of a registered step.
 
-        Publishes STEP_STATUS_CHANGED event if event_bus is configured.
+        Publishes STEP_STATUS_CHANGED event if event_bus is configured
+        and the status actually changed.
 
         Args:
             step_id: The step identifier
@@ -91,30 +95,16 @@ class StepRegistry:
             old_status = self._steps[step_id]
             self._steps[step_id] = status
 
-            # Publish event outside the lock to avoid potential deadlock
-            if self._event_bus is not None and old_status != status:
-                # We need to handle async publish, but this method is sync
-                # The event will be queued and processed later if bus is running
-                # For sync operation, we just queue it
-                import asyncio
+        # Publish event outside the lock to avoid potential deadlock
+        if self._event_bus is not None and old_status != status:
+            from shared.events import StepStatusChangedData
 
-                try:
-                    _ = asyncio.get_running_loop()
-                    # We're in an async context, schedule the publish
-                    _ = asyncio.create_task(
-                        self._event_bus.publish(
-                            EventType.STEP_STATUS_CHANGED,
-                            {
-                                "step_id": step_id,
-                                "old_status": old_status.value,
-                                "new_status": status.value,
-                            },
-                        )
-                    )
-                except RuntimeError:
-                    # No running loop, we can't publish async from sync context
-                    # This is acceptable - caller should handle event publishing
-                    pass
+            event_data = asdict(StepStatusChangedData(
+                step_id=step_id,
+                old_status=old_status.value,
+                new_status=status.value,
+            ))
+            self._event_bus.publish_sync(EventType.STEP_STATUS_CHANGED, event_data)
 
     def get_status(self, step_id: str) -> StepStatus:
         """Get the current status of a step.
