@@ -38,6 +38,15 @@ class Settings(BaseSettings):
     mysql_password: str = "root"
     mysql_database: str = "ate_platform"
 
+    # Qdrant configuration
+    qdrant_url: str = "http://localhost:6333"
+    qdrant_collection_failures: str = "ate_failures"
+    embedding_dimensions: int = 1536  # DeepAgents / OpenAI compatible
+
+    # Upload queue settings
+    upload_queue_max_size: int = Field(default=1000, ge=1, description="Maximum number of entries in upload queue before pruning")
+    upload_queue_max_age_seconds: int = Field(default=3600, ge=1, description="Maximum age in seconds before upload queue entries are pruned")
+
     class Config:
         env_prefix = "ATE_CLOUD_"
 

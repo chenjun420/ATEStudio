@@ -231,6 +231,33 @@ class ResourceManager:
         with self._lock:
             return self._owners.get(resource_id)
 
+    def get_active_locks(self) -> dict[str, dict[str, str]]:
+        """Get a snapshot of all currently held resource locks.
+
+        Returns a dictionary mapping resource_id to lock info containing
+        the owner_id. Thread-safe.
+
+        Returns:
+            Dict of resource_id → {'owner': owner_id} for each held resource
+
+        Example:
+            >>> rm = ResourceManager()
+            >>> rm.acquire('DMM_CH1', 'step1')
+            True
+            >>> rm.acquire('PSU_CH1', 'step2')
+            True
+            >>> locks = rm.get_active_locks()
+            >>> 'DMM_CH1' in locks
+            True
+            >>> locks['DMM_CH1']['owner']
+            'step1'
+        """
+        with self._lock:
+            return {
+                resource_id: {"owner": owner_id}
+                for resource_id, owner_id in self._owners.items()
+            }
+
     @override
     def __repr__(self) -> str:
         """Return string representation showing held resources."""

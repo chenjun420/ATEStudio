@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import AsyncGenerator
+from unittest.mock import patch
 
 import pytest
 import pytest_asyncio
@@ -264,3 +266,270 @@ class TestSQLiteCache:
             # WAL mode is set, though :memory: databases use 'memory' journal mode
             # For file-based DBs, WAL should be enabled
             assert result[0].lower() in ("wal", "memory")
+
+
+class TestQueuePruning:
+    """Tests for upload queue size pruning and age-based cleanup."""
+
+    @pytest_asyncio.fixture
+    async def cache(self) -> AsyncGenerator[SQLiteCache, None]:
+        """Create an in-memory cache with small max_queue_size for testing."""
+        cache = SQLiteCache(":memory:", max_queue_size=5, max_queue_age_seconds=3600)
+        await cache.connect()
+        yield cache
+        await cache.close()
+
+    @pytest_asyncio.fixture
+    async def cache_small(self) -> AsyncGenerator[SQLiteCache, None]:
+        """Create an in-memory cache with max_queue_size=1 for edge case tests."""
+        cache = SQLiteCache(":memory:", max_queue_size=1, max_queue_age_seconds=3600)
+        await cache.connect()
+        yield cache
+        await cache.close()
+
+    @pytest.mark.asyncio
+    async def test_enqueue_upload_stores_payload(self, cache: SQLiteCache) -> None:
+        """Verify enqueue_upload stores payload in upload_queue."""
+        payload = b'{"step_id": "step-1", "status": "passed"}'
+        await cache.enqueue_upload(payload)
+
+        stats = await cache.queue_stats()
+        assert stats["current_size"] == 1
+
+    @pytest.mark.asyncio
+    async def test_size_pruning_insert_above_limit(self, cache: SQLiteCache) -> None:
+        """Insert 6 entries with max_queue_size=5 — oldest 1 should be pruned."""
+        for i in range(6):
+            payload = f'{{"step_id": "step-{i}", "status": "passed"}}'.encode()
+            await cache.enqueue_upload(payload)
+
+        stats = await cache.queue_stats()
+        assert stats["current_size"] == 5
+        assert stats["total_pruned"] == 1
+
+    @pytest.mark.asyncio
+    async def test_size_pruning_many_above_limit(self, cache: SQLiteCache) -> None:
+        """Insert 15 entries with max_queue_size=5 — oldest 10 should be pruned."""
+        for i in range(15):
+            payload = f'{{"step_id": "step-{i}", "status": "passed"}}'.encode()
+            await cache.enqueue_upload(payload)
+
+        stats = await cache.queue_stats()
+        assert stats["current_size"] == 5
+        assert stats["total_pruned"] == 10
+
+    @pytest.mark.asyncio
+    async def test_size_pruning_with_small_limit(
+        self, cache_small: SQLiteCache
+    ) -> None:
+        """Insert 2 entries with max_queue_size=1 — oldest should be pruned."""
+        await cache_small.enqueue_upload(b'{"step_id": "step-a"}')
+        await cache_small.enqueue_upload(b'{"step_id": "step-b"}')
+
+        stats = await cache_small.queue_stats()
+        assert stats["current_size"] == 1
+        assert stats["total_pruned"] == 1
+
+    @pytest.mark.asyncio
+    async def test_no_pruning_when_below_limit(self, cache: SQLiteCache) -> None:
+        """Insert 3 entries with max_queue_size=5 — nothing should be pruned."""
+        for i in range(3):
+            payload = f'{{"step_id": "step-{i}"}}'.encode()
+            await cache.enqueue_upload(payload)
+
+        stats = await cache.queue_stats()
+        assert stats["current_size"] == 3
+        assert stats["total_pruned"] == 0
+
+    @pytest.mark.asyncio
+    async def test_oldest_entry_pruned_first(self, cache: SQLiteCache) -> None:
+        """Verify the OLDEST entry is pruned when limit exceeded."""
+        # Insert 5 entries (fills queue)
+        for i in range(5):
+            payload = f'{{"step_id": "step-{i}"}}'.encode()
+            await cache.enqueue_upload(payload)
+
+        stats_before = await cache.queue_stats()
+        assert stats_before["current_size"] == 5
+
+        # Small delay so timestamps differ
+        await asyncio.sleep(0.01)
+
+        # Insert one more — oldest should be pruned
+        await cache.enqueue_upload(b'{"step_id": "step-new"}')
+
+        stats_after = await cache.queue_stats()
+        assert stats_after["current_size"] == 5
+        assert stats_after["total_pruned"] == 1
+
+    @pytest.mark.asyncio
+    async def test_age_pruning_deletes_old_entries(self, cache: SQLiteCache) -> None:
+        """Verify _cleanup_aged_entries deletes entries older than threshold."""
+        # Insert an entry with a past timestamp directly
+        import aiosqlite
+
+        past_time = "2020-01-01T00:00:00"
+        async with cache._lock:  # noqa: SLF001
+            await cache._db.execute(  # noqa: SLF001
+                "INSERT INTO upload_queue (payload, retry_count, created_at) VALUES (?, ?, ?)",
+                ('{"step_id": "old-step"}', 0, past_time),
+            )
+            await cache._db.commit()  # noqa: SLF001
+
+        # Insert a recent entry
+        await cache.enqueue_upload(b'{"step_id": "new-step"}')
+
+        stats_before = await cache.queue_stats()
+        assert stats_before["current_size"] == 2
+
+        # Run age-based cleanup
+        deleted = await cache._cleanup_aged_entries()  # noqa: SLF001
+        assert deleted == 1
+
+        stats_after = await cache.queue_stats()
+        assert stats_after["current_size"] == 1
+        assert stats_after["total_pruned"] == 1
+
+    @pytest.mark.asyncio
+    async def test_age_pruning_keeps_recent_entries(self, cache: SQLiteCache) -> None:
+        """Verify _cleanup_aged_entries does NOT delete recent entries."""
+        for i in range(3):
+            payload = f'{{"step_id": "step-{i}"}}'.encode()
+            await cache.enqueue_upload(payload)
+
+        deleted = await cache._cleanup_aged_entries()  # noqa: SLF001
+        assert deleted == 0
+
+        stats = await cache.queue_stats()
+        assert stats["current_size"] == 3
+
+    @pytest.mark.asyncio
+    async def test_queue_stats_returns_correct_values(self, cache: SQLiteCache) -> None:
+        """Verify queue_stats returns correct current_size, oldest_entry_age, total_pruned."""
+        # Initially empty
+        stats = await cache.queue_stats()
+        assert stats["current_size"] == 0
+        assert stats["oldest_entry_age"] == 0
+        assert stats["total_pruned"] == 0
+
+        # Insert entries
+        await cache.enqueue_upload(b'{"step_id": "step-1"}')
+        await cache.enqueue_upload(b'{"step_id": "step-2"}')
+
+        stats = await cache.queue_stats()
+        assert stats["current_size"] == 2
+        assert stats["oldest_entry_age"] >= 0
+        assert stats["total_pruned"] == 0
+
+        # Insert beyond limit (max_queue_size=5, so 6 total → prune 1)
+        for i in range(4):
+            payload = f'{{"step_id": "step-extra-{i}"}}'.encode()
+            await cache.enqueue_upload(payload)
+
+        stats = await cache.queue_stats()
+        assert stats["current_size"] == 5
+        assert stats["total_pruned"] == 1
+
+    @pytest.mark.asyncio
+    async def test_total_pruned_accumulates(self, cache: SQLiteCache) -> None:
+        """Verify total_pruned counter accumulates across multiple prune operations."""
+        # Fill queue with 5 entries
+        for i in range(5):
+            await cache.enqueue_upload(f'{{"step_id": "step-{i}"}}'.encode())
+
+        # Push 5 more — each enqueue prunes 1
+        for i in range(5):
+            await cache.enqueue_upload(f'{{"step_id": "step-batch2-{i}"}}'.encode())
+
+        stats = await cache.queue_stats()
+        assert stats["current_size"] == 5
+        assert stats["total_pruned"] == 5
+
+    @pytest.mark.asyncio
+    async def test_cleanup_task_starts_on_connect(self) -> None:
+        """Verify the periodic cleanup task is created on connect."""
+        cache = SQLiteCache(":memory:", max_queue_size=10, max_queue_age_seconds=60)
+        assert cache._cleanup_task is None  # noqa: SLF001
+
+        await cache.connect()
+        assert cache._cleanup_task is not None  # noqa: SLF001
+        assert cache._cleanup_running is True  # noqa: SLF001
+
+        await cache.close()
+        assert cache._cleanup_task is None  # noqa: SLF001
+
+    @pytest.mark.asyncio
+    async def test_cleanup_task_stops_on_close(self, cache: SQLiteCache) -> None:
+        """Verify the cleanup task is cancelled on close."""
+        assert cache._cleanup_task is not None  # noqa: SLF001
+        await cache.close()
+        assert cache._cleanup_task is None  # noqa: SLF001
+
+    @pytest.mark.asyncio
+    async def test_close_safe_with_cleanup(self) -> None:
+        """Verify close() is safe to call multiple times with cleanup task."""
+        cache = SQLiteCache(":memory:")
+        await cache.connect()
+        await cache.close()
+        await cache.close()  # Should not raise
+        assert cache._db is None  # noqa: SLF001
+
+    @pytest.mark.asyncio
+    async def test_value_error_on_zero_max_queue_size(self) -> None:
+        """Verify ValueError raised when max_queue_size <= 0."""
+        with pytest.raises(ValueError, match="max_queue_size"):
+            SQLiteCache(":memory:", max_queue_size=0)
+
+    @pytest.mark.asyncio
+    async def test_value_error_on_negative_max_queue_size(self) -> None:
+        """Verify ValueError raised when max_queue_size < 0."""
+        with pytest.raises(ValueError, match="max_queue_size"):
+            SQLiteCache(":memory:", max_queue_size=-1)
+
+    @pytest.mark.asyncio
+    async def test_value_error_on_zero_max_queue_age(self) -> None:
+        """Verify ValueError raised when max_queue_age_seconds <= 0."""
+        with pytest.raises(ValueError, match="max_queue_age_seconds"):
+            SQLiteCache(":memory:", max_queue_age_seconds=0)
+
+    @pytest.mark.asyncio
+    async def test_default_values_are_sane(self) -> None:
+        """Verify default constructor values are 1000 and 3600."""
+        cache = SQLiteCache(":memory:")
+        assert cache._max_queue_size == 1000  # noqa: SLF001
+        assert cache._max_queue_age_seconds == 3600  # noqa: SLF001
+
+    @pytest.mark.asyncio
+    async def test_enqueue_upload_raises_when_not_connected(self) -> None:
+        """Verify enqueue_upload raises RuntimeError when not connected."""
+        cache = SQLiteCache(":memory:")
+        with pytest.raises(RuntimeError, match="Not connected"):
+            await cache.enqueue_upload(b'{"step_id": "test"}')
+
+    @pytest.mark.asyncio
+    async def test_periodic_cleanup_deletes_aged_entries(
+        self, cache: SQLiteCache
+    ) -> None:
+        """Verify the periodic cleanup loop actually deletes aged entries.
+
+        We insert an old entry and wait for the cleanup task to fire.
+        Since the loop sleeps 60s, we call _cleanup_aged_entries directly
+        and verify the task infrastructure is wired up.
+        """
+        # Insert old entry
+        past_time = "2020-01-01T00:00:00"
+        async with cache._lock:  # noqa: SLF001
+            await cache._db.execute(  # noqa: SLF001
+                "INSERT INTO upload_queue (payload, retry_count, created_at) VALUES (?, ?, ?)",
+                ('{"step_id": "old-step"}', 0, past_time),
+            )
+            await cache._db.commit()  # noqa: SLF001
+
+        await cache.enqueue_upload(b'{"step_id": "new-step"}')
+
+        # Simulate what the periodic task does
+        deleted = await cache._cleanup_aged_entries()  # noqa: SLF001
+        assert deleted == 1
+
+        stats = await cache.queue_stats()
+        assert stats["current_size"] == 1

@@ -56,6 +56,7 @@ class EventType(Enum):
         EXECUTION_PAUSED: Plan execution has been paused (EVENT)
         DEADLOCK_DETECTED: A deadlock was detected (ALARM)
         WORKER_EXHAUSTED: A worker pool is exhausted (ALARM)
+        HEARTBEAT_LOST: The scan loop heartbeat was lost (ALARM)
     """
 
     # EVENT category — step lifecycle
@@ -83,6 +84,7 @@ class EventType(Enum):
     RESOURCE_TIMEOUT = "RESOURCE_TIMEOUT"
     DEADLOCK_DETECTED = "DEADLOCK_DETECTED"
     WORKER_EXHAUSTED = "WORKER_EXHAUSTED"
+    HEARTBEAT_LOST = "HEARTBEAT_LOST"
 
     @classmethod
     def _missing_(cls, value: object) -> EventType | None:
@@ -120,6 +122,7 @@ EVENT_TYPE_CATEGORIES: dict[EventType, EventCategory] = {
     EventType.RESOURCE_TIMEOUT: EventCategory.ALARM,
     EventType.DEADLOCK_DETECTED: EventCategory.ALARM,
     EventType.WORKER_EXHAUSTED: EventCategory.ALARM,
+    EventType.HEARTBEAT_LOST: EventCategory.ALARM,
 }
 
 
@@ -502,6 +505,10 @@ class WorkerExhaustedData:
         max_workers: Maximum worker pool size
         severity: Alarm severity level
         recoverable: Whether the condition is recoverable
+        deadlock_risk: Whether deadlock risk was detected (blocked resources
+            are held by currently-running workers)
+        blocked_resources: Resources the step needs but are held by others
+        holding_workers: step_ids of workers that hold the blocked resources
         run_id: Execution run identifier
     """
 
@@ -510,6 +517,34 @@ class WorkerExhaustedData:
     max_workers: int = 0
     severity: Literal["warning", "critical"] = "warning"
     recoverable: bool = True
+    deadlock_risk: bool = False
+    blocked_resources: list[str] = field(default_factory=list)
+    holding_workers: list[str] = field(default_factory=list)
+    run_id: str | None = None
+
+
+@dataclass
+class HeartbeatLostData:
+    """Data for HEARTBEAT_LOST alarm events.
+
+    Emitted when the WatchDog detects that the scan loop has stopped
+    incrementing its heartbeat counter — indicating the scheduler's
+    main loop is frozen or stuck.
+
+    Attributes:
+        last_heartbeat: The heartbeat counter value when lost was detected
+        missed_checks: Number of consecutive missed heartbeat checks
+        scan_interval: The configured scan_interval of the watchdog
+        severity: Alarm severity level
+        recoverable: Whether the condition is recoverable
+        run_id: Execution run identifier
+    """
+
+    last_heartbeat: int = 0
+    missed_checks: int = 0
+    scan_interval: float = 0.0
+    severity: Literal["warning", "critical"] = "critical"
+    recoverable: bool = False
     run_id: str | None = None
 
 
@@ -538,4 +573,5 @@ EVENT_DATA_CLASSES: dict[EventType, type] = {
     EventType.RESOURCE_TIMEOUT: ResourceTimeoutData,
     EventType.DEADLOCK_DETECTED: DeadlockDetectedData,
     EventType.WORKER_EXHAUSTED: WorkerExhaustedData,
+    EventType.HEARTBEAT_LOST: HeartbeatLostData,
 }

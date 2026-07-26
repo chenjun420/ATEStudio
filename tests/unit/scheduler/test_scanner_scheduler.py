@@ -384,53 +384,98 @@ class TestScannerSchedulerStepReady:
 
 
 class TestScannerSchedulerDeadlockDetection:
-    """Tests for deadlock detection."""
+    """Tests for deadlock detection (moved to WatchDog)."""
 
     @pytest.mark.asyncio
-    async def test_deadlock_detection_emits_event(self) -> None:
-        """Should emit event when deadlock detected via emergency scan."""
+    async def test_watchdog_created_on_start(self) -> None:
+        """WatchDog should be created and started when scheduler starts."""
         event_bus = EventBus()
         registry = StepRegistry(event_bus=event_bus)
         evaluator = ConditionEvaluator({}, None, None)
         variable_space = VariableSpace()
         resource_manager = ResourceManager()
 
-        # Use very low threshold for testing
         scheduler = ScannerScheduler(
             event_bus=event_bus,
             registry=registry,
             evaluator=evaluator,
             variable_space=variable_space,
             resource_manager=resource_manager,
-            scan_interval=0.01,  # Fast scanning for deadlock test
         )
-
-        # Force deadlock threshold to low value
-        scheduler.DEADLOCK_THRESHOLD = 5
-
-        # Register a step that can never be ready (no step_results for dependency)
-        registry.register("step1", Condition(step="missing_step", status="PASSED"))
-
-        # Track events
-        received: list[Event] = []
-
-        def handler(event: Event) -> None:
-            received.append(event)
-
-        event_bus.subscribe(EventType.DEADLOCK_DETECTED, handler)
 
         await event_bus.start()
         await scheduler.start()
 
-        # Wait for deadlock detection (need enough scans at 0.01s interval)
-        await asyncio.sleep(0.3)
+        # WatchDog should be created and running
+        assert scheduler._watchdog is not None
+        assert scheduler._watchdog.is_running is True
 
         await scheduler.stop()
         await event_bus.stop()
 
-        # Should have received DEADLOCK_DETECTED alarm event
-        deadlock_events = [e for e in received if e.type == EventType.DEADLOCK_DETECTED]
-        assert len(deadlock_events) >= 1
+        # WatchDog should be stopped
+        assert scheduler._watchdog is None
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_increments_on_scan_loop(self) -> None:
+        """Heartbeat counter should increment each scan loop iteration."""
+        event_bus = EventBus()
+        registry = StepRegistry(event_bus=event_bus)
+        evaluator = ConditionEvaluator({}, None, None)
+        variable_space = VariableSpace()
+        resource_manager = ResourceManager()
+
+        scheduler = ScannerScheduler(
+            event_bus=event_bus,
+            registry=registry,
+            evaluator=evaluator,
+            variable_space=variable_space,
+            resource_manager=resource_manager,
+            scan_interval=0.05,  # Fast for testing
+        )
+
+        await event_bus.start()
+        await scheduler.start()
+
+        # Wait for a few scan iterations
+        await asyncio.sleep(0.2)
+
+        await scheduler.stop()
+        await event_bus.stop()
+
+        # Heartbeat should have incremented multiple times
+        assert scheduler._heartbeat >= 2
+
+    @pytest.mark.asyncio
+    async def test_get_status_includes_heartbeat_and_watchdog(self) -> None:
+        """get_status should include heartbeat and watchdog_running fields."""
+        event_bus = EventBus()
+        registry = StepRegistry()
+        evaluator = ConditionEvaluator({}, None, None)
+        variable_space = VariableSpace()
+        resource_manager = ResourceManager()
+
+        scheduler = ScannerScheduler(
+            event_bus=event_bus,
+            registry=registry,
+            evaluator=evaluator,
+            variable_space=variable_space,
+            resource_manager=resource_manager,
+        )
+
+        await event_bus.start()
+        await scheduler.start()
+
+        status = scheduler.get_status()
+        assert "heartbeat" in status
+        assert "watchdog_running" in status
+        assert status["watchdog_running"] is True
+
+        await scheduler.stop()
+        await event_bus.stop()
+
+        status = scheduler.get_status()
+        assert status["watchdog_running"] is False
 
 
 class TestScannerSchedulerStatus:
@@ -458,9 +503,9 @@ class TestScannerSchedulerStatus:
 
         assert status["running"] is False
         assert status["scan_interval"] == 0.5
-        assert status["consecutive_no_progress"] == 0
-        assert status["last_ready_count"] == 0
+        assert status["heartbeat"] == 0
         assert status["notified_ready_count"] == 0
+        assert status["watchdog_running"] is False
 
     @pytest.mark.asyncio
     async def test_get_status_after_start(self) -> None:
@@ -479,15 +524,19 @@ class TestScannerSchedulerStatus:
             resource_manager=resource_manager,
         )
 
+        await event_bus.start()
         await scheduler.start()
 
         status = scheduler.get_status()
         assert status["running"] is True
+        assert status["watchdog_running"] is True
 
         await scheduler.stop()
+        await event_bus.stop()
 
         status = scheduler.get_status()
         assert status["running"] is False
+        assert status["watchdog_running"] is False
 
 
 class TestScannerSchedulerEventHandlers:
@@ -1203,3 +1252,7 @@ class TestScannerSchedulerStatusNewFields:
         assert status["dependency_index_size"] == 1
         assert "last_dispatch_time" in status
         assert status["last_dispatch_time"] == 0.0
+        assert "heartbeat" in status
+        assert status["heartbeat"] == 0
+        assert "watchdog_running" in status
+        assert status["watchdog_running"] is False

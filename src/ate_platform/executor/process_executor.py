@@ -33,6 +33,7 @@ import logging
 import multiprocessing
 import multiprocessing.pool
 import os
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from traceback import TracebackException
@@ -77,6 +78,8 @@ class ProcessExecutor:
         _script_timeout: Default timeout for script execution (seconds)
         _event_bus: Optional event bus for status notifications
         _running_tasks: Mapping of task_id to RunningTask
+        _active_count: Atomic counter of currently active worker tasks (thread-safe)
+        _active_lock: Lock protecting _active_count
         _execution_context: Optional ExecutionContext for run tracking
 
     Example:
@@ -127,6 +130,23 @@ class ProcessExecutor:
         # Track running tasks for cancellation
         self._running_tasks = {}
 
+        # Atomic active worker counter for pool exhaustion monitoring
+        self._active_count: int = 0
+        self._active_lock: threading.Lock = threading.Lock()
+
+    def get_pool_utilization(self) -> float:
+        """Return the ratio of active workers to max workers.
+
+        Thread-safe read of both active count and max workers.
+        Returns a float >= 0.0 where 1.0 means pool is fully utilized.
+
+        Returns:
+            Utilization ratio (active / max_workers)
+        """
+        with self._active_lock:
+            active = self._active_count
+        return active / self._max_workers if self._max_workers > 0 else 0.0
+
     def execute(
         self,
         script_path: str,
@@ -174,6 +194,10 @@ class ProcessExecutor:
         # Publish RUNNING event
         self._publish_status(step_id, StepStatus.RUNNING, run_id=run_id)
 
+        # Track active worker count for pool exhaustion monitoring
+        with self._active_lock:
+            self._active_count += 1
+
         try:
             if self._use_multiprocessing:
                 result = self._execute_multiprocessing(
@@ -201,6 +225,9 @@ class ProcessExecutor:
             return result
 
         finally:
+            # Decrement active worker count
+            with self._active_lock:
+                self._active_count -= 1
             # Clean up tracking
             _ = self._running_tasks.pop(task_id, None)
 

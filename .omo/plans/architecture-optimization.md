@@ -389,7 +389,7 @@ Your next move: approve the plan to proceed to high-accuracy dual review (Momus 
 
 ### Wave 3: Frontend Completeness (P1)
 
-- [ ] 10. Complete loop container YAML ↔ Graph serialization (FOR/WHILE/FOREACH)
+- [x] 10. Complete loop container YAML ↔ Graph serialization (FOR/WHILE/FOREACH)
   **What to do**: Implement full bidirectional serialization for loop containers in `useSerializer.ts`.
   - In `graphToYaml()`: detect loop container nodes (check node.data.loopType); serialize to `YamlLoop` with `loop_type`, `condition`/`count`/`collection_expr`, `iteration_var`, `execution_mode`, and nested `steps` by recursing into the sub-graph.
   - In `yamlToGraphData()`: detect `YamlLoop` objects in the plan; create a parent loop node with embedded sub-graph geometry (nested children positioned relative to loop container). Set `node.data.loopType`, `node.data.condition`, etc.
@@ -421,7 +421,7 @@ Your next move: approve the plan to proceed to high-accuracy dual review (Momus 
   - Evidence: `.omo/evidence/task-10-architecture-optimization.json`
   **Commit**: Y | `feat(frontend): complete loop container YAML-to-Graph bidirectional serialization`
 
-- [ ] 11. Add dagre auto-layout for DAG-style test sequences
+- [x] 11. Add dagre auto-layout for DAG-style test sequences
   **What to do**: Replace the fixed-coordinate grid layout in `yamlToGraphData()` with dagre DAG layout.
   - Install `dagre` and `@types/dagre` in frontend: `npm install dagre @types/dagre`.
   - New file `frontend/src/composables/useAutoLayout.ts`: `autoLayout(graphData: GraphData) -> GraphData` — uses dagre to compute node positions based on edge dependencies.
@@ -451,7 +451,7 @@ Your next move: approve the plan to proceed to high-accuracy dual review (Momus 
   - Evidence: `.omo/evidence/task-11-architecture-optimization.json`
   **Commit**: Y | `feat(frontend): add dagre auto-layout for DAG test sequence visualization`
 
-- [ ] 12. Offload cycle detection to Web Worker for >50 nodes
+- [x] 12. Offload cycle detection to Web Worker for >50 nodes
   **What to do**: Move DFS cycle detection from UI thread to a Web Worker to prevent blocking on large sequences.
   - New file `frontend/src/workers/dependencyCheck.worker.ts`: the same DFS algorithm from `useDependencyCheck.ts` but running in a `new Worker()`.
   - Worker receives `{ nodes, edges }` via `postMessage`, returns `{ hasCycle: boolean, cyclePath?: string[] }`.

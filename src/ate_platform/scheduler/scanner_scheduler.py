@@ -1,18 +1,19 @@
 """Scanner Scheduler for ATE Platform.
-
+ 
 This module provides the core scanning scheduler that monitors
 step conditions and notifies when steps become ready for execution.
-
+ 
 Key features:
 - Reactive dispatch: event handlers trigger immediate step evaluation
 - Watchdog scan loop (5s default interval) as safety net only
 - Subscribes to MEASUREMENT_RECORDED, STEP_STATUS_CHANGED, RESOURCE_RELEASED
 - Detects ready steps via StepRegistry.get_ready_steps()
 - Emits STEP_STARTED events when conditions are met
-- Deadlock detection (cyclic scan without progress)
+- Deadlock detection via WatchDog health monitor (external asyncio task)
 - Loop-aware scanning: YamlLoop steps are executed via LoopExecutor
 - Dependency index for O(1) lookup of dependents
 - Pending-dispatch deduplication prevents double-dispatch
+- Heartbeat counter for WatchDog health monitoring
 """
 
 from __future__ import annotations
@@ -44,6 +45,8 @@ from .variable_space import VariableSpace
 
 if TYPE_CHECKING:
     from ..executor.step_executor import StepExecutor
+
+    from .watchdog import WatchDog
 
 logger = logging.getLogger(__name__)
 
@@ -162,13 +165,22 @@ class ScannerScheduler:
         # whether any progress happened since the last scan.
         self._last_dispatch_time: float = 0.0
 
+        # Heartbeat counter — incremented at top of each _scan_loop iteration.
+        # The WatchDog monitors this to detect scan loop freezes.
+        self._heartbeat: int = 0
+
+        # WatchDog health monitor (created in start())
+        self._watchdog: "WatchDog | None" = None
+
         # Event handlers (stored for potential unsubscription)
         self._handlers: dict[EventType, Callable[[Event], None]] = {}
 
     async def start(self) -> None:
-        """Start the scanning loop.
+        """Start the scanning loop and WatchDog health monitor.
 
-        Subscribes to relevant events and begins the scanning task.
+        Subscribes to relevant events, creates the WatchDog, and begins
+        the scanning task.
+
         Safe to call multiple times - subsequent calls are ignored if already running.
         """
         if self._running:
@@ -176,6 +188,20 @@ class ScannerScheduler:
 
         self._running = True
         self._stop_event.clear()
+
+        # Reset heartbeat counter for fresh monitoring
+        self._heartbeat = 0
+
+        # Create and start the WatchDog health monitor
+        from .watchdog import WatchDog
+
+        self._watchdog = WatchDog(
+            heartbeat_counter=lambda: self._heartbeat,
+            scan_interval=5.0,  # WatchDog checks every 5s
+            event_bus=self._event_bus,
+            emergency_shutdown_callback=self._emergency_shutdown,
+        )
+        self._watchdog.start()
 
         # Subscribe to events that might change step readiness
         self._setup_event_handlers()
@@ -186,9 +212,9 @@ class ScannerScheduler:
         logger.info("ScannerScheduler started with interval %.3fs", self._scan_interval)
 
     async def stop(self) -> None:
-        """Stop the scanning loop gracefully.
+        """Stop the scanning loop and WatchDog gracefully.
 
-        Cancels the scanning task and waits for it to complete.
+        Cancels the scanning task and WatchDog, waits for both to complete.
         Safe to call even if not running.
         """
         if not self._running:
@@ -196,6 +222,11 @@ class ScannerScheduler:
 
         self._running = False
         self._stop_event.set()
+
+        # Stop WatchDog first — it's independent of the scan task
+        if self._watchdog is not None:
+            await self._watchdog.stop()
+            self._watchdog = None
 
         # Unsubscribe from events
         self._teardown_event_handlers()
@@ -326,10 +357,16 @@ class ScannerScheduler:
 
         Only runs _emergency_scan() if no progress has been detected
         since the last iteration (i.e., _last_dispatch_time hasn't changed).
+
+        Heartbeat counter is incremented at the top of each iteration
+        for WatchDog health monitoring.
         """
         import time
 
         while self._running and not self._stop_event.is_set():
+            # Increment heartbeat for WatchDog health monitoring
+            self._heartbeat += 1
+
             try:
                 # Check if any reactive dispatch happened since last scan
                 current_dispatch_time = self._last_dispatch_time
@@ -362,6 +399,9 @@ class ScannerScheduler:
         Called by the watchdog scan loop when no reactive progress has been
         detected. This is the fallback path for catching missed events.
         Also runs on the first iteration after start().
+
+        Note: Deadlock detection has been moved to the WatchDog health
+        monitor (watchdog.py) which runs in its own independent asyncio task.
         """
         from shared.events import StepStartedData
 
@@ -370,18 +410,6 @@ class ScannerScheduler:
             variable_space=self._variable_space,
             resource_manager=self._resource_manager,
         )
-
-        # Check for progress (used in deadlock detection)
-        if len(ready_steps) == self._last_ready_count:
-            self._consecutive_no_progress += 1
-        else:
-            self._consecutive_no_progress = 0
-            self._last_ready_count = len(ready_steps)
-
-        # Deadlock detection
-        if self._consecutive_no_progress >= self.DEADLOCK_THRESHOLD:
-            await self._handle_potential_deadlock()
-            return
 
         # Emit STEP_STARTED for newly ready steps (dedup via _pending_dispatch)
         for step_id in ready_steps:
@@ -520,6 +548,9 @@ class ScannerScheduler:
             # Get condition for logging
             condition = self._registry.get_condition(step_id)
 
+            # Check pool exhaustion before emitting STEP_STARTED
+            await self._check_pool_exhaustion(step_id, condition)
+
             # Emit STEP_STARTED event
             event_data = asdict(StepStartedData(
                 step_id=step_id,
@@ -535,6 +566,95 @@ class ScannerScheduler:
             logger.error("Reactive dispatch failed for %s: %s", step_id, e)
         finally:
             self._pending_dispatch.discard(step_id)
+
+    async def _check_pool_exhaustion(
+        self, step_id: str, condition: Any,
+    ) -> None:
+        """Check worker pool saturation and detect deadlock risk.
+
+        Called before emitting STEP_STARTED. Checks pool utilization and
+        cross-references the step's required resources with currently-held
+        locks. If the pool is full and the step's resources are held by
+        currently-running workers, there is a deadlock risk.
+
+        Args:
+            step_id: The step about to be dispatched
+            condition: The step's Condition (may be None)
+        """
+        # Get pool stats
+        stats = self._step_executor.pool_stats()
+        utilization = stats.get("utilization", 0.0)
+
+        # Only check when pool is saturated (utilization >= 1.0)
+        if utilization < 1.0:
+            return
+
+        # Determine resources this step needs
+        required_resources: list[str] = []
+        if condition is not None and hasattr(condition, "resource_available"):
+            ra = getattr(condition, "resource_available", None)
+            if ra is not None:
+                required_resources = list(ra)
+
+        # No resource requirements → just saturation, not deadlock
+        if not required_resources:
+            logger.warning(
+                "Pool saturated (%.1f%%), step %s queued (no resource risk)",
+                utilization * 100,
+                step_id,
+            )
+            return
+
+        # Get active locks from ResourceManager
+        active_locks = self._resource_manager.get_active_locks()
+
+        # Cross-reference: are any required resources held by active workers?
+        blocked_resources: list[str] = []
+        holding_workers: list[str] = []
+
+        for resource_id in required_resources:
+            lock_info = active_locks.get(resource_id)
+            if lock_info is not None:
+                blocked_resources.append(resource_id)
+                owner = lock_info.get("owner", "unknown")
+                if owner not in holding_workers:
+                    holding_workers.append(owner)
+
+        if blocked_resources:
+            # Deadlock risk detected — publish WORKER_EXHAUSTED alarm
+            from dataclasses import asdict
+
+            from shared.events import EventType, WorkerExhaustedData
+
+            alarm_data = asdict(WorkerExhaustedData(
+                pool_name="default",
+                active_workers=stats.get("active", 0),
+                max_workers=stats.get("max", 0),
+                severity="warning",
+                recoverable=True,
+                deadlock_risk=True,
+                blocked_resources=blocked_resources,
+                holding_workers=holding_workers,
+            ))
+            await self._event_bus.publish(
+                EventType.WORKER_EXHAUSTED,
+                alarm_data,
+            )
+            logger.warning(
+                "Pool saturated — deadlock risk for step %s: "
+                "needs resources %s held by workers %s",
+                step_id,
+                blocked_resources,
+                holding_workers,
+            )
+        else:
+            # Pool saturated but no deadlock risk
+            logger.warning(
+                "Pool saturated (%.1f%%), step %s queued "
+                "(resources available, awaiting worker slot)",
+                utilization * 100,
+                step_id,
+            )
 
     def _get_event_loop(self) -> asyncio.AbstractEventLoop | None:
         """Get the event loop stored on the EventBus, if any.
@@ -661,6 +781,29 @@ class ScannerScheduler:
             event_data,
         )
 
+    async def _emergency_shutdown(self) -> None:
+        """Emergency shutdown callback invoked by WatchDog on heartbeat loss.
+
+        Stops the scheduler gracefully: sets running flag to False,
+        cancels the scan task, and logs the shutdown reason.
+        This method is called as an async callback by the WatchDog.
+        """
+        logger.critical(
+            "ScannerScheduler: emergency shutdown triggered by WatchDog (heartbeat lost)"
+        )
+
+        # Stop the scheduler's own scan loop
+        self._running = False
+        self._stop_event.set()
+
+        if self._scan_task is not None and not self._scan_task.done():
+            self._scan_task.cancel()
+            try:
+                await self._scan_task
+            except asyncio.CancelledError:
+                pass
+            self._scan_task = None
+
     def force_scan(self) -> None:
         """Force an immediate scan (non-blocking).
 
@@ -730,10 +873,10 @@ class ScannerScheduler:
         return {
             "running": self._running,
             "scan_interval": self._scan_interval,
-            "consecutive_no_progress": self._consecutive_no_progress,
-            "last_ready_count": self._last_ready_count,
+            "heartbeat": self._heartbeat,
             "notified_ready_count": len(self._notified_ready),
             "pending_dispatch_count": len(self._pending_dispatch),
             "dependency_index_size": len(self._dependency_index),
             "last_dispatch_time": self._last_dispatch_time,
+            "watchdog_running": self._watchdog is not None and self._watchdog.is_running,
         }

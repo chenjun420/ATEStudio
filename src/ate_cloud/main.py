@@ -8,6 +8,7 @@ from nats.aio.client import Client as NatsClient
 from ate_cloud.api.v1.router import api_router
 from ate_cloud.config import settings
 from ate_cloud.nats.sse_bridge import SSEBridge
+from ate_cloud.services.failure_indexer import FailureIndexer
 from ate_cloud.services.script_versioning import ScriptVersioningService
 
 # Global NATS client (optional - not blocking startup)
@@ -16,10 +17,11 @@ _nats_client: NatsClient | None = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Manage NATS connection lifecycle, SSE bridge, and script versioning.
+    """Manage NATS connection lifecycle, SSE bridge, Qdrant, and services.
 
     NATS connection is optional and will not block startup on failure.
     SSE bridge is always initialized (works with or without NATS).
+    Qdrant is initialized for failure indexing (optional — graceful degradation).
     Script versioning service is initialized with SCRIPTS_ROOT_DIR env var.
     """
     # Startup - NATS is optional, connection happens in background
@@ -31,6 +33,40 @@ async def lifespan(app: FastAPI):
     bridge = SSEBridge(nc=_nats_client)
     app.state.sse_bridge = bridge
     print("SSE bridge initialized")  # noqa: T201
+
+    # Initialize Qdrant client and failure indexer (optional — graceful degradation)
+    try:
+        from qdrant_client import QdrantClient
+
+        qdrant_client = QdrantClient(url=settings.qdrant_url)
+        # Simple embedding function — production should use DeepAgents or similar
+        def _embed_text(text: str) -> list[float]:
+            """Placeholder embedding: returns a deterministic hash-based vector.
+
+            In production, replace with DeepAgents embedding API call.
+            """
+            import hashlib
+
+            seed = hashlib.sha256(text.encode()).digest()
+            vec = [0.0] * settings.embedding_dimensions
+            for i in range(min(settings.embedding_dimensions, len(seed) * 8)):
+                byte_idx = i // 8
+                bit_idx = i % 8
+                vec[i] = 1.0 if (seed[byte_idx] >> bit_idx) & 1 else -1.0
+            return vec
+
+        failure_indexer = FailureIndexer(
+            qdrant_client=qdrant_client,
+            embedding_model=_embed_text,
+        )
+        await failure_indexer.ensure_collection()
+        failure_indexer.subscribe_to_events(bridge)
+        app.state.failure_indexer = failure_indexer
+        print(f"Failure indexer initialized with Qdrant at {settings.qdrant_url}")  # noqa: T201
+    except ImportError:
+        print("qdrant-client not installed; failure indexing disabled")  # noqa: T201
+    except Exception as e:
+        print(f"Qdrant initialization failed ({type(e).__name__}: {e}); failure indexing disabled")  # noqa: T201
 
     # Initialize script versioning service
     import os

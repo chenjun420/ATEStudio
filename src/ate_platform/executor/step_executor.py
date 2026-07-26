@@ -97,6 +97,20 @@ class StepExecutor(Protocol):
         """
         ...
 
+    def pool_stats(self) -> dict[str, Any]:
+        """Return current worker pool statistics.
+
+        Returns a dictionary with keys:
+            active: Number of currently executing tasks
+            max: Maximum worker pool size
+            utilization: Ratio active/max (0.0 to 1.0+)
+            queued: Estimated number of queued tasks (0 if not trackable)
+
+        Returns:
+            Dict with active, max, utilization, queued keys
+        """
+        ...
+
 
 class ProcessStepExecutor:
     """StepExecutor that wraps ProcessExecutor for production use.
@@ -231,6 +245,24 @@ class ProcessStepExecutor:
     def process_executor(self) -> Any:
         """Access the underlying ProcessExecutor for advanced operations."""
         return self._process_executor
+
+    def pool_stats(self) -> dict[str, Any]:
+        """Return current worker pool statistics.
+
+        Delegates to ProcessExecutor's get_pool_utilization() and
+        provides the StepExecutor-standard pool_stats format.
+
+        Returns:
+            Dict with active, max, utilization, queued keys
+        """
+        max_workers = self._process_executor._max_workers
+        utilization = self._process_executor.get_pool_utilization()
+        return {
+            "active": self._active_workers,
+            "max": max_workers,
+            "utilization": utilization,
+            "queued": 0,
+        }
 
     def shutdown(self, wait: bool = True) -> None:
         """Shutdown the underlying ProcessExecutor pool.
@@ -377,6 +409,20 @@ class ThreadStepExecutor:
     def active_workers(self) -> int:
         """Current number of active worker tasks."""
         return self._active_workers
+
+    def pool_stats(self) -> dict[str, Any]:
+        """Return current worker pool statistics.
+
+        Returns:
+            Dict with active, max, utilization, queued keys
+        """
+        utilization = self._active_workers / self._max_workers if self._max_workers > 0 else 0.0
+        return {
+            "active": self._active_workers,
+            "max": self._max_workers,
+            "utilization": utilization,
+            "queued": 0,
+        }
 
     def shutdown(self, wait: bool = True) -> None:
         """Shutdown the thread pool.

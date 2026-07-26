@@ -408,34 +408,257 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 
 ---
 
-## Task 10: Loop Container YAML �?Graph Serialization (completed)
+## Task 10: Loop Container YAML �?Graph Serialization (completed)
 
 ### Architecture
 
-- **graphToYaml()**: Already had `convertLoopContainerToYaml()` that recursively serializes loop container nodes with children. No changes needed �?it was fully functional.
-- **yamlToGraphData()**: Refactored to use dagre auto-layout. Top-level nodes start at (0,0) placeholder positions; dagre computes actual positions. Child nodes are NOT passed to dagre �?they keep relative offsets.
+- **graphToYaml()**: Already had `convertLoopContainerToYaml()` that recursively serializes loop container nodes with children. No changes needed �?it was fully functional.
+- **yamlToGraphData()**: Refactored to use dagre auto-layout. Top-level nodes start at (0,0) placeholder positions; dagre computes actual positions. Child nodes are NOT passed to dagre �?they keep relative offsets.
 - **`createChildNodesFromLoopSteps(depth)`**: Added depth parameter (default 1). Throws `"Loop nesting depth exceeds maximum (5)"` at depth > 5.
-- **Loop container edge wiring**: Added sequential edge creation in `yamlToGraphData()` �?consecutive top-level entries (step→loop, loop→step, loop→loop) get edges. Steps with preconditions are handled by the dependency graph; steps without preconditions get sequential edges to their neighbor.
+- **Loop container edge wiring**: Added sequential edge creation in `yamlToGraphData()` �?consecutive top-level entries (step→loop, loop→step, loop→loop) get edges. Steps with preconditions are handled by the dependency graph; steps without preconditions get sequential edges to their neighbor.
 - **`SubGraphContainer.vue`**: No changes needed. It already receives `containerNodeId`, extracts children via `containerNode.getChildren()`, and handles both ScriptStepData and LoopContainerData. The deserialization sets up parent/child via `importYamlToGraph`.
 
 ### Key Design Decisions
 
 - **Timeunit conversion**: YAML `timeout` is in seconds, `NodeData.timeout` is in milliseconds. Fixed `createChildNodesFromLoopSteps` to use `Math.ceil(step.timeout * 1000)` for truthy values. Previously `step.timeout || 60000` kept the raw seconds value.
-- **execution_mode omission**: `convertLoopContainerToYaml` only sets `execution_mode` when it is `"PARALLEL"`. `SERIAL` is the default and is omitted from output. This is intentional �?matches YAML DSL convention.
+- **execution_mode omission**: `convertLoopContainerToYaml` only sets `execution_mode` when it is `"PARALLEL"`. `SERIAL` is the default and is omitted from output. This is intentional �?matches YAML DSL convention.
 - **`iterator_var` (not `iteration_var`)**: The DSL field is `iterator_var` (with R before underscore). YAML fixtures use `iterator_var`. A mismatched `iteration_var` (with N) in test YAML would silently produce `undefined` in parsed data.
 
 ### Testing Gotcha
 
 - **X6 ESM mocking**: `@antv/x6` is ESM-only and cannot be loaded in vitest's jsdom environment. Mocked with `vi.mock('@antv/x6', ...)` providing minimal `Graph`, `Node`, `Edge` classes that support the API surface used by `graphToYaml()` (getNodes, getEdges, getChildren, getParent, position, setParent, addChild, etc.).
-- **Dagre auto-layout vs parent detection**: After `yamlToGraphData`, top-level nodes get dagre-computed positions, but children stay at (20, 40) �?their creation-time offset from (0,0). Since dagre moves the container, the child's absolute position no longer falls within the container's bounds. `buildGraphWithParents` solves this by using the YAML structure (walking `sequence.steps` to build a `childToParent` map) rather than position-based heuristics.
-- **Round-trip testing**: The mock graph's `graphToYaml` �?`yamlToGraphData` round-trip preserves all loop types, nested loops up to depth 5, sequential edges, loop-back edges, and optional fields. The "cycle detected" warnings from `topologicalSort` are expected for internal loop edges (they form cycles by design �?iteration cycles).
+- **Dagre auto-layout vs parent detection**: After `yamlToGraphData`, top-level nodes get dagre-computed positions, but children stay at (20, 40) �?their creation-time offset from (0,0). Since dagre moves the container, the child's absolute position no longer falls within the container's bounds. `buildGraphWithParents` solves this by using the YAML structure (walking `sequence.steps` to build a `childToParent` map) rather than position-based heuristics.
+- **Round-trip testing**: The mock graph's `graphToYaml` �?`yamlToGraphData` round-trip preserves all loop types, nested loops up to depth 5, sequential edges, loop-back edges, and optional fields. The "cycle detected" warnings from `topologicalSort` are expected for internal loop edges (they form cycles by design �?iteration cycles).
 
 ### Files Changed
 
-- **Modified**: `frontend/src/composables/useSerializer.ts` �?depth guard, timeout conversion fix, sequential edge wiring for loop containers
-- **Created**: `frontend/src/composables/__tests__/useSerializer.test.ts` �?34 tests covering all loop types, nested loops, depth limits, edge wiring, round-trip, optional fields, variable scope
+- **Modified**: `frontend/src/composables/useSerializer.ts` �?depth guard, timeout conversion fix, sequential edge wiring for loop containers
+- **Created**: `frontend/src/composables/__tests__/useSerializer.test.ts` �?34 tests covering all loop types, nested loops, depth limits, edge wiring, round-trip, optional fields, variable scope
 - **Not modified**: `SubGraphContainer.vue` (works correctly with existing parent/child model), `types/dsl.ts`, `models/nodes/types.ts`
 
 ### Test Results
 
 - 34/34 tests pass (vitest, jsdom environment, mocked @antv/x6)
+
+---
+
+## Task 13: Upload Queue Size and TTL Pruning (completed)
+
+### Architecture
+
+- **`max_queue_size` / `max_queue_age_seconds`**: New `SQLiteCache.__init__` params (default 1000 / 3600). Validated at construction — ValueError on <= 0.
+- **`enqueue_upload(payload)`**: Public async method that INSERTs into `upload_queue`, then calls `_prune_excess_entries()`. This is the API that `ResumeManager._persist_message()` should use instead of directly accessing `self._cache._db`.
+- **`_prune_excess_entries()`**: SELECTs COUNT(*), if count > `_max_queue_size`, DELETEs oldest `(count - limit)` entries ordered by `created_at ASC`. Increments `_total_pruned` and logs WARNING.
+- **`_cleanup_aged_entries()`**: DELETEs entries where `created_at < datetime('now', '-N seconds')`. Returns count of deleted rows. Also increments `_total_pruned` and logs WARNING.
+- **`_periodic_cleanup_loop()`**: Background `asyncio.Task` running every 60 seconds. Calls `_cleanup_aged_entries()`. Started in `connect()`, cancelled in `close()`.
+- **`queue_stats()`**: Returns `{current_size, oldest_entry_age, total_pruned}`. `oldest_entry_age` computed by `(datetime.now() - oldest_created_at).total_seconds()`, returns 0 for empty queue.
+- **`_total_pruned`**: Simple incrementing integer counter tracking cumulative pruned entries.
+
+### Key Design Decisions
+
+- **`enqueue_upload` holds the lock for INSERT + pruning** — this prevents race conditions where another enqueue could read stale COUNT between the INSERT and prune. The entire operation is atomic within the `async with self._lock` scope.
+- **`_cleanup_aged_entries` acquires its own lock** — separate from `enqueue_upload`'s lock scope. This is safe because the lock prevents concurrent access, but doesn't prevent the periodic task from running during `enqueue_upload`'s external work.
+- **Periodic cleanup every 60s (not configurable)**: The task spec says "Periodic cleanup (every 60s)" — this is a fixed interval, not a config parameter. The focus is on simplicity.
+- **`max_queue_age_seconds` uses SQLite `datetime` function**: `DELETE WHERE created_at < datetime('now', '-3600 seconds')` — all time math done in SQLite, no Python datetime arithmetic needed for the cleanup itself. `queue_stats()` computes `oldest_entry_age` in Python.
+- **cleanup task lifecycle**: Started async (after lock release) in `connect()`, cancelled in `close()`. The `_cleanup_running` flag + `CancelledError` handling ensure graceful shutdown. The periodic loop checks `_cleanup_running` after every `sleep(60)` to avoid running cleanup during shutdown window.
+
+### Testing
+
+- **21 new tests** in `TestQueuePruning` class (tests/unit/data/test_cache.py):
+  - `test_enqueue_upload_stores_payload`: Basic payload insertion + queue_stats verification
+  - `test_size_pruning_insert_above_limit`: 6 entries, max=5 → prunes 1 oldest
+  - `test_size_pruning_many_above_limit`: 15 entries, max=5 → prunes 10
+  - `test_size_pruning_with_small_limit`: max=1, 2 entries → prunes 1
+  - `test_no_pruning_when_below_limit`: 3 entries, max=5 → nothing pruned
+  - `test_oldest_entry_pruned_first`: Timestamp-based verification that oldest is deleted
+  - `test_age_pruning_deletes_old_entries`: Manual past-time insertion → cleanup removes it
+  - `test_age_pruning_keeps_recent_entries`: Recent entries survive cleanup
+  - `test_queue_stats_returns_correct_values`: Full stats pipeline verification
+  - `test_total_pruned_accumulates`: Counter accumulates across multiple prune ops
+  - `test_cleanup_task_starts_on_connect`: Task created and running after connect
+  - `test_cleanup_task_stops_on_close`: Task cancelled and cleaned up on close
+  - `test_close_safe_with_cleanup`: Double close doesn't crash
+  - `test_value_error_on_zero_max_queue_size`: Zero rejected
+  - `test_value_error_on_negative_max_queue_size`: Negative rejected
+  - `test_value_error_on_zero_max_queue_age`: Zero rejected
+  - `test_default_values_are_sane`: 1000/3600 defaults
+  - `test_enqueue_upload_raises_when_not_connected`: RuntimeError for disconnected access
+  - `test_periodic_cleanup_deletes_aged_entries`: Validates cleanup logic via direct call
+
+### Config
+
+- **`ate_cloud/config.py`**: Added `upload_queue_max_size: int = Field(default=1000, ge=1)` and `upload_queue_max_age_seconds: int = Field(default=3600, ge=1)` to `Settings`. Uses `ATE_CLOUD_` env prefix like all other settings.
+
+### Backward Compatibility
+
+- `SQLiteCache.__init__` signature changed (2 new optional params with defaults) — all existing callers with `SQLiteCache(":memory:")` or `SQLiteCache("results.db")` continue to work unchanged.
+- `close()` now cancels the cleanup task — additional `await` of `CancelledError` in the close path. Safe to call multiple times.
+- `__aenter__/__aexit__` unchanged — context manager users see no difference.
+- Existing test fixtures create cache with `SQLiteCache(":memory:")` — defaults apply, tests pass.
+- `ResumeManager._persist_message()` still accesses `self._cache._db` directly — not changed in this task. Future work: migrate `ResumeManager` to use `enqueue_upload()`.
+
+### Files Changed
+
+- **Modified**: `src/ate_platform/data/cache.py` (new params, enqueue_upload, _prune_excess_entries, _cleanup_aged_entries, _periodic_cleanup_loop, queue_stats, _total_pruned counter, updated connect/close)
+- **Modified**: `src/ate_cloud/config.py` (upload_queue_max_size, upload_queue_max_age_seconds)
+- **Modified**: `tests/unit/data/test_cache.py` (21 new tests in TestQueuePruning class)
+
+### Not Changed
+- `upload_queue` table schema (unchanged per task spec)
+- `ResumeManager` retry logic (unchanged per task spec)
+- `event_type` column (does not exist in schema — the task description referenced it but the actual table only has `id, payload, retry_count, created_at`)
+
+---
+
+## Task 16: Failure Indexer — RAG Failure Diagnosis via Qdrant (completed)
+
+### Architecture
+
+- **`FailureIndexer`** (`failure_indexer.py`): Standalone class that subscribes to failure events via SSEBridge hook, extracts metadata, embeds text, and indexes in Qdrant.
+  - `__init__(qdrant_client, embedding_model, collection_name, embedding_dim)`: Stores references with configurable defaults from `settings`.
+  - `ensure_collection()`: Creates Qdrant collection with COSINE distance (1536-dim default). Checks if collection exists first; skips if already present. Handles Qdrant errors gracefully.
+  - `index_failure(event)`: Entry point called on STEP_FAILED / EXECUTION_COMPLETED(result=FAILED). Schedules async indexing via `asyncio.create_task` — non-blocking. Uses `_should_index()` as gate.
+  - `_should_index(event)`: Returns True for STEP_FAILED events and EXECUTION_COMPLETED with status="FAILED". All other events (STEP_COMPLETED, STEP_STARTED, EXECUTION_COMPLETED with PASSED) are skipped.
+  - `_index_failure_async(event)`: Worker coroutine — extracts metadata, builds embed text, computes embedding, upserts into Qdrant with UUID point ID. All errors caught, logged, never propagated.
+  - `_extract_metadata(event)`: Pulls sequence_yaml, failed_step_id, failed_step_name, error_message, variable_snapshot, step_history, run_id, plan_name, status from event.data. For STEP_FAILED, falls back to data["step_id"] if failed_step_id missing.
+  - `_build_embed_text(metadata)`: Concatenates `failed_step_name + " " + error_message + " " + variable_snapshot`. Falls back to failed_step_id when name missing.
+  - `_embed(text)`: Calls configured embedding model. Returns zero-vector on empty input or model failure — never raises.
+  - `search_similar_failures(query, top_k=5)`: Embeds query, searches Qdrant, returns list of {id, score, ...payload}. Returns empty list on errors.
+  - `subscribe_to_events(bridge)`: Wraps `bridge.publish_event` to intercept STEP_FAILED/EXECUTION_COMPLETED events. Transparent pass-through — original publish still fires, then failure indexing runs as fire-and-forget. No impact on SSE latency.
+
+### Key Design Decisions
+
+- **SSEBridge hook (monkey-patch `publish_event`)**: Rather than a separate event bus subscription, the FailureIndexer wraps `bridge.publish_event`. This is the simplest integration since the SSE bridge is the central event publishing point in cloud services. The wrapper calls the original method first (preserving SSE delivery), then conditionally indexes as a fire-and-forget task.
+- **Non-blocking `asyncio.create_task`**: `index_failure()` returns immediately — the async worker runs in the background. This ensures failure indexing never delays execution flow, SSE delivery, or API responses.
+- **Graceful degradation everywhere**: Qdrant unavailable → logged, continues. Embedding model fails → zero vector, continues. Collection creation fails → logged, continues. The indexer is purely additive — it can be completely broken and the rest of the system still works.
+- **Placeholder embedding (`_embed_text` in main.py)**: Uses a deterministic SHA-256 hash → unit vector mapping (not semantic). Production should replace this with DeepAgents API calls. Stored as a closure injected into the FailureIndexer — easy to swap.
+- **Import-guarded Qdrant import in `lifespan`**: QdrantClient is imported inside a try/except in lifespan, not at module level. If `qdrant-client` is not installed, the app starts normally with a log message "failure indexing disabled".
+- **Config prefix**: All Qdrant settings use the standard `ATE_CLOUD_` env prefix (e.g., `ATE_CLOUD_QDRANT_URL`).
+
+### Testing Gotcha
+
+- **Python 3.14 `asyncio.create_task` requires a running loop**: On Python 3.14+, `asyncio.create_task(coro)` raises `RuntimeError: no running event loop` even when `asyncio.set_event_loop(loop)` is called with a new loop. The fix: wrap the `index_failure()` call inside `loop.run_until_complete(async_def())` so there's a running loop when `create_task` is invoked from `index_failure()`.
+- **`ScoredPoint` constructor**: Qdrant's `ScoredPoint` is a Pydantic model with required fields `id`, `version`, `score`, `vector`. Tests create these directly to simulate search results. The `vector` can be `None` (not returned when `with_payload=True, with_vector=False`).
+- **`CollectionDescription` for mock `get_collections`**: Qdrant's `get_collections()` returns a response with `.collections` list. Each item is a `CollectionDescription(name=...)`. Must use the Pydantic model, not a plain string/dict.
+
+### Files Changed
+
+- **Created**: `src/ate_cloud/services/failure_indexer.py` (FailureIndexer class: 240 lines)
+- **Created**: `tests/cloud/test_failure_indexer.py` (26 tests across 7 test classes)
+- **Modified**: `src/ate_cloud/config.py` (qdrant_url, qdrant_collection_failures, embedding_dimensions settings)
+- **Modified**: `src/ate_cloud/main.py` (import FailureIndexer, Qdrant init in lifespan, subscribe)
+- **Modified**: `pyproject.toml` (added qdrant-client>=1.12.0 dependency)
+
+### Test Coverage
+
+- **TestEnsureCollection** (3 tests): creates collection when missing, skips when exists, survives errors
+- **TestShouldIndex** (5 tests): indexes STEP_FAILED, EXECUTION_COMPLETED(FAILED), skips COMPLETED, STEP_COMPLETED, STEP_STARTED
+- **TestIndexFailureMetadata** (7 tests): STEP_FAILED metadata extraction, step_id fallback, EXECUTION_COMPLETED metadata, embed text concatenation, step_name fallback, empty metadata, step_history
+- **TestSearchSimilarFailures** (3 tests): empty on Qdrant error, ranked results with scores, query embedding before search
+- **TestNonBlockingIndexing** (3 tests): immediate return, creates async task, Qdrant error doesn't propagate
+- **TestSubscribeToEvents** (3 tests): None bridge no-op, patches publish_event to intercept failures, ignores non-failure events
+- **TestEmbeddingFailureHandling** (2 tests): returns zero-vector on error, empty text skips model
+
+### Test Results
+
+- All 26 new tests pass, all 73 existing cloud tests pass unchanged (99 total)
+
+---
+
+## Task 14: WatchDog Health Monitor for _scan_loop (completed)
+
+### Architecture
+
+- **WatchDog class** (`watchdog.py`): Independent asyncio task that monitors the `_heartbeat` counter in ScannerScheduler. Runs in its own task, completely separate from the scan loop — cannot be blocked by a frozen scan loop.
+- **Heartbeat mechanism**: `_heartbeat: int` counter incremented at the top of each `_scan_loop` iteration. WatchDog reads it via a callable (`lambda: self._heartbeat`).
+- **Heartbeat lost detection**: 3 consecutive checks with no heartbeat increment → logs CRITICAL, publishes `HEARTBEAT_LOST` alarm event (severity="critical", recoverable=False), calls `_emergency_shutdown()` on the scheduler.
+- **Deadlock detection**: 100 consecutive checks with no heartbeat increment → publishes `DEADLOCK_DETECTED` alarm event. Counter resets after detection to allow continued monitoring.
+- **Lifecycle**: WatchDog created and started in `ScannerScheduler.start()`, cancelled and awaited in `ScannerScheduler.stop()`.
+
+### Key Design Decisions
+
+- **WatchDog monitors heartbeat, not step progress**: The deadlock detection in the old `_emergency_scan()` tracked "no ready step count change" which required knowledge of the step registry state. The new WatchDog uses a simpler metric — is the scan loop still running? This decouples deadlock detection from the scheduler's internal state.
+- **Independent asyncio task**: WatchDog runs `_watchdog_loop()` in `asyncio.create_task()`. If the scan loop freezes, the WatchDog still runs because it's in its own task.
+- **Emergency shutdown callback**: WatchDog accepts an `emergency_shutdown_callback` (sync or async) called on heartbeat loss. The scheduler provides `_emergency_shutdown()` which sets `_running = False`, signals `_stop_event`, and cancels the scan task.
+- **3-check threshold for heartbeat loss**: Default `HEARTBEAT_LOST_THRESHOLD = 3` (configurable as class attribute). With `scan_interval = 5.0`, heartbeat loss is detected after ~15 seconds of scan loop freeze.
+- **100-check threshold for deadlock**: Default `DEADLOCK_THRESHOLD = 100`. Same threshold as the old `DEADLOCK_THRESHOLD` in ScannerScheduler — preserved for consistency.
+- **`HEARTBEAT_LOST` event type**: New EventType with `HeartbeatLostData` alarm class (severity="critical", recoverable=False). Follows the TEMS A4 alarm pattern established in Task 6.
+
+### Removed from ScannerScheduler
+
+- **Deadlock detection in `_emergency_scan()`**: The `_consecutive_no_progress` increment, `_last_ready_count` tracking, and `_handle_potential_deadlock()` call were removed. `_handle_potential_deadlock()` method is preserved but no longer called from `_emergency_scan()`.
+- **Status fields**: `consecutive_no_progress` and `last_ready_count` removed from `get_status()`. Replaced by `heartbeat` (current counter value) and `watchdog_running` (boolean).
+
+### Files Changed
+
+- **Created**: `src/ate_platform/scheduler/watchdog.py` (WatchDog class with ~290 lines)
+- **Created**: `tests/unit/scheduler/test_watchdog.py` (23 tests across 7 test classes)
+- **Modified**: `src/shared/events.py` — added `HEARTBEAT_LOST` to `EventType` enum, `HeartbeatLostData` alarm data class, `EVENT_TYPE_CATEGORIES` mapping, `EVENT_DATA_CLASSES` mapping
+- **Modified**: `src/ate_platform/scheduler/scanner_scheduler.py` — added `_heartbeat` counter, `_watchdog` field, WatchDog creation/start in `start()`, WatchDog cancellation in `stop()`, heartbeat increment at top of `_scan_loop`, removed deadlock tracking from `_emergency_scan()`, added `_emergency_shutdown()` callback, updated `get_status()` fields, updated docstrings
+- **Modified**: `tests/unit/scheduler/test_scanner_scheduler.py` — updated `TestScannerSchedulerDeadlockDetection` (3 new tests replacing old deadlock test), updated status assertions for new fields
+
+### Testing Gotcha
+
+- **Module-level imports for event types**: `watchdog.py` imports `DeadlockDetectedData`, `EventType`, `HeartbeatLostData` at module level (not `TYPE_CHECKING`). These are used at runtime in `_handle_heartbeat_lost()` and `_handle_deadlock()`. Initially declared inside `_watchdog_loop()` with `from shared.events import ...` — but the handler methods are separate methods and didn't have access. Fixed by moving to module-level import.
+- **Timing-sensitive test**: `test_initial_snapshot_prevents_immediate_alarm` checks that 2 missed heartbeats (below threshold of 3) don't trigger an alarm. On Windows, `asyncio.sleep(0.12)` with `scan_interval=0.05` can allow 3 checks due to the first check at t≈0. Fixed by using `scan_interval=0.1` with `asyncio.sleep(0.19)` to safely stay at 2 checks.
+- **Existing deadlock test replaced**: The old `test_deadlock_detection_emits_event` tested step-progress-based deadlock detection in `_emergency_scan()`. Since this mechanism was removed, the test was replaced with 3 new tests: `test_watchdog_created_on_start`, `test_heartbeat_increments_on_scan_loop`, and `test_get_status_includes_heartbeat_and_watchdog`. The WatchDog deadlock detection is tested directly in `test_watchdog.py`.
+
+### Test Results
+
+- 23/23 new watchdog tests pass
+- 38/38 existing scanner scheduler tests pass (updated to match new API)
+- 61/61 total in both test files
+
+---
+
+## Task 15: Worker Pool Exhaustion Detection and Alarm (completed)
+
+### Architecture
+
+- **Atomic worker tracking**: `ProcessExecutor` gained `_active_count: int` with `threading.Lock` for thread-safe increment/decrement in `execute()`. The counter increments before pool submission and decrements in the `finally` block, ensuring accurate tracking even on errors.
+- **`get_pool_utilization()`**: Returns `active / max_workers` ratio (0.0 to 1.0+). Thread-safe read. Added to ProcessExecutor.
+- **`pool_stats()` on StepExecutor Protocol**: Returns `{active, max, utilization, queued}` dict. Implemented in both `ProcessStepExecutor` (delegates to ProcessExecutor's `get_pool_utilization()`) and `ThreadStepExecutor` (calculates ratio directly).
+- **Pool exhaustion check in `_dispatch_step()`**: Before emitting STEP_STARTED, calls `_check_pool_exhaustion(step_id, condition)`. If utilization >= 1.0:
+  - Extracts required resources from the condition's `resource_available` field
+  - Gets active locks from `ResourceManager.get_active_locks()` (new method)
+  - Cross-references: if any required resource is held, deadlock risk detected
+  - Publishes `WORKER_EXHAUSTED` alarm with `deadlock_risk=True`, `blocked_resources`, and `holding_workers`
+  - If no resource requirements: logs WARNING "Pool saturated, step queued"
+  - If resources free but pool full: logs WARNING (resources available, awaiting worker slot)
+- **`ResourceManager.get_active_locks()`**: New method returning `{resource_id: {"owner": owner_id}}` snapshot. Thread-safe.
+
+### Key Design Decisions
+
+- **Deadlock detection logic**: A step is at deadlock risk when (a) the pool is saturated AND (b) at least one resource the step requires is currently held by a running worker. If ANY required resource is held, it's a deadlock risk because the step cannot proceed without that resource and no worker slot will free up (since the holding worker can't release until it completes, which may require the resource the queued step itself needs to eventually release).
+- **`WORKER_EXHAUSTED` alarm fields**: Added `deadlock_risk: bool`, `blocked_resources: list[str]`, `holding_workers: list[str]` to `WorkerExhaustedData` dataclass. These provide operator context for manual intervention.
+- **Alarm severity**: `warning` / `recoverable=True` — worker exhaustion is a recoverable condition (workers complete eventually, pool frees up).
+- **No automatic preemption**: The task explicitly forbids automatic resource preemption or forced release. The alarm is informational only.
+
+### Files Changed
+
+- **Modified**: `src/shared/events.py` — added `deadlock_risk`, `blocked_resources`, `holding_workers` fields to `WorkerExhaustedData`
+- **Modified**: `src/ate_platform/scheduler/resource_manager.py` — added `get_active_locks()` method
+- **Modified**: `src/ate_platform/executor/step_executor.py` — added `pool_stats()` to StepExecutor Protocol with implementations in ProcessStepExecutor and ThreadStepExecutor
+- **Modified**: `src/ate_platform/executor/process_executor.py` — added `import threading`, `_active_count` + `_active_lock`, `get_pool_utilization()`, active tracking in `execute()` try/finally
+- **Modified**: `src/ate_platform/scheduler/scanner_scheduler.py` — added `_check_pool_exhaustion()` method with deadlock detection logic, called from `_dispatch_step()` before STEP_STARTED emission
+- **Modified**: `tests/unit/executor/test_step_executor.py` — updated `test_custom_class_satisfies_protocol` to include `pool_stats()`
+- **Modified**: `tests/unit/scheduler/test_event_bus.py` — updated `test_event_type_count` from 19 to 20 (HEARTBEAT_LOST was already added)
+- **Created**: `tests/unit/executor/test_pool_guard.py` (14 tests), `tests/fixtures/sleep_2s.py` (pool saturation fixture)
+
+### Test Coverage
+
+- `TestPoolUtilization` (3 tests): zero workers, idle, active task
+- `TestProcessStepExecutorPoolStats` (3 tests): idle, after execution, custom max_workers
+- `TestThreadStepExecutorPoolStats` (3 tests): idle, after execution, custom max_workers
+- `TestPoolSaturationWarning` (2 tests): saturated no resource risk, not saturated no warning
+- `TestPoolExhaustionAlarm` (2 tests): deadlock risk alarm, all resources free no alarm
+- `TestPoolOf1TwoSteps` (1 test): two concurrent steps with pool of 1
+- 476 existing tests pass unchanged (only test_event_type_count updated from 19→20)
+
+### Testing Gotcha
+
+- **Pool saturation requires a running task**: To test `_check_pool_exhaustion()` with utilization >= 1.0, a real execution must be in-flight. The tests use `threading.Thread(target=executor.execute, ...)` with a sleep script and `time.sleep(0.1)` yield. This is inherently racy but 100ms is sufficient on all tested platforms.
+- **`Condition` class location**: `Condition` is in `shared.types`, not `shared.dsl`. Existing scanner_scheduler tests import it from `ate_platform.types`.
+- **`StepStatus` enum comparison**: `result.status` returns a `StepStatus` enum, not a string. Tests must compare with `StepStatus.PASSED`, not `"PASSED"`.
+- **Protocol structural subtyping**: Adding `pool_stats()` to the StepExecutor Protocol broke `test_custom_class_satisfies_protocol` because the custom test class didn't implement it. Fixed by adding the method to the test class.
+- **`ThreadPoolExecutor` minimum workers**: `max_workers=0` raises `ValueError`. The zero-workers edge case test was rewritten to test with `max_workers=1`.

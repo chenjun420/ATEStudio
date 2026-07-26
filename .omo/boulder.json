@@ -39,7 +39,7 @@
       "plan_name": "architecture-optimization",
       "status": "active",
       "started_at": "2026-07-25T15:13:30.883Z",
-      "updated_at": "2026-07-26T04:14:16.187Z",
+      "updated_at": "2026-07-26T04:49:39.379Z",
       "session_ids": [
         "opencode:ses_06657eda4ffePO6M38QCixQZCq"
       ],
@@ -107,9 +107,11 @@
           "session_id": "opencode:ses_063867731ffeDLSF5A0TF55VBo",
           "agent": "Sisyphus-Junior",
           "category": "visual-engineering",
-          "updated_at": "2026-07-26T03:40:36.233Z",
+          "updated_at": "2026-07-26T04:22:28.406Z",
           "started_at": "2026-07-26T03:40:36.233Z",
-          "status": "running"
+          "status": "completed",
+          "ended_at": "2026-07-26T04:22:28.406Z",
+          "elapsed_ms": 2512173
         },
         "todo:11": {
           "task_key": "todo:11",
@@ -118,9 +120,11 @@
           "session_id": "opencode:ses_063869ca1ffe74PhY2HT8x22Pl",
           "agent": "Sisyphus-Junior",
           "category": "visual-engineering",
-          "updated_at": "2026-07-26T03:51:53.898Z",
+          "updated_at": "2026-07-26T04:22:28.392Z",
           "started_at": "2026-07-26T03:51:53.898Z",
-          "status": "running"
+          "status": "completed",
+          "ended_at": "2026-07-26T04:22:28.392Z",
+          "elapsed_ms": 1834494
         },
         "todo:10": {
           "task_key": "todo:10",
@@ -129,8 +133,54 @@
           "session_id": "opencode:ses_06386c542ffemKuPXZUQF1i3kF",
           "agent": "Sisyphus-Junior",
           "category": "visual-engineering",
-          "updated_at": "2026-07-26T04:14:16.188Z",
+          "updated_at": "2026-07-26T04:22:28.381Z",
           "started_at": "2026-07-26T04:14:16.188Z",
+          "status": "completed",
+          "ended_at": "2026-07-26T04:22:28.381Z",
+          "elapsed_ms": 492193
+        },
+        "todo:13": {
+          "task_key": "todo:13",
+          "task_label": "13",
+          "task_title": "Add upload queue size and TTL pruning to SQLiteCache",
+          "session_id": "opencode:ses_063564981ffeoV3ze7IyXEYoy4",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "updated_at": "2026-07-26T04:31:43.371Z",
+          "started_at": "2026-07-26T04:31:43.371Z",
+          "status": "running"
+        },
+        "todo:16": {
+          "task_key": "todo:16",
+          "task_label": "16",
+          "task_title": "Index failed test sequences in Qdrant for RAG failure diagnosis",
+          "session_id": "opencode:ses_063557871ffe0ROTPZGJtix7tQ",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "updated_at": "2026-07-26T04:36:25.858Z",
+          "started_at": "2026-07-26T04:36:25.858Z",
+          "status": "running"
+        },
+        "todo:14": {
+          "task_key": "todo:14",
+          "task_label": "14",
+          "task_title": "Add WatchDog health monitor for _scan_loop",
+          "session_id": "opencode:ses_06356052cffeh50JvkwmvJ7N9F",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "updated_at": "2026-07-26T04:41:23.931Z",
+          "started_at": "2026-07-26T04:41:23.931Z",
+          "status": "running"
+        },
+        "todo:15": {
+          "task_key": "todo:15",
+          "task_label": "15",
+          "task_title": "Add worker pool exhaustion detection and alarm",
+          "session_id": "opencode:ses_06355c442ffeABy2sHpHeODtwM",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "updated_at": "2026-07-26T04:49:39.380Z",
+          "started_at": "2026-07-26T04:49:39.380Z",
           "status": "running"
         }
       }
@@ -202,9 +252,11 @@
       "session_id": "opencode:ses_063867731ffeDLSF5A0TF55VBo",
       "agent": "Sisyphus-Junior",
       "category": "visual-engineering",
-      "updated_at": "2026-07-26T03:40:36.233Z",
+      "updated_at": "2026-07-26T04:22:28.406Z",
       "started_at": "2026-07-26T03:40:36.233Z",
-      "status": "running"
+      "status": "completed",
+      "ended_at": "2026-07-26T04:22:28.406Z",
+      "elapsed_ms": 2512173
     },
     "todo:11": {
       "task_key": "todo:11",
@@ -213,9 +265,11 @@
       "session_id": "opencode:ses_063869ca1ffe74PhY2HT8x22Pl",
       "agent": "Sisyphus-Junior",
       "category": "visual-engineering",
-      "updated_at": "2026-07-26T03:51:53.898Z",
+      "updated_at": "2026-07-26T04:22:28.392Z",
       "started_at": "2026-07-26T03:51:53.898Z",
-      "status": "running"
+      "status": "completed",
+      "ended_at": "2026-07-26T04:22:28.392Z",
+      "elapsed_ms": 1834494
     },
     "todo:10": {
       "task_key": "todo:10",
@@ -224,8 +278,54 @@
       "session_id": "opencode:ses_06386c542ffemKuPXZUQF1i3kF",
       "agent": "Sisyphus-Junior",
       "category": "visual-engineering",
-      "updated_at": "2026-07-26T04:14:16.188Z",
+      "updated_at": "2026-07-26T04:22:28.381Z",
       "started_at": "2026-07-26T04:14:16.188Z",
+      "status": "completed",
+      "ended_at": "2026-07-26T04:22:28.381Z",
+      "elapsed_ms": 492193
+    },
+    "todo:13": {
+      "task_key": "todo:13",
+      "task_label": "13",
+      "task_title": "Add upload queue size and TTL pruning to SQLiteCache",
+      "session_id": "opencode:ses_063564981ffeoV3ze7IyXEYoy4",
+      "agent": "Sisyphus-Junior",
+      "category": "deep",
+      "updated_at": "2026-07-26T04:31:43.371Z",
+      "started_at": "2026-07-26T04:31:43.371Z",
+      "status": "running"
+    },
+    "todo:16": {
+      "task_key": "todo:16",
+      "task_label": "16",
+      "task_title": "Index failed test sequences in Qdrant for RAG failure diagnosis",
+      "session_id": "opencode:ses_063557871ffe0ROTPZGJtix7tQ",
+      "agent": "Sisyphus-Junior",
+      "category": "deep",
+      "updated_at": "2026-07-26T04:36:25.858Z",
+      "started_at": "2026-07-26T04:36:25.858Z",
+      "status": "running"
+    },
+    "todo:14": {
+      "task_key": "todo:14",
+      "task_label": "14",
+      "task_title": "Add WatchDog health monitor for _scan_loop",
+      "session_id": "opencode:ses_06356052cffeh50JvkwmvJ7N9F",
+      "agent": "Sisyphus-Junior",
+      "category": "deep",
+      "updated_at": "2026-07-26T04:41:23.931Z",
+      "started_at": "2026-07-26T04:41:23.931Z",
+      "status": "running"
+    },
+    "todo:15": {
+      "task_key": "todo:15",
+      "task_label": "15",
+      "task_title": "Add worker pool exhaustion detection and alarm",
+      "session_id": "opencode:ses_06355c442ffeABy2sHpHeODtwM",
+      "agent": "Sisyphus-Junior",
+      "category": "deep",
+      "updated_at": "2026-07-26T04:49:39.380Z",
+      "started_at": "2026-07-26T04:49:39.380Z",
       "status": "running"
     }
   },
@@ -233,6 +333,6 @@
   "plan_name": "architecture-optimization",
   "status": "active",
   "started_at": "2026-07-25T15:13:30.883Z",
-  "updated_at": "2026-07-26T04:14:16.187Z",
+  "updated_at": "2026-07-26T04:49:39.379Z",
   "agent": "atlas"
 }

@@ -91,6 +91,9 @@ class TestStepExecutorProtocol:
             ) -> list[StepResult]:
                 return []
 
+            def pool_stats(self) -> dict[str, Any]:
+                return {"active": 0, "max": 1, "utilization": 0.0, "queued": 0}
+
         assert isinstance(CustomExecutor(), StepExecutor)
 
 
