@@ -8,6 +8,14 @@ cross-process delivery and Last-Event-ID replay.
 TEMS A4 category support:
 - SSE `event:` line is set to the event's category (event, measurement, alarm)
 - This enables frontend clients to filter by category using EventSource
+
+Reference counting:
+- get_or_create_queue() increments refcount for each active SSE client
+- remove_queue() decrements refcount; queue is deleted only at 0
+- This allows multiple SSE clients for the same run_id
+
+Local-mode heartbeat:
+- get_local_heartbeat() yields keep-alive events every 15s when NATS unavailable
 """
 
 import asyncio
@@ -30,6 +38,13 @@ _EVENT_TYPE_TO_SSE_CATEGORY: dict[str, str] = {
     for et in EVENT_TYPE_CATEGORIES
 }
 
+# Replay constants
+_REPLAY_BATCH_SIZE: int = 100
+_REPLAY_FETCH_TIMEOUT: float = 2.0
+
+# Heartbeat interval (seconds)
+_HEARTBEAT_INTERVAL: float = 15.0
+
 
 class SSEBridge:
     """Bridges NATS JetStream messages to asyncio.Queue per run_id for SSE streaming.
@@ -39,6 +54,7 @@ class SSEBridge:
     - NATS mode (nats_available=True): Events are published to JetStream AND
       pushed to local queue for same-process SSE clients.
 
+    Queues are reference-counted to support multiple SSE clients per run_id.
     The bridge is designed to be attached to app.state.sse_bridge and shared
     across all SSE connections.
     """
@@ -51,6 +67,7 @@ class SSEBridge:
         """
         self._nc = nc
         self._queues: dict[str, asyncio.Queue[dict[str, Any]]] = {}
+        self._refcounts: dict[str, int] = {}
         self._subscriptions: dict[str, Any] = {}
         self._event_counter: int = 0
 
@@ -62,6 +79,9 @@ class SSEBridge:
     def get_or_create_queue(self, run_id: str) -> asyncio.Queue[dict[str, Any]]:
         """Get existing queue for run_id or create a new one.
 
+        Increments the reference count for this run_id each
+        time it is called, enabling multi-client support.
+
         Args:
             run_id: The execution run identifier.
 
@@ -70,6 +90,11 @@ class SSEBridge:
         """
         if run_id not in self._queues:
             self._queues[run_id] = asyncio.Queue(maxsize=1000)
+            self._refcounts[run_id] = 0
+        self._refcounts[run_id] += 1
+        logger.debug(
+            f"Queue refcount for {run_id}: {self._refcounts[run_id]}"
+        )
         return self._queues[run_id]
 
     async def start_subscription(self, run_id: str) -> None:
@@ -96,8 +121,9 @@ class SSEBridge:
             async def callback(msg: Any) -> None:
                 try:
                     data = json.loads(msg.data.decode())
-                    queue = self.get_or_create_queue(run_id)
-                    await queue.put(data)
+                    queue = self._queues.get(run_id)
+                    if queue is not None:
+                        await queue.put(data)
                     await msg.ack()
                 except Exception as e:
                     logger.error(f"Error processing NATS message for {run_id}: {e}")
@@ -116,6 +142,8 @@ class SSEBridge:
         """Replay events from JetStream after the given event ID.
 
         Uses JetStream consumer with start_sequence to replay missed events.
+        Paginates in batches of _REPLAY_BATCH_SIZE (100) until no more events,
+        then fails over to a pull subscription for additional messages.
         Yields nothing in local mode (no persistent store to replay from).
 
         Args:
@@ -141,24 +169,64 @@ class SSEBridge:
                 logger.warning(f"Invalid Last-Event-ID format: {last_event_id}, skipping replay")
                 return
 
-            # Use pull subscription for replay
+            # Use pull subscription for replay with pagination loop
             psub = await js.pull_subscribe(subject, durable=f"replay_{run_id}")
             try:
-                # Fetch messages starting from the sequence after last_event_id
-                msgs = await psub.fetch(batch=100, timeout=2.0)
-                for msg in msgs:
-                    metadata = await msg.metadata()
-                    if metadata and metadata.sequence.stream >= start_seq:
-                        data = json.loads(msg.data.decode())
-                        yield data
-                    await msg.ack()
-            except asyncio.TimeoutError:
-                logger.debug(f"No replay messages available for {run_id}")
+                total_yielded = 0
+                while True:
+                    try:
+                        msgs = await psub.fetch(
+                            batch=_REPLAY_BATCH_SIZE, timeout=_REPLAY_FETCH_TIMEOUT
+                        )
+                        if not msgs:
+                            # Empty batch — no more messages to replay
+                            break
+
+                        batch_yielded = 0
+                        for msg in msgs:
+                            metadata = await msg.metadata()
+                            if metadata and metadata.sequence.stream >= start_seq:
+                                data = json.loads(msg.data.decode())
+                                yield data
+                                batch_yielded += 1
+                            await msg.ack()
+
+                        total_yielded += batch_yielded
+
+                        # If batch was smaller than requested, we've reached the end
+                        if len(msgs) < _REPLAY_BATCH_SIZE:
+                            break
+
+                    except asyncio.TimeoutError:
+                        # No more messages available (timeout waiting for batch)
+                        break
+
+                if total_yielded > 0:
+                    logger.info(
+                        f"Replayed {total_yielded} missed events for {run_id} "
+                        f"starting from seq {start_seq}"
+                    )
+
             finally:
                 await psub.unsubscribe()
 
         except Exception as e:
             logger.warning(f"Failed to replay from JetStream for {run_id}: {e}")
+
+    async def get_local_heartbeat(
+        self, run_id: str
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Generate keep-alive events in local mode.
+
+        When NATS is unavailable, yields keep-alive events every
+        _HEARTBEAT_INTERVAL (15s) so SSE connections don't time out.
+
+        Yields:
+            dict with comment="keep-alive" and empty data for SSE keep-alive.
+        """
+        while True:
+            await asyncio.sleep(_HEARTBEAT_INTERVAL)
+            yield {"comment": "keep-alive", "data": {}}
 
     async def publish_event(
         self, run_id: str, event_type: str, data: dict[str, Any]
@@ -194,7 +262,11 @@ class SSEBridge:
         }
 
         # Always push to local queue (works in both modes)
-        queue = self.get_or_create_queue(run_id)
+        # Create queue if it doesn't exist yet (publish-before-subscribe scenario)
+        if run_id not in self._queues:
+            self._queues[run_id] = asyncio.Queue(maxsize=1000)
+            self._refcounts[run_id] = 0
+        queue = self._queues[run_id]
         try:
             queue.put_nowait(event)
         except asyncio.QueueFull:
@@ -216,19 +288,35 @@ class SSEBridge:
                 logger.warning(f"Failed to publish event to NATS for {run_id}: {e}")
 
     def remove_queue(self, run_id: str) -> None:
-        """Clean up queue and subscription when no more SSE clients.
+        """Decrement queue reference count and clean up when it reaches zero.
+
+        Only removes the queue and subscription when all SSE clients
+        for this run_id have disconnected (refcount reaches 0).
 
         Args:
             run_id: The execution run identifier.
         """
-        self._queues.pop(run_id, None)
+        current = self._refcounts.get(run_id, 0)
+        if current <= 0:
+            # Already at zero or never created — nothing to do
+            return
 
-        sub = self._subscriptions.pop(run_id, None)
-        if sub is not None:
-            try:
-                asyncio.get_event_loop().create_task(sub.unsubscribe())
-            except Exception:
-                pass
+        self._refcounts[run_id] = current - 1
+        logger.debug(
+            f"Queue refcount for {run_id}: {self._refcounts[run_id]} "
+            f"(after disconnect)"
+        )
+
+        if self._refcounts[run_id] == 0:
+            self._queues.pop(run_id, None)
+            self._refcounts.pop(run_id, None)
+
+            sub = self._subscriptions.pop(run_id, None)
+            if sub is not None:
+                try:
+                    asyncio.get_event_loop().create_task(sub.unsubscribe())
+                except Exception:
+                    pass
 
     async def cleanup(self) -> None:
         """Clean up all queues and subscriptions on shutdown."""
@@ -241,4 +329,6 @@ class SSEBridge:
                     pass
 
         self._queues.clear()
+        self._refcounts.clear()
         self._subscriptions.clear()
+

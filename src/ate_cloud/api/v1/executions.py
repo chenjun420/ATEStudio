@@ -52,6 +52,9 @@ async def stream_execution_events(
     Supports Last-Event-ID header for resumption — replays missed events
     from JetStream when NATS is available.
 
+    Multi-client safe: reference counting ensures the queue is only
+    removed when the last client disconnects.
+
     Args:
         run_id: The execution run identifier.
         request: The incoming HTTP request (used for disconnect detection).
@@ -66,33 +69,81 @@ async def stream_execution_events(
     await bridge.start_subscription(run_id)
 
     async def event_generator() -> AsyncGenerator[ServerSentEvent, None]:
-        # Phase 1: Replay from JetStream if Last-Event-ID provided
-        last_id = request.headers.get("Last-Event-ID")
-        if last_id and bridge.nats_available:
-            async for event in bridge.replay_from_jetstream(run_id, last_id):
-                yield ServerSentEvent(
-                    data=json.dumps(event.get("data", {})),
-                    event=event.get("category", "event"),
-                    id=event.get("id"),
-                )
+        heartbeat_interval = 15.0  # seconds
 
-        # Phase 2: Stream live events from queue
-        while True:
-            if await request.is_disconnected():
-                break
-            try:
-                event = await asyncio.wait_for(queue.get(), timeout=30.0)
-                yield ServerSentEvent(
-                    data=json.dumps(event.get("data", {})),
-                    event=event.get("category", "event"),
-                    id=event.get("id"),
-                )
-            except asyncio.TimeoutError:
-                # Send keep-alive comment to prevent connection timeout
-                yield ServerSentEvent(data="", comment="keep-alive")
+        try:
+            # Phase 1: Replay from JetStream if Last-Event-ID provided
+            last_id = request.headers.get("Last-Event-ID")
+            if last_id and bridge.nats_available:
+                async for event in bridge.replay_from_jetstream(run_id, last_id):
+                    yield ServerSentEvent(
+                        data=json.dumps(event.get("data", {})),
+                        event=event.get("category", "event"),
+                        id=event.get("id"),
+                    )
 
-        # Cleanup when client disconnects
-        bridge.remove_queue(run_id)
+            # Phase 2: Stream live events from queue with keep-alive
+            if bridge.nats_available:
+                # NATS mode: use queue-based streaming with timeout
+                while True:
+                    if await request.is_disconnected():
+                        break
+                    try:
+                        event = await asyncio.wait_for(
+                            queue.get(), timeout=heartbeat_interval
+                        )
+                        yield ServerSentEvent(
+                            data=json.dumps(event.get("data", {})),
+                            event=event.get("category", "event"),
+                            id=event.get("id"),
+                        )
+                    except asyncio.TimeoutError:
+                        # Send keep-alive comment to prevent connection timeout
+                        yield ServerSentEvent(data="", comment="keep-alive")
+            else:
+                # Local mode: race between queue events and heartbeat
+                heartbeat_task = asyncio.create_task(asyncio.sleep(0))
+                try:
+                    while True:
+                        if await request.is_disconnected():
+                            break
+                        # Race: next queue event vs heartbeat timer
+                        heartbeat_task = asyncio.create_task(
+                            asyncio.sleep(heartbeat_interval)
+                        )
+                        queue_task = asyncio.create_task(queue.get())
+                        done, _ = await asyncio.wait(
+                            [heartbeat_task, queue_task],
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                        if heartbeat_task in done:
+                            queue_task.cancel()
+                            try:
+                                await queue_task
+                            except asyncio.CancelledError:
+                                pass
+                            yield ServerSentEvent(data="", comment="keep-alive")
+                        else:
+                            heartbeat_task.cancel()
+                            try:
+                                await heartbeat_task
+                            except asyncio.CancelledError:
+                                pass
+                            event = queue_task.result()
+                            yield ServerSentEvent(
+                                data=json.dumps(event.get("data", {})),
+                                event=event.get("category", "event"),
+                                id=event.get("id"),
+                            )
+                finally:
+                    heartbeat_task.cancel()
+                    try:
+                        await heartbeat_task
+                    except asyncio.CancelledError:
+                        pass
+        finally:
+            # Cleanup when client disconnects (refcount-aware)
+            bridge.remove_queue(run_id)
 
     return EventSourceResponse(event_generator())
 

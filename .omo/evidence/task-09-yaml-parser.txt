@@ -1,0 +1,35 @@
+============================= test session starts =============================
+platform win32 -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0 -- F:\Workspace\ATEStudio\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: F:\Workspace\ATEStudio
+configfile: pyproject.toml
+plugins: asyncio-1.4.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 24 items
+
+tests/unit/dsl/test_parser.py::TestYamlParserParse::test_parse_valid_yaml PASSED [  4%]
+tests/unit/dsl/test_parser.py::TestYamlParserParse::test_parse_step_details PASSED [  8%]
+tests/unit/dsl/test_parser.py::TestYamlParserParse::test_parse_missing_file PASSED [ 12%]
+tests/unit/dsl/test_parser.py::TestYamlParserParse::test_parse_missing_name PASSED [ 16%]
+tests/unit/dsl/test_parser.py::TestYamlParserParse::test_parse_missing_version PASSED [ 20%]
+tests/unit/dsl/test_parser.py::TestYamlParserParse::test_parse_missing_scope PASSED [ 25%]
+tests/unit/dsl/test_parser.py::TestYamlParserParse::test_parse_missing_step_id PASSED [ 29%]
+tests/unit/dsl/test_parser.py::TestYamlParserParse::test_parse_missing_step_script PASSED [ 33%]
+tests/unit/dsl/test_parser.py::TestYamlParserDefaults::test_default_max_concurrency PASSED [ 37%]
+tests/unit/dsl/test_parser.py::TestYamlParserDefaults::test_default_step_timeout PASSED [ 41%]
+tests/unit/dsl/test_parser.py::TestYamlParserDefaults::test_default_step_retry PASSED [ 45%]
+tests/unit/dsl/test_parser.py::TestYamlParserDefaults::test_default_empty_collections PASSED [ 50%]
+tests/unit/dsl/test_parser.py::TestYamlParserValidate::test_validate_valid_plan PASSED [ 54%]
+tests/unit/dsl/test_parser.py::TestYamlParserValidate::test_validate_empty_name PASSED [ 58%]
+tests/unit/dsl/test_parser.py::TestYamlParserValidate::test_validate_empty_scope PASSED [ 62%]
+tests/unit/dsl/test_parser.py::TestYamlParserValidate::test_validate_invalid_max_concurrency PASSED [ 66%]
+tests/unit/dsl/test_parser.py::TestYamlParserValidate::test_validate_duplicate_step_ids PASSED [ 70%]
+tests/unit/dsl/test_parser.py::TestYamlParserValidate::test_validate_empty_script PASSED [ 75%]
+tests/unit/dsl/test_parser.py::TestYamlParserValidate::test_validate_negative_timeout PASSED [ 79%]
+tests/unit/dsl/test_parser.py::TestYamlParserValidate::test_validate_negative_retry PASSED [ 83%]
+tests/unit/dsl/test_parser.py::TestYamlParserValidate::test_validate_no_steps PASSED [ 87%]
+tests/unit/dsl/test_parser.py::TestYamlPlanDataclass::test_yaml_plan_creation PASSED [ 91%]
+tests/unit/dsl/test_parser.py::TestYamlStepDataclass::test_yaml_step_creation PASSED [ 95%]
+tests/unit/dsl/test_parser.py::TestYamlStepDataclass::test_yaml_step_defaults PASSED [100%]
+
+============================= 24 passed in 0.20s ==============================

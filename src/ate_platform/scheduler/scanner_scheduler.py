@@ -154,6 +154,10 @@ class ScannerScheduler:
         # Keys: step_id, variable_name (e.g. "scope.voltage"), resource_name
         self._dependency_index: dict[str, set[str]] = {}
 
+        # Skip condition registry: maps step_id → (skip_if_expression, skip_reason).
+        # Populated via register_skip_conditions() before start().
+        self._skip_conditions: dict[str, tuple[str, str | None]] = {}
+
         # Timestamp of last reactive dispatch — used by watchdog to detect
         # whether any progress happened since the last scan.
         self._last_dispatch_time: float = 0.0
@@ -248,6 +252,22 @@ class ScannerScheduler:
             len(self._dependency_index),
             sum(len(v) for v in self._dependency_index.values()),
         )
+
+    def register_skip_conditions(
+        self,
+        skip_conditions: dict[str, tuple[str, str | None]],
+    ) -> None:
+        """Register skip_if expressions for steps and loops.
+
+        These are evaluated before dispatching a step. If the expression
+        evaluates to True, the step is marked SKIPPED instead of being
+        dispatched for execution.
+
+        Args:
+            skip_conditions: Mapping of step_id to (skip_if_expression, skip_reason).
+                skip_reason may be None.
+        """
+        self._skip_conditions: dict[str, tuple[str, str | None]] = dict(skip_conditions)
 
     def _setup_event_handlers(self) -> None:
         """Set up event subscriptions with reactive dispatch wiring."""
@@ -368,6 +388,15 @@ class ScannerScheduler:
             if step_id in self._notified_ready or step_id in self._pending_dispatch:
                 continue
 
+            # Check skip_if before dispatching
+            skip_info = self._skip_conditions.get(step_id)
+            if skip_info is not None:
+                skip_expr, skip_reason = skip_info
+                if self._evaluate_skip_expression(skip_expr):
+                    reason = skip_reason or f"skip_if: {skip_expr}"
+                    await self._handle_step_skipped(step_id, reason)
+                    continue
+
             # Get condition for the step (if any)
             condition = self._registry.get_condition(step_id)
 
@@ -460,6 +489,16 @@ class ScannerScheduler:
             if status.value != "PENDING":
                 return  # No longer pending
 
+            # Check skip_if before any other work
+            skip_info = self._skip_conditions.get(step_id)
+            if skip_info is not None:
+                skip_expr, skip_reason = skip_info
+                should_skip = self._evaluate_skip_expression(skip_expr)
+                if should_skip:
+                    reason = skip_reason or f"skip_if: {skip_expr}"
+                    await self._handle_step_skipped(step_id, reason)
+                    return
+
             # Check if already notified (race with emergency scan)
             if step_id in self._notified_ready:
                 return
@@ -504,6 +543,74 @@ class ScannerScheduler:
         We use it for scheduling reactive dispatch from sync callbacks.
         """
         return getattr(self._event_bus, "_loop", None)
+
+    def _evaluate_skip_expression(self, expression: str) -> bool:
+        """Evaluate a skip_if expression against the current variable space.
+
+        Creates a fresh ConditionEvaluator with the current variable space
+        and step registry state, then delegates to evaluate_skip_condition().
+
+        Args:
+            expression: The skip_if expression string (e.g. '${scope.skip_tests}')
+
+        Returns:
+            True if the step should be skipped, False otherwise
+        """
+        # Build step_results dict from current registry state
+        all_steps = self._registry.get_all_steps()
+        step_results: dict[str, Any] = {}
+        for sid, st in all_steps.items():
+            step_results[sid] = {"status": st, "outputs": {}}
+
+        evaluator = ConditionEvaluator(
+            step_results,  # type: ignore[arg-type]
+            resource_manager=self._resource_manager,
+            variable_space=self._variable_space,
+        )
+        return evaluator.evaluate_skip_condition(expression)
+
+    async def _handle_step_skipped(self, step_id: str, reason: str) -> None:
+        """Mark a step as SKIPPED and publish the STEP_SKIPPED event.
+
+        Sets the step status to SKIPPED in the registry, publishes
+        a STEP_SKIPPED event, and triggers cascade evaluation for
+        dependent steps (which treat SKIPPED as a satisfied
+        precondition).
+
+        Args:
+            step_id: The step to mark as skipped
+            reason: Human-readable reason for skipping
+        """
+        import time
+        from shared.events import StepSkippedData
+
+        logger.info("Step %s skipped: %s", step_id, reason)
+
+        # Update registry status
+        try:
+            self._registry.update_status(step_id, StepStatus.SKIPPED)
+        except KeyError:
+            # Step may not be registered yet — register and set SKIPPED
+            self._registry.register(step_id)
+            self._registry.update_status(step_id, StepStatus.SKIPPED)
+
+        # Remove from notified/pending sets
+        self._notified_ready.discard(step_id)
+        self._last_dispatch_time = time.time()
+
+        # Publish STEP_SKIPPED event
+        event_data = asdict(StepSkippedData(
+            step_id=step_id,
+            reason=reason,
+        ))
+        await self._event_bus.publish(
+            EventType.STEP_SKIPPED,
+            event_data,
+        )
+
+        # Cascade to dependents — SKIPPED satisfies preconditions,
+        # so dependents can now proceed
+        self._schedule_dispatch_for_key(step_id)
 
     def _check_condition(self, condition: Condition) -> bool:
         """Check if a condition is currently met.

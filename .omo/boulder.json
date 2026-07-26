@@ -1,0 +1,168 @@
+{
+  "schema_version": 2,
+  "active_work_id": "architecture-optimization-01d0ddd7",
+  "works": {
+    "flow-management-legacy": {
+      "work_id": "flow-management-legacy",
+      "active_plan": "F:\\Workspace\\ATEStudio\\.sisyphus\\plans\\flow-management.md",
+      "plan_name": "flow-management",
+      "started_at": "2026-07-19T15:19:35.391Z",
+      "session_ids": [
+        "opencode:ses_085560ef2ffeg8WLn03oe540aD"
+      ],
+      "session_origins": {
+        "opencode:ses_085560ef2ffeg8WLn03oe540aD": "direct"
+      },
+      "agent": "atlas",
+      "status": "completed",
+      "task_sessions": {}
+    },
+    "loop-monaco-sse": {
+      "work_id": "loop-monaco-sse",
+      "active_plan": "F:\\Workspace\\ATEStudio\\.omo\\plans\\loop-monaco-sse.md",
+      "plan_name": "loop-monaco-sse",
+      "started_at": "2026-07-25T05:11:12.797Z",
+      "session_ids": [
+        "opencode:ses_07ad1c8e3ffeuXjLY0yEHTl31P"
+      ],
+      "session_origins": {
+        "opencode:ses_07ad1c8e3ffeuXjLY0yEHTl31P": "direct"
+      },
+      "agent": "atlas",
+      "status": "completed",
+      "task_sessions": {},
+      "updated_at": "2026-07-25T10:51:38.745Z"
+    },
+    "architecture-optimization-01d0ddd7": {
+      "work_id": "architecture-optimization-01d0ddd7",
+      "active_plan": "F:\\Workspace\\ATEStudio\\.omo\\plans\\architecture-optimization.md",
+      "plan_name": "architecture-optimization",
+      "status": "active",
+      "started_at": "2026-07-25T15:13:30.883Z",
+      "updated_at": "2026-07-26T03:21:31.422Z",
+      "session_ids": [
+        "opencode:ses_06657eda4ffePO6M38QCixQZCq"
+      ],
+      "session_origins": {
+        "opencode:ses_06657eda4ffePO6M38QCixQZCq": "direct"
+      },
+      "agent": "atlas",
+      "task_sessions": {
+        "todo:1": {
+          "task_key": "todo:1",
+          "task_label": "1",
+          "task_title": "Harden EventBus: prevent silent subscriber failure and fix publish_sync event loss",
+          "session_id": "opencode:ses_06625163fffeOgZR3Oigfzuoa0",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "updated_at": "2026-07-25T16:26:50.396Z",
+          "started_at": "2026-07-25T15:28:28.044Z",
+          "status": "completed",
+          "ended_at": "2026-07-25T16:26:50.396Z",
+          "elapsed_ms": 3502352
+        },
+        "todo:2": {
+          "task_key": "todo:2",
+          "task_label": "2",
+          "task_title": "Complete reactive dispatch by wiring existing event handlers and deprecating _scan_loop polling",
+          "session_id": "opencode:ses_065e444e2ffeNkFlOuSUEmjJyj",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "updated_at": "2026-07-25T16:56:55.186Z",
+          "started_at": "2026-07-25T16:51:22.604Z",
+          "status": "completed",
+          "ended_at": "2026-07-25T16:56:55.186Z",
+          "elapsed_ms": 332582
+        },
+        "todo:6": {
+          "task_key": "todo:6",
+          "task_label": "6",
+          "task_title": "Reorganize event schema to TEMS A4 categories (event/measurement/alarm)",
+          "session_id": "opencode:ses_065c60344ffegJLsaKX8h6K5Qy",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "updated_at": "2026-07-25T17:43:56.469Z",
+          "started_at": "2026-07-25T17:36:03.023Z",
+          "status": "completed",
+          "ended_at": "2026-07-25T17:43:56.469Z",
+          "elapsed_ms": 473446
+        },
+        "todo:7": {
+          "task_key": "todo:7",
+          "task_label": "7",
+          "task_title": "Harden existing SSE heartbeat and fix JetStream replay pagination bug",
+          "session_id": "opencode:ses_0639f2a84ffeJpeFixKaxv6dil",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "updated_at": "2026-07-26T03:21:31.423Z",
+          "started_at": "2026-07-26T03:21:31.423Z",
+          "status": "running"
+        }
+      }
+    }
+  },
+  "session_ids": [
+    "opencode:ses_06657eda4ffePO6M38QCixQZCq"
+  ],
+  "session_origins": {
+    "opencode:ses_06657eda4ffePO6M38QCixQZCq": "direct"
+  },
+  "task_sessions": {
+    "todo:1": {
+      "task_key": "todo:1",
+      "task_label": "1",
+      "task_title": "Harden EventBus: prevent silent subscriber failure and fix publish_sync event loss",
+      "session_id": "opencode:ses_06625163fffeOgZR3Oigfzuoa0",
+      "agent": "Sisyphus-Junior",
+      "category": "deep",
+      "updated_at": "2026-07-25T16:26:50.396Z",
+      "started_at": "2026-07-25T15:28:28.044Z",
+      "status": "completed",
+      "ended_at": "2026-07-25T16:26:50.396Z",
+      "elapsed_ms": 3502352
+    },
+    "todo:2": {
+      "task_key": "todo:2",
+      "task_label": "2",
+      "task_title": "Complete reactive dispatch by wiring existing event handlers and deprecating _scan_loop polling",
+      "session_id": "opencode:ses_065e444e2ffeNkFlOuSUEmjJyj",
+      "agent": "Sisyphus-Junior",
+      "category": "deep",
+      "updated_at": "2026-07-25T16:56:55.186Z",
+      "started_at": "2026-07-25T16:51:22.604Z",
+      "status": "completed",
+      "ended_at": "2026-07-25T16:56:55.186Z",
+      "elapsed_ms": 332582
+    },
+    "todo:6": {
+      "task_key": "todo:6",
+      "task_label": "6",
+      "task_title": "Reorganize event schema to TEMS A4 categories (event/measurement/alarm)",
+      "session_id": "opencode:ses_065c60344ffegJLsaKX8h6K5Qy",
+      "agent": "Sisyphus-Junior",
+      "category": "deep",
+      "updated_at": "2026-07-25T17:43:56.469Z",
+      "started_at": "2026-07-25T17:36:03.023Z",
+      "status": "completed",
+      "ended_at": "2026-07-25T17:43:56.469Z",
+      "elapsed_ms": 473446
+    },
+    "todo:7": {
+      "task_key": "todo:7",
+      "task_label": "7",
+      "task_title": "Harden existing SSE heartbeat and fix JetStream replay pagination bug",
+      "session_id": "opencode:ses_0639f2a84ffeJpeFixKaxv6dil",
+      "agent": "Sisyphus-Junior",
+      "category": "deep",
+      "updated_at": "2026-07-26T03:21:31.423Z",
+      "started_at": "2026-07-26T03:21:31.423Z",
+      "status": "running"
+    }
+  },
+  "active_plan": "F:\\Workspace\\ATEStudio\\.omo\\plans\\architecture-optimization.md",
+  "plan_name": "architecture-optimization",
+  "status": "active",
+  "started_at": "2026-07-25T15:13:30.883Z",
+  "updated_at": "2026-07-26T03:21:31.422Z",
+  "agent": "atlas"
+}

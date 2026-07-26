@@ -1,0 +1,42 @@
+{
+  "name": "frontend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "generate:types": "python ../scripts/generate_dsl_types.py"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.3",
+    "@types/js-yaml": "^4.0.9",
+    "@types/uuid": "^10.0.0",
+    "@vue/test-utils": "^2.4.11",
+    "autoprefixer": "^10.5.4",
+    "esbuild": "^0.28.1",
+    "jsdom": "^29.1.1",
+    "postcss": "^8.5.20",
+    "tailwindcss": "^4.3.3",
+    "typescript": "~6.0.2",
+    "vite": "^8.1.1",
+    "vite-plugin-monaco-editor": "^1.1.0",
+    "vitest": "^4.1.10"
+  },
+  "dependencies": {
+    "@antv/x6": "^3.1.7",
+    "@antv/x6-vue-shape": "^3.0.2",
+    "@vitejs/plugin-vue": "^6.0.8",
+    "@vueuse/core": "^13.9.0",
+    "axios": "^1.18.1",
+    "element-plus": "^2.14.3",
+    "js-yaml": "^5.2.1",
+    "monaco-editor": "^0.56.0",
+    "pinia": "^4.0.2",
+    "uuid": "^14.0.1",
+    "vue": "^3.5.40",
+    "vue-router": "^5.2.0",
+    "vue-virtual-scroller": "^3.0.4"
+  }
+}

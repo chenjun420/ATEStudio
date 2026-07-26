@@ -236,6 +236,39 @@ class ConditionEvaluator:
         """
         return any(self.evaluate(cond) for cond in conditions)
 
+    def evaluate_skip_condition(self, expression: str) -> bool:
+        """Evaluate a skip_if expression against the variable space.
+
+        Resolves ${} references via VariableSpace, then evaluates the
+        resulting expression with simpleeval. Returns True if the step
+        should be skipped, False if it should execute normally.
+
+        The expression is expected to be a boolean expression like
+        '${env.SKIP_TESTS} == "true"' or '${scope.debug_mode}'.
+
+        Args:
+            expression: The skip_if expression string from YAML
+
+        Returns:
+            True if the step should be skipped, False otherwise
+        """
+        if not expression or not expression.strip():
+            return False
+
+        try:
+            expr = expression
+
+            # Resolve ${} variables via VariableSpace
+            if self._variable_space is not None:
+                expr = self._variable_space.resolve(expr)
+
+            # Evaluate the resolved expression
+            result = self._evaluator.eval(expr)
+            return bool(result)
+        except Exception:
+            # Expression evaluation failed — don't skip (fail-safe)
+            return False
+
     async def wait_for_condition(
         self,
         condition: Condition,

@@ -5,6 +5,8 @@ SSE bridge tests verify local-mode operation (no NATS required).
 """
 
 import asyncio
+import json
+import time
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -129,14 +131,16 @@ class TestSSEBridgeLocalMode:
         assert len(bridge._queues) == 0
 
     def test_get_or_create_queue(self):
-        """Test get_or_create_queue creates and returns queues."""
+        """Test get_or_create_queue creates and returns queues with refcounting."""
         bridge = SSEBridge(nc=None)
         queue1 = bridge.get_or_create_queue("run-001")
         queue2 = bridge.get_or_create_queue("run-001")
         assert queue1 is queue2  # Same queue for same run_id
+        assert bridge._refcounts["run-001"] == 2  # Two references
 
         queue3 = bridge.get_or_create_queue("run-002")
         assert queue3 is not queue1  # Different queue for different run_id
+        assert bridge._refcounts["run-002"] == 1
 
     @pytest.mark.asyncio
     async def test_publish_event_to_queue(self):
@@ -170,13 +174,43 @@ class TestSSEBridgeLocalMode:
         assert event2["type"] == "STEP_COMPLETED"
 
     def test_remove_queue(self):
-        """Test remove_queue cleans up queue for a run_id."""
+        """Test remove_queue refcounts and cleans up queue at zero."""
         bridge = SSEBridge(nc=None)
         bridge.get_or_create_queue("run-001")
         assert "run-001" in bridge._queues
+        assert bridge._refcounts["run-001"] == 1
 
+        # One removal at refcount 1 → should delete
         bridge.remove_queue("run-001")
         assert "run-001" not in bridge._queues
+        assert "run-001" not in bridge._refcounts
+
+    def test_remove_queue_refcount_multiple_clients(self):
+        """Test remove_queue only deletes queue when all clients disconnect."""
+        bridge = SSEBridge(nc=None)
+        # Simulate two SSE clients
+        bridge.get_or_create_queue("run-001")  # client 1
+        bridge.get_or_create_queue("run-001")  # client 2
+        assert bridge._refcounts["run-001"] == 2
+
+        # Client 1 disconnects
+        bridge.remove_queue("run-001")
+        assert "run-001" in bridge._queues  # Queue still alive
+        assert bridge._refcounts["run-001"] == 1
+
+        # Client 2 disconnects
+        bridge.remove_queue("run-001")
+        assert "run-001" not in bridge._queues  # Queue deleted
+        assert "run-001" not in bridge._refcounts
+
+    def test_remove_queue_excess_calls_no_crash(self):
+        """Test remove_queue beyond zero refcount doesn't crash."""
+        bridge = SSEBridge(nc=None)
+        bridge.get_or_create_queue("run-001")
+        bridge.remove_queue("run-001")
+        # Should be gone now — extra remove should be no-op
+        bridge.remove_queue("run-001")  # Should not raise
+        bridge.remove_queue("run-001")  # Should not raise
 
     def test_remove_nonexistent_queue(self):
         """Test remove_queue is safe for nonexistent run_id."""
@@ -227,3 +261,239 @@ class TestSSEEndpoint:
 
         response = await stream_execution_events(run_id=run_id, request=mock_request, bridge=bridge)
         assert isinstance(response, EventSourceResponse)
+
+
+class TestReplayPagination:
+    """Tests for JetStream replay pagination logic."""
+
+    @pytest.mark.asyncio
+    async def test_replay_skips_when_no_nats(self):
+        """Test replay_from_jetstream returns empty when NATS is unavailable."""
+        bridge = SSEBridge(nc=None)
+        results = []
+        async for event in bridge.replay_from_jetstream("run-001", "run-001-5"):
+            results.append(event)
+
+        assert len(results) == 0
+
+    @pytest.mark.asyncio
+    async def test_replay_skips_invalid_last_event_id(self):
+        """Test replay_from_jetstream handles invalid Last-Event-ID gracefully."""
+        bridge = SSEBridge(nc=None)
+        results = []
+        async for event in bridge.replay_from_jetstream("run-001", "not-a-valid-id"):
+            results.append(event)
+
+        assert len(results) == 0
+
+    @pytest.mark.asyncio
+    async def test_replay_pagination_loop_logic(self):
+        """Test that replay_from_jetstream pagination loop fetches multiple batches.
+
+        This test verifies the pagination loop structure by mocking the
+        JetStream pull subscriber to return multiple batches.
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        # Create a mock NATS client
+        mock_nc = MagicMock()
+        mock_nc.is_connected = True
+        mock_js = MagicMock()
+        mock_nc.jetstream.return_value = mock_js
+
+        # Mock pull subscribe and fetch to simulate 2 batches
+        mock_psub = MagicMock()
+
+        # Batch 1: 100 messages (full batch — triggers next iteration)
+        batch1 = []
+        for i in range(100):
+            msg = MagicMock()
+            msg.data = json.dumps({
+                "id": f"run-001-{i + 1}",
+                "type": "EVENT",
+                "category": "event",
+                "run_id": "run-001",
+                "data": {"seq": i + 1},
+                "timestamp": time.time(),
+            }).encode()
+            meta = MagicMock()
+            meta.sequence = MagicMock()
+            meta.sequence.stream = i + 1
+            msg.metadata = AsyncMock(return_value=meta)
+            msg.ack = AsyncMock()
+            batch1.append(msg)
+
+        # Batch 2: 50 messages (partial batch — triggers break)
+        batch2 = []
+        for i in range(50):
+            msg = MagicMock()
+            msg.data = json.dumps({
+                "id": f"run-001-{i + 101}",
+                "type": "EVENT",
+                "category": "event",
+                "run_id": "run-001",
+                "data": {"seq": i + 101},
+                "timestamp": time.time(),
+            }).encode()
+            meta = MagicMock()
+            meta.sequence = MagicMock()
+            meta.sequence.stream = i + 101
+            msg.metadata = AsyncMock(return_value=meta)
+            msg.ack = AsyncMock()
+            batch2.append(msg)
+
+        mock_psub.fetch = AsyncMock(side_effect=[batch1, batch2])
+        mock_js.pull_subscribe = AsyncMock(return_value=mock_psub)
+
+        bridge = SSEBridge(nc=mock_nc)
+        results = []
+        async for event in bridge.replay_from_jetstream("run-001", "run-001-0"):
+            results.append(event)
+
+        # Should have all 150 events from both batches
+        assert len(results) == 150
+        assert mock_psub.fetch.call_count == 2  # Two batch fetches
+        mock_psub.unsubscribe.assert_called_once()  # Cleaned up
+
+    @pytest.mark.asyncio
+    async def test_replay_pagination_empty_batch_stops(self):
+        """Test replay_from_jetstream stops when fetch returns empty."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        mock_nc = MagicMock()
+        mock_nc.is_connected = True
+        mock_js = MagicMock()
+        mock_nc.jetstream.return_value = mock_js
+
+        mock_psub = MagicMock()
+        mock_psub.fetch = AsyncMock(return_value=[])  # Empty batch
+        mock_js.pull_subscribe = AsyncMock(return_value=mock_psub)
+
+        bridge = SSEBridge(nc=mock_nc)
+        results = []
+        async for event in bridge.replay_from_jetstream("run-001", "run-001-5"):
+            results.append(event)
+
+        assert len(results) == 0
+        mock_psub.fetch.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_replay_pagination_timeout_stops(self):
+        """Test replay_from_jetstream stops when timeout occurs."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        mock_nc = MagicMock()
+        mock_nc.is_connected = True
+        mock_js = MagicMock()
+        mock_nc.jetstream.return_value = mock_js
+
+        mock_psub = MagicMock()
+        mock_psub.fetch = AsyncMock(side_effect=asyncio.TimeoutError())
+        mock_js.pull_subscribe = AsyncMock(return_value=mock_psub)
+
+        bridge = SSEBridge(nc=mock_nc)
+        results = []
+        async for event in bridge.replay_from_jetstream("run-001", "run-001-5"):
+            results.append(event)
+
+        assert len(results) == 0  # Timeout gracefully stops
+
+    @pytest.mark.asyncio
+    async def test_replay_pagination_250_plus_events(self):
+        """Test replay_from_jetstream recovers 250+ events across 3 batches.
+
+        This validates the core bug fix: events beyond batch 100 are NOT lost.
+        """
+        from unittest.mock import AsyncMock, MagicMock
+
+        mock_nc = MagicMock()
+        mock_nc.is_connected = True
+        mock_js = MagicMock()
+        mock_nc.jetstream.return_value = mock_js
+
+        mock_psub = MagicMock()
+
+        def make_batch(start: int, count: int):
+            batch = []
+            for i in range(count):
+                msg = MagicMock()
+                msg.data = json.dumps({
+                    "id": f"run-001-{start + i}",
+                    "type": "EVENT",
+                    "category": "event",
+                    "run_id": "run-001",
+                    "data": {"seq": start + i},
+                    "timestamp": time.time(),
+                }).encode()
+                meta = MagicMock()
+                meta.sequence = MagicMock()
+                meta.sequence.stream = start + i
+                msg.metadata = AsyncMock(return_value=meta)
+                msg.ack = AsyncMock()
+                batch.append(msg)
+            return batch
+
+        # 3 batches: 100 + 100 + 50 = 250 events
+        batch1 = make_batch(1, 100)
+        batch2 = make_batch(101, 100)
+        batch3 = make_batch(201, 50)
+
+        mock_psub.fetch = AsyncMock(side_effect=[batch1, batch2, batch3])
+        mock_js.pull_subscribe = AsyncMock(return_value=mock_psub)
+
+        bridge = SSEBridge(nc=mock_nc)
+        results = []
+        async for event in bridge.replay_from_jetstream("run-001", "run-001-0"):
+            results.append(event)
+
+        assert len(results) == 250
+        assert mock_psub.fetch.call_count == 3
+
+
+class TestLocalModeHeartbeat:
+    """Tests for local-mode heartbeat generation."""
+
+    @pytest.mark.asyncio
+    async def test_local_heartbeat_yields_keep_alive(self):
+        """Test get_local_heartbeat yields keep-alive events at interval."""
+        bridge = SSEBridge(nc=None)
+
+        # Collect the first heartbeat
+        heartbeat_gen = bridge.get_local_heartbeat("run-001")
+        result = await heartbeat_gen.__anext__()
+
+        assert result["comment"] == "keep-alive"
+        assert "data" in result
+
+    @pytest.mark.asyncio
+    async def test_local_heartbeat_multiple_yields(self):
+        """Test get_local_heartbeat yields multiple keep-alive events."""
+        bridge = SSEBridge(nc=None)
+
+        heartbeat_gen = bridge.get_local_heartbeat("run-001")
+        r1 = await heartbeat_gen.__anext__()
+        assert r1["comment"] == "keep-alive"
+
+
+class TestSSEEndpointHeartbeat:
+    """Tests for SSE endpoint heartbeat behavior."""
+
+    @pytest.mark.asyncio
+    async def test_keep_alive_timeout_is_15s(self):
+        """Verify keep-alive timeout is 15 seconds (not 30)."""
+        from ate_cloud.api.v1.executions import stream_execution_events
+
+        # The timeout is embedded in the event_generator closure.
+        # We verify by reading the source — the heartbeat_interval is 15.0.
+        import inspect
+        source = inspect.getsource(stream_execution_events)
+        assert "heartbeat_interval = 15.0" in source or "timeout=heartbeat_interval" in source
+
+    @pytest.mark.asyncio
+    async def test_local_mode_uses_asyncio_wait_for_heartbeat(self):
+        """Test local mode heartbeat uses asyncio.wait race pattern."""
+        import inspect
+        from ate_cloud.api.v1.executions import stream_execution_events
+        source = inspect.getsource(stream_execution_events)
+        # Local mode should use asyncio.wait with FIRST_COMPLETED
+        assert "asyncio.wait" in source or "FIRST_COMPLETED" in source

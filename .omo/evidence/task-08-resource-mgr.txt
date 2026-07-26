@@ -1,0 +1,46 @@
+============================= test session starts =============================
+platform win32 -- Python 3.14.2, pytest-9.0.2, pluggy-1.6.0 -- C:\Users\chenp\AppData\Local\Python\pythoncore-3.14-64\python.exe
+cachedir: .pytest_cache
+rootdir: F:\Workspace\ATEStudio
+configfile: pyproject.toml
+plugins: anyio-4.12.1, Faker-40.15.0, langsmith-0.7.36, asyncio-1.3.0, cov-7.0.0, mock-3.15.1
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 22 items
+
+tests/unit/scheduler/test_resource_manager.py::TestResourceManagerBasics::test_acquire_returns_true_for_new_resource PASSED [  4%]
+tests/unit/scheduler/test_resource_manager.py::TestResourceManagerBasics::test_acquire_returns_false_for_held_resource PASSED [  9%]
+tests/unit/scheduler/test_resource_manager.py::TestResourceManagerBasics::test_release_makes_resource_available PASSED [ 13%]
+tests/unit/scheduler/test_resource_manager.py::TestResourceManagerBasics::test_is_available_for_new_resource PASSED [ 18%]
+tests/unit/scheduler/test_resource_manager.py::TestResourceManagerBasics::test_is_available_returns_false_when_held PASSED [ 22%]
+tests/unit/scheduler/test_resource_manager.py::TestResourceManagerBasics::test_get_owner_returns_none_for_available_resource PASSED [ 27%]
+tests/unit/scheduler/test_resource_manager.py::TestResourceManagerBasics::test_get_owner_returns_owner_id PASSED [ 31%]
+tests/unit/scheduler/test_resource_manager.py::TestResourceManagerTimeout::test_acquire_with_timeout_succeeds_when_released PASSED [ 36%]
+tests/unit/scheduler/test_resource_manager.py::TestResourceManagerTimeout::test_acquire_with_timeout_fails_on_timeout PASSED [ 40%]
+tests/unit/scheduler/test_resource_manager.py::TestResourceManagerTimeout::test_acquire_with_zero_timeout_returns_immediately PASSED [ 45%]
+tests/unit/scheduler/test_resource_manager.py::TestResourceManagerTimeout::test_acquire_with_negative_timeout_returns_immediately PASSED [ 50%]
+tests/unit/scheduler/test_resource_manager.py::TestResourceManagerThreadSafety::test_concurrent_acquire_only_one_succeeds PASSED [ 54%]
+tests/unit/scheduler/test_resource_manager.py::TestResourceManagerThreadSafety::test_multiple_resources_independent PASSED [ 59%]
+tests/unit/scheduler/test_resource_manager.py::TestResourceManagerErrors::test_same_owner_cannot_acquire_twice PASSED [ 63%]
+tests/unit/scheduler/test_resource_manager.py::TestResourceManagerErrors::test_release_nonexistent_resource_raises PASSED [ 68%]
+tests/unit/scheduler/test_resource_manager.py::TestResourceManagerErrors::test_release_wrong_owner_raises PASSED [ 72%]
+tests/unit/scheduler/test_resource_manager.py::TestResourceManagerErrors::test_release_unheld_resource_raises PASSED [ 77%]
+tests/unit/scheduler/test_resource_manager.py::TestResourceManagerRepr::test_repr_shows_empty_state PASSED [ 81%]
+tests/unit/scheduler/test_resource_manager.py::TestResourceManagerRepr::test_repr_shows_held_resources PASSED [ 86%]
+tests/unit/scheduler/test_resource_manager.py::TestResourceManagerDeadlockDetection::test_timeout_detects_potential_deadlock PASSED [ 90%]
+tests/unit/scheduler/test_resource_manager.py::TestResourceManagerDeadlockDetection::test_chain_of_waits_eventually_succeeds PASSED [ 95%]
+tests/unit/scheduler/test_resource_manager.py::TestResourceManagerQA::test_qa_scenario PASSED [100%]
+
+============================= 22 passed in 0.91s ==============================
+
+======================================================================
+QA SCENARIO VERIFICATION
+======================================================================
+
+rm.acquire(DMM_CH1, step1, timeout=1.0) = True
+rm.is_available(DMM_CH1) = False
+rm.acquire(DMM_CH1, step2, timeout=0.1) = False
+rm.release(DMM_CH1, step1)
+rm.is_available(DMM_CH1) = True
+
+All QA assertions passed!
+OK

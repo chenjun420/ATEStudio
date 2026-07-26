@@ -70,6 +70,8 @@ class YamlStep:
         retry: Number of retry attempts on failure
         on_fail: Action to take on failure (e.g. 'stop', 'skip', 'ignore')
         export_outputs: Whether to export step outputs to plan-level scope
+        skip_if: Expression that, if True, causes this step to be skipped
+        skip_reason: Human-readable reason logged when step is skipped
     """
 
     id: str
@@ -81,6 +83,8 @@ class YamlStep:
     retry: int = 0
     on_fail: str | None = None
     export_outputs: bool = False
+    skip_if: str | None = None
+    skip_reason: str | None = None
 
 
 @dataclass
@@ -100,6 +104,8 @@ class YamlLoop:
         iterator_var: Variable name for the current item (for FOREACH loops)
         execution_mode: Whether nested steps run serially or in parallel
         max_iterations: Safety limit on iterations (prevents infinite loops)
+        skip_if: Expression that, if True, causes this loop to be skipped
+        skip_reason: Human-readable reason logged when loop is skipped
     """
 
     id: str
@@ -111,6 +117,8 @@ class YamlLoop:
     iterator_var: str | None = None
     execution_mode: ExecutionMode = ExecutionMode.SERIAL
     max_iterations: int = 1000
+    skip_if: str | None = None
+    skip_reason: str | None = None
 
 
 @dataclass
