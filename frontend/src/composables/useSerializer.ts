@@ -13,6 +13,8 @@ import type { YamlSequence, YamlStep, YamlLoop, YamlScope } from '@/types/dsl'
 
 export type { YamlSequence, YamlStep, YamlLoop, YamlScope }
 
+import { autoLayout } from './useAutoLayout'
+
 /**
  * Type guard: check if a step entry is a YamlStep (not a YamlLoop)
  */
@@ -172,8 +174,13 @@ export function graphToYaml(graph: Graph, options: SerializerOptions = {}): stri
 
 /**
  * Convert YAML string to graph data
+ *
+ * @param yamlStr - The YAML string to parse.
+ * @param opts - Optional behavior flags.
+ * @param opts.autoLayout - Whether to apply dagre auto-layout. Default: true.
  */
-export function yamlToGraphData(yamlStr: string): GraphData {
+export function yamlToGraphData(yamlStr: string, opts: { autoLayout?: boolean } = {}): GraphData {
+  const { autoLayout: useAutoLayout = true } = opts
   const sequence = yaml.load(yamlStr) as YamlSequence
 
   if (!sequence || typeof sequence !== 'object') {
@@ -187,114 +194,10 @@ export function yamlToGraphData(yamlStr: string): GraphData {
   const nodes: NodeConfig[] = []
   const edges: EdgeConfig[] = []
 
-  // Calculate node positions using topological layout
-  const startX = 100
-  const startY = 100
-  const stepWidth = 280
-  const stepHeight = 150
-  const loopContainerHeight = 200
-
-  // Build step map for quick lookup (only YamlStep entries, not YamlLoop)
-  const stepMap = new Map<string, YamlStep>()
-  const loopMap = new Map<string, YamlLoop>()
-  sequence.steps.forEach(step => {
-    if (isYamlStep(step)) stepMap.set(step.id, step)
-    else if (isYamlLoop(step)) loopMap.set(step.id, step)
-  })
-
-  // Build dependency graph for layout (only top-level YamlStep entries)
-  const inDegree = new Map<string, number>()
-  const dependents = new Map<string, string[]>()
-  
-  sequence.steps.forEach(step => {
-    if (!isYamlStep(step)) return
-    inDegree.set(step.id, step.preconditions?.length || 0)
-    dependents.set(step.id, [])
-  })
-  
-  sequence.steps.forEach(step => {
-    if (!isYamlStep(step)) return
-    (step.preconditions || []).forEach(precondId => {
-      const deps = dependents.get(precondId) || []
-      deps.push(step.id)
-      dependents.set(precondId, deps)
-    })
-  })
-
-  // Kahn's algorithm to determine levels
-  const levels = new Map<string, number>()
-  const queue: string[] = []
-  
-  sequence.steps.forEach(step => {
-    if (!isYamlStep(step)) return
-    if (inDegree.get(step.id) === 0) {
-      queue.push(step.id)
-      levels.set(step.id, 0)
-    }
-  })
-  
-  while (queue.length > 0) {
-    const current = queue.shift()!
-    const currentLevel = levels.get(current) || 0
-    
-    const deps = dependents.get(current) || []
-    deps.forEach(depId => {
-      const newDegree = (inDegree.get(depId) || 1) - 1
-      inDegree.set(depId, newDegree)
-      
-      if (newDegree === 0) {
-        levels.set(depId, currentLevel + 1)
-        queue.push(depId)
-      }
-    })
-  }
-
-  // Handle nodes not in topological order (cycles or isolated) — warn instead of silently appending
-  sequence.steps.forEach(step => {
-    if (!isYamlStep(step)) return
-    if (!levels.has(step.id)) {
-      console.warn(`[yamlToGraphData] Step "${step.id}" is in a cycle or unreachable — placing at level 0`)
-      levels.set(step.id, 0)
-    }
-  })
-
-  // Assign levels to loop containers (place them alongside their topological position)
-  // Loops don't have preconditions in the DSL, so they get level 0 by default.
-  // We position them based on their index among top-level entries.
-  let topLevelIndex = 0
-  const topLevelLevels = new Map<string, number>()
+  // Create nodes with placeholder (0,0) positions for top-level nodes.
+  // dagre auto-layout will compute actual positions based on edge dependencies.
   for (const step of sequence.steps) {
-    if (isYamlStep(step) && levels.has(step.id)) {
-      topLevelLevels.set(step.id, levels.get(step.id)!)
-    } else if (isYamlLoop(step)) {
-      // Loops are placed at the next available level after the last step
-      const maxLevel = topLevelLevels.size > 0
-        ? Math.max(...topLevelLevels.values())
-        : -1
-      topLevelLevels.set(step.id, maxLevel + 1)
-    }
-    topLevelIndex++
-  }
-
-  // Group top-level entries by level
-  const levelNodes = new Map<number, Array<{ id: string; type: 'step' | 'loop' }>>()
-  topLevelLevels.forEach((level, id) => {
-    const nodeList = levelNodes.get(level) || []
-    const type = loopMap.has(id) ? 'loop' as const : 'step' as const
-    nodeList.push({ id, type })
-    levelNodes.set(level, nodeList)
-  })
-
-  // Create nodes with positions based on topological levels
-  levelNodes.forEach((entries, level) => {
-    entries.forEach((entry, indexInLevel) => {
-      if (entry.type === 'step') {
-        const step = stepMap.get(entry.id)
-        if (!step) return
-
-        const x = startX + level * stepWidth
-        const y = startY + indexInLevel * stepHeight
-
+    if (isYamlStep(step)) {
         const nodeData: ScriptStepData = {
           stepId: step.id,
           scriptName: step.script,
@@ -302,7 +205,7 @@ export function yamlToGraphData(yamlStr: string): GraphData {
           params: step.params || {},
           preconditions: step.preconditions || [],
           resources: step.resources ? Object.keys(step.resources) : [],
-          timeout: step.timeout || 60000,
+          timeout: step.timeout ? Math.ceil(step.timeout * 1000) : 60000,
           onFail: (step.on_fail as 'stop' | 'skip' | 'ignore') || 'stop',
           exportOutputs: step.export_outputs || false,
           status: 'idle',
@@ -310,54 +213,47 @@ export function yamlToGraphData(yamlStr: string): GraphData {
 
         nodes.push({
           id: step.id,
-          x,
-          y,
+          x: 0,
+          y: 0,
           data: nodeData,
         })
-      } else {
-        // Loop container
-        const loop = loopMap.get(entry.id)
-        if (!loop) return
-
-        const x = startX + level * stepWidth
-        const y = startY + indexInLevel * (loopContainerHeight + 50)
-
-        // Create loop container node
-        const containerData: LoopContainerData = {
-          loopId: loop.id,
-          loopType: fromDslLoopType(loop.loop_type),
-          condition: loop.condition || '',
-          iterationVar: loop.iterator_var || undefined,
-          collectionExpr: loop.collection || undefined,
-          count: loop.count || undefined,
-          executionMode: fromDslExecutionMode(loop.execution_mode),
-          maxConcurrency: loop.max_iterations || 1,
-          status: 'idle',
-        }
-
-        nodes.push({
-          id: loop.id,
-          x,
-          y,
-          data: containerData,
-        })
-
-        // Recursively create child nodes from loop.steps
-        if (loop.steps && loop.steps.length > 0) {
-          const childResult = createChildNodesFromLoopSteps(
-            loop.steps,
-            x + 20,  // offset inside container
-            y + 40,   // offset below label
-            loop.id
-          )
-          nodes.push(...childResult.nodes)
-          edges.push(...childResult.edges)
-        }
+    } else if (isYamlLoop(step)) {
+      const containerData: LoopContainerData = {
+        loopId: step.id,
+        loopType: fromDslLoopType(step.loop_type),
+        condition: step.condition || '',
+        iterationVar: step.iterator_var || undefined,
+        collectionExpr: step.collection || undefined,
+        count: step.count || undefined,
+        executionMode: fromDslExecutionMode(step.execution_mode),
+        maxConcurrency: step.max_iterations || 1,
+        status: 'idle',
       }
-    })
-  })
 
-  // Create edges from preconditions (only top-level YamlStep entries)
+      nodes.push({
+        id: step.id,
+        x: 0,
+        y: 0,
+        data: containerData,
+      })
+
+      // Recursively create child nodes from loop.steps.
+      // Child positions are relative to their parent container and NOT passed to dagre.
+      if (step.steps && step.steps.length > 0) {
+        const childResult = createChildNodesFromLoopSteps(
+          step.steps,
+          20,  // offset inside container
+          40,  // offset below label
+          step.id,
+          1   // depth starts at 1
+        )
+        nodes.push(...childResult.nodes)
+        edges.push(...childResult.edges)
+      }
+    }
+  }
+
+  // Create edges from preconditions (for YamlStep entries)
   sequence.steps.forEach((step) => {
     if (!isYamlStep(step)) return
     if (step.preconditions && step.preconditions.length > 0) {
@@ -373,36 +269,97 @@ export function yamlToGraphData(yamlStr: string): GraphData {
     }
   })
 
+  // Create edges for loop containers: connect them to their sequential
+  // predecessor and successor in the top-level steps array.
+  // Loop containers don't use preconditions — they follow the sequential
+  // order of the steps array.
+  // We walk the top-level steps array and create edges between consecutive
+  // entries, regardless of whether they are YamlStep or YamlLoop.
+  for (let i = 0; i < sequence.steps.length - 1; i++) {
+    const current = sequence.steps[i]
+    const next = sequence.steps[i + 1]
+
+    // Determine if there's already an edge from current to next via preconditions
+    const alreadyConnected = edges.some(
+      e => e.source === current.id && e.target === next.id
+    )
+    if (alreadyConnected) continue
+
+    // Connect consecutive top-level entries (step→loop, loop→step, loop→loop)
+    // unless the current is a YamlStep with preconditions that DON'T include next
+    // (in that case, the step's outgoing edge goes to its preconditions' dependents)
+    if (isYamlStep(current)) {
+      // Only add sequential edge if current step has NO preconditions
+      // (if it has preconditions, its outgoing edge is defined by the dependency graph)
+      if (!current.preconditions || current.preconditions.length === 0) {
+        // But also: if current has no preconditions AND next has preconditions that
+        // include current, the preconditions edge already handles it
+        const nextHasPrecondForCurrent = isYamlStep(next) &&
+          next.preconditions?.includes(current.id)
+        if (nextHasPrecondForCurrent) continue
+        // Otherwise, add sequential edge
+      } else {
+        // current has preconditions — skip sequential edge, the dependency
+        // graph handles the layout ordering
+        continue
+      }
+    }
+
+    edges.push({
+      source: current.id,
+      target: next.id,
+      data: {
+        condition: { status: 'passed' },
+      },
+    })
+  }
+
   // Add variable node if scope has variables
   if (sequence.scope?.variables && Object.keys(sequence.scope.variables).length > 0) {
     const varNodeId = 'variables-scope'
     nodes.push({
       id: varNodeId,
-      x: startX - stepWidth,
-      y: startY,
+      x: 0,
+      y: 0,
       data: {
         variables: sequence.scope.variables,
       } as VariableData,
     })
   }
 
-  return {
-    nodes,
-    edges,
-    sequence,
-  }
+  // Assemble graph data and apply dagre auto-layout for top-level node positions.
+  // Child nodes (inside loop containers) are NOT passed to dagre — they keep
+  // their relative offsets within the parent.
+  const rawGraphData: GraphData = { nodes, edges, sequence }
+  const laidOut = useAutoLayout ? autoLayout(rawGraphData) : rawGraphData
+
+  return laidOut
 }
 
 /**
  * Recursively create child nodes and edges from a YamlLoop's steps array.
  * Returns NodeConfig[] and EdgeConfig[] with parent set to the container node ID.
+ *
+ * @param steps - The YamlStep/YamlLoop entries to create nodes from
+ * @param offsetX - Starting X position for child nodes
+ * @param offsetY - Starting Y position for child nodes
+ * @param parentContainerId - The ID of the parent loop container node
+ * @param depth - Current recursion depth (starts at 1 for direct children)
  */
 function createChildNodesFromLoopSteps(
   steps: Array<YamlStep | YamlLoop>,
   offsetX: number,
   offsetY: number,
-  parentContainerId: string
+  parentContainerId: string,
+  depth: number = 1
 ): { nodes: NodeConfig[]; edges: EdgeConfig[] } {
+  const MAX_LOOP_DEPTH = 5
+  if (depth > MAX_LOOP_DEPTH) {
+    throw new Error(
+      `Loop nesting depth exceeds maximum (${MAX_LOOP_DEPTH}). ` +
+      `Cannot nest loops deeper than ${MAX_LOOP_DEPTH} levels.`
+    )
+  }
   const nodes: NodeConfig[] = []
   const edges: EdgeConfig[] = []
   const childStepWidth = 240
@@ -442,7 +399,7 @@ function createChildNodesFromLoopSteps(
       params: step.params || {},
       preconditions: step.preconditions || [],
       resources: step.resources ? Object.keys(step.resources) : [],
-      timeout: step.timeout || 60000,
+      timeout: step.timeout ? Math.ceil(step.timeout * 1000) : 60000,
       onFail: (step.on_fail as 'stop' | 'skip' | 'ignore') || 'stop',
       exportOutputs: step.export_outputs || false,
       status: 'idle',
@@ -479,17 +436,18 @@ function createChildNodesFromLoopSteps(
       data: containerData,
     })
 
-    // Recursively create nested child nodes
-    if (loop.steps && loop.steps.length > 0) {
-      const nestedResult = createChildNodesFromLoopSteps(
-        loop.steps,
-        currentX + 20,
-        currentY + 40,
-        loop.id
-      )
-      nodes.push(...nestedResult.nodes)
-      edges.push(...nestedResult.edges)
-    }
+      // Recursively create nested child nodes
+      if (loop.steps && loop.steps.length > 0) {
+        const nestedResult = createChildNodesFromLoopSteps(
+          loop.steps,
+          currentX + 20,
+          currentY + 40,
+          loop.id,
+          depth + 1
+        )
+        nodes.push(...nestedResult.nodes)
+        edges.push(...nestedResult.edges)
+      }
 
     currentX += childLoopWidth
   }
@@ -830,9 +788,10 @@ export function exportGraphToYaml(graph: Graph, filename: string = 'sequence.yam
 export function importYamlToGraph(
   graph: Graph,
   yamlContent: string,
-  clearExisting: boolean = true
+  clearExisting: boolean = true,
+  opts: { autoLayout?: boolean } = {}
 ): GraphData {
-  const graphData = yamlToGraphData(yamlContent)
+  const graphData = yamlToGraphData(yamlContent, opts)
 
   // Clear existing graph if requested
   if (clearExisting) {

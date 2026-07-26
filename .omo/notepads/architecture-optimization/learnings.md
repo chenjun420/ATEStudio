@@ -286,6 +286,43 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 
 ---
 
+## Task 11: Dagre Auto-Layout for DAG-Style Test Sequences (completed)
+
+### Architecture
+
+- **`useAutoLayout.ts`**: Standalone composable with `autoLayout(graphData: GraphData, options?: AutoLayoutOptions): GraphData` function. Uses dagre's hierarchical layout algorithm (`dagre.layout()`) to compute node positions based on edge dependencies.
+- **Child node detection**: Nodes with non-zero positions (x !== 0 or y !== 0) are treated as child nodes inside loop containers and are excluded from the dagre graph. Top-level nodes are seeded at (0,0) before layout.
+- **Toggle**: `autoLayoutEnabled` ref in `Toolbar.vue` controls whether `yamlToGraphData()` applies dagre layout. Default: ON.
+
+### Key Design Decisions
+
+- **dagre config**: `rankdir: "LR"` (left-to-right DAG flow), `nodesep: 200`, `ranksep: 150`, `marginx: 20`, `marginy: 20`. These match the visual spacing of the previous Kahn's-algorithm grid layout.
+- **Node dimensions**: ScriptStepNode: 240×80, VariableNode: 200×60, LoopContainer: 300×120. These are estimates — actual rendering may differ, but dagre uses them for spacing calculations.
+- **dagre API**: `dagre.layout(g)` mutates the graph in-place — nodes get `x`, `y`, `width`, `height` properties. We subtract half-width/half-height to convert from center-based (dagre) to top-left-based (X6) coordinates.
+- **`yamlToGraphData` simplification**: Removed ~110 lines of Kahn's algorithm topological sort + level grouping + position calculation. Now builds nodes with placeholder (0,0) positions and calls `autoLayout()` at the end. The sequential edge creation logic (for loop containers without preconditions) is preserved.
+- **`importYamlToGraph`** accepts `opts: { autoLayout?: boolean }` and passes through to `yamlToGraphData`.
+- **Graph-to-YAML direction unchanged**: `graphToYaml()` does NOT use auto-layout. Layout is only applied during deserialization (YAML → graph).
+
+### Testing
+
+- **9 tests** in `useAutoLayout.test.ts`:
+  - Empty graph returns empty array
+  - Single node positioned near origin
+  - 10-node chain: nodes laid out left-to-right (strictly increasing X, same Y rank)
+  - 10-node fan-out (A→B1...B9): root leftmost, all leaves to the right, no overlapping positions
+  - 3-level DAG (A→B,C→D): 3 distinct rank columns, B and C in same rank, A leftmost, D rightmost
+  - Disabled auto-layout: returns original positions unchanged
+  - Mixed node types (script step + loop container + variable): all have valid finite positions
+  - Child nodes excluded: child at (20,40) keeps its relative offset, parent moved by dagre
+  - Custom graph config: larger nodesep produces greater X separation
+
+### Files Changed
+- **Created**: `frontend/src/composables/useAutoLayout.ts`, `frontend/src/composables/__tests__/useAutoLayout.test.ts`
+- **Modified**: `frontend/src/composables/useSerializer.ts` (import autoLayout, simplified yamlToGraphData by removing Kahn's algorithm, added autoLayout opts parameter), `frontend/src/views/SequenceEditor/components/Toolbar.vue` (autoLayoutEnabled ref, toggle button, passes opts to importYamlToGraph), `frontend/package.json` (dagre, @types/dagre deps)
+- **Not modified**: `shared/dsl.py`, any Python files, `GraphContainer.vue`
+
+---
+
 ## Task 8: skip_if Precondition for Rule-Based Adaptive Skipping (completed)
 
 ### Architecture
@@ -322,3 +359,83 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - `TestSkipIfReason` (2 tests): custom-reason-in-event, fallback-reason-when-none
 - `TestSkipIfDsl` (4 tests): YamlStep fields/defaults, YamlLoop fields/defaults
 - All 19 new tests pass, all 677 existing tests pass unchanged (696 total)
+
+---
+
+## Task 12: Offload Cycle Detection to Web Worker for >50 nodes (completed)
+
+### Architecture
+
+- **`dependencyCheck.worker.ts`**: Standalone Web Worker with the same DFS cycle detection algorithm. Receives `{ nodes: string[], edges: [string, string][], sourceId, targetId }` via `postMessage`, returns `{ hasCycle: boolean, cyclePath?: string[] }`. Exports `buildAdjacencyList`, `hasPath`, and `checkCycle` for direct unit testing (bypassing postMessage).
+- **`useDependencyCheck.ts` modifications**: Added `NODE_THRESHOLD = 50`, `serializeGraph()` helper (extracts `{ nodes, edges }` from X6 graph), `wouldCreateCycleWorker()` (promisified postMessage), and `wouldCreateCycleAsync()` — the new public API that delegates to Worker for >50 nodes or runs synchronously for ≤50.
+- **Lazy Worker creation**: `getWorker()` creates a `new Worker(new URL('@/workers/dependencyCheck.worker.ts', import.meta.url), { type: 'module' })` on first use. Reused across all calls within a composable instance.
+- **Loading state**: `isChecking: Ref<boolean>` set to `true` while Worker is computing, reset in `finally` block.
+- **Cleanup**: `onUnmounted(() => worker?.terminate())` tears down the Worker on component unmount.
+
+### Key Design Decisions
+
+- **Worker uses array-based data, not X6 Graph API**: The worker receives plain `{ nodes: string[], edges: [string, string][] }` — serializable data without X6 dependencies. The `serializeGraph()` helper in the composable extracts this from the X6 graph before posting.
+- **`checkCycle` path fix**: Original implementation appended `[...path, sourceId, targetId]` but `hasPath(targetId, sourceId)` already ends with `sourceId`. Fixed to `[...path, targetId]`. The cycle path is: `targetId → ... → sourceId → targetId`.
+- **Fail-safe**: Worker's `onmessage` handler wraps `checkCycle` in try/catch — on error, returns `{ hasCycle: false }` to avoid blocking connections on Worker crash.
+- **Container-scoped edges bypass threshold**: If `containerId` is provided and both nodes are in the same container, `wouldCreateCycleAsync` returns `false` immediately (no Worker involved). This is the same short-circuit logic as the synchronous `wouldCreateCycle`.
+
+### API Surface Changes
+
+- **New**: `useDependencyCheck().wouldCreateCycleAsync(graph, sourceId, targetId, containerId?)` — returns `Promise<boolean>`. For ≤50 nodes: resolves synchronously. For >50 nodes: delegates to Worker.
+- **New**: `useDependencyCheck().isChecking: Ref<boolean>` — reactive loading state.
+- **Unchanged**: `wouldCreateCycle()` (synchronous, no threshold), `validateConnection()`, `getDependencyChain()`, `findContainerForNode()`, `isWithinContainer()`.
+
+### Testing Gotcha
+
+- **`vi.fn()` is not a constructor**: To mock `Worker`, must use a `class` with instance properties assigned in the constructor body (not `vi.fn().mockImplementation(() => ({...}))`). `new Mock` fails with `vi.fn()` because it's not a real constructor. Solution: `class MockWorker { postMessage = vi.fn(); ... }`.
+- **`onUnmounted` warning in tests**: Calling `useDependencyCheck()` outside a Vue component setup context triggers `[Vue warn]: onUnmounted is called when there is no active component instance`. This is a warning, not an error — the hook is registered but never fires. Tests verify cleanup logic indirectly by checking that `terminate` mock is set up.
+- **Worker reuse verification**: Track constructor call count via a counter in the mock class constructor (not via `toHaveBeenCalledTimes` on `vi.fn()`).
+
+### Files Changed
+
+- **Created**: `frontend/src/workers/dependencyCheck.worker.ts` (Worker with exported DFS algorithm)
+- **Created**: `frontend/src/composables/__tests__/useDependencyCheck.test.ts` (25 tests)
+- **Modified**: `frontend/src/composables/useDependencyCheck.ts` (NODE_THRESHOLD, serializeGraph, wouldCreateCycleWorker, wouldCreateCycleAsync, isChecking, onUnmounted cleanup)
+
+### Test Coverage
+
+- `buildAdjacencyList` (4 tests): isolated nodes, directed edges, multiple outgoing, unknown nodes
+- `hasPath` (5 tests): start==end, no path, direct path, multi-hop, diamond DAG
+- `checkCycle` (6 tests): DAG, simple cycle, 3-node cycle, forward edge, self-loop, disconnected
+- Large graphs (3 tests): 100-node DAG forward, 100-node reverse cycle, 200-node DAG
+- Composable integration (7 tests): ≤50 UI thread, ≤50 cycle detection, >50 Worker path + isChecking, Worker reuse, cleanup, container-scoped bypass
+- All 25 tests pass, all 20 existing batchBuffer tests pass unchanged
+
+---
+
+## Task 10: Loop Container YAML �?Graph Serialization (completed)
+
+### Architecture
+
+- **graphToYaml()**: Already had `convertLoopContainerToYaml()` that recursively serializes loop container nodes with children. No changes needed �?it was fully functional.
+- **yamlToGraphData()**: Refactored to use dagre auto-layout. Top-level nodes start at (0,0) placeholder positions; dagre computes actual positions. Child nodes are NOT passed to dagre �?they keep relative offsets.
+- **`createChildNodesFromLoopSteps(depth)`**: Added depth parameter (default 1). Throws `"Loop nesting depth exceeds maximum (5)"` at depth > 5.
+- **Loop container edge wiring**: Added sequential edge creation in `yamlToGraphData()` �?consecutive top-level entries (step→loop, loop→step, loop→loop) get edges. Steps with preconditions are handled by the dependency graph; steps without preconditions get sequential edges to their neighbor.
+- **`SubGraphContainer.vue`**: No changes needed. It already receives `containerNodeId`, extracts children via `containerNode.getChildren()`, and handles both ScriptStepData and LoopContainerData. The deserialization sets up parent/child via `importYamlToGraph`.
+
+### Key Design Decisions
+
+- **Timeunit conversion**: YAML `timeout` is in seconds, `NodeData.timeout` is in milliseconds. Fixed `createChildNodesFromLoopSteps` to use `Math.ceil(step.timeout * 1000)` for truthy values. Previously `step.timeout || 60000` kept the raw seconds value.
+- **execution_mode omission**: `convertLoopContainerToYaml` only sets `execution_mode` when it is `"PARALLEL"`. `SERIAL` is the default and is omitted from output. This is intentional �?matches YAML DSL convention.
+- **`iterator_var` (not `iteration_var`)**: The DSL field is `iterator_var` (with R before underscore). YAML fixtures use `iterator_var`. A mismatched `iteration_var` (with N) in test YAML would silently produce `undefined` in parsed data.
+
+### Testing Gotcha
+
+- **X6 ESM mocking**: `@antv/x6` is ESM-only and cannot be loaded in vitest's jsdom environment. Mocked with `vi.mock('@antv/x6', ...)` providing minimal `Graph`, `Node`, `Edge` classes that support the API surface used by `graphToYaml()` (getNodes, getEdges, getChildren, getParent, position, setParent, addChild, etc.).
+- **Dagre auto-layout vs parent detection**: After `yamlToGraphData`, top-level nodes get dagre-computed positions, but children stay at (20, 40) �?their creation-time offset from (0,0). Since dagre moves the container, the child's absolute position no longer falls within the container's bounds. `buildGraphWithParents` solves this by using the YAML structure (walking `sequence.steps` to build a `childToParent` map) rather than position-based heuristics.
+- **Round-trip testing**: The mock graph's `graphToYaml` �?`yamlToGraphData` round-trip preserves all loop types, nested loops up to depth 5, sequential edges, loop-back edges, and optional fields. The "cycle detected" warnings from `topologicalSort` are expected for internal loop edges (they form cycles by design �?iteration cycles).
+
+### Files Changed
+
+- **Modified**: `frontend/src/composables/useSerializer.ts` �?depth guard, timeout conversion fix, sequential edge wiring for loop containers
+- **Created**: `frontend/src/composables/__tests__/useSerializer.test.ts` �?34 tests covering all loop types, nested loops, depth limits, edge wiring, round-trip, optional fields, variable scope
+- **Not modified**: `SubGraphContainer.vue` (works correctly with existing parent/child model), `types/dsl.ts`, `models/nodes/types.ts`
+
+### Test Results
+
+- 34/34 tests pass (vitest, jsdom environment, mocked @antv/x6)

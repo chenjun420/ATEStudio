@@ -27,9 +27,11 @@
   "dependencies": {
     "@antv/x6": "^3.1.7",
     "@antv/x6-vue-shape": "^3.0.2",
+    "@types/dagre": "^0.7.54",
     "@vitejs/plugin-vue": "^6.0.8",
     "@vueuse/core": "^13.9.0",
     "axios": "^1.18.1",
+    "dagre": "^0.8.5",
     "element-plus": "^2.14.3",
     "js-yaml": "^5.2.1",
     "monaco-editor": "^0.56.0",

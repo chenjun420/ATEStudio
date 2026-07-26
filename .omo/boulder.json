@@ -39,7 +39,7 @@
       "plan_name": "architecture-optimization",
       "status": "active",
       "started_at": "2026-07-25T15:13:30.883Z",
-      "updated_at": "2026-07-26T03:21:31.422Z",
+      "updated_at": "2026-07-26T04:14:16.187Z",
       "session_ids": [
         "opencode:ses_06657eda4ffePO6M38QCixQZCq"
       ],
@@ -94,8 +94,43 @@
           "session_id": "opencode:ses_0639f2a84ffeJpeFixKaxv6dil",
           "agent": "Sisyphus-Junior",
           "category": "deep",
-          "updated_at": "2026-07-26T03:21:31.423Z",
+          "updated_at": "2026-07-26T03:29:14.085Z",
           "started_at": "2026-07-26T03:21:31.423Z",
+          "status": "completed",
+          "ended_at": "2026-07-26T03:29:14.085Z",
+          "elapsed_ms": 462662
+        },
+        "todo:12": {
+          "task_key": "todo:12",
+          "task_label": "12",
+          "task_title": "Offload cycle detection to Web Worker for >50 nodes",
+          "session_id": "opencode:ses_063867731ffeDLSF5A0TF55VBo",
+          "agent": "Sisyphus-Junior",
+          "category": "visual-engineering",
+          "updated_at": "2026-07-26T03:40:36.233Z",
+          "started_at": "2026-07-26T03:40:36.233Z",
+          "status": "running"
+        },
+        "todo:11": {
+          "task_key": "todo:11",
+          "task_label": "11",
+          "task_title": "Add dagre auto-layout for DAG-style test sequences",
+          "session_id": "opencode:ses_063869ca1ffe74PhY2HT8x22Pl",
+          "agent": "Sisyphus-Junior",
+          "category": "visual-engineering",
+          "updated_at": "2026-07-26T03:51:53.898Z",
+          "started_at": "2026-07-26T03:51:53.898Z",
+          "status": "running"
+        },
+        "todo:10": {
+          "task_key": "todo:10",
+          "task_label": "10",
+          "task_title": "Complete loop container YAML ↔ Graph serialization (FOR/WHILE/FOREACH)",
+          "session_id": "opencode:ses_06386c542ffemKuPXZUQF1i3kF",
+          "agent": "Sisyphus-Junior",
+          "category": "visual-engineering",
+          "updated_at": "2026-07-26T04:14:16.188Z",
+          "started_at": "2026-07-26T04:14:16.188Z",
           "status": "running"
         }
       }
@@ -154,8 +189,43 @@
       "session_id": "opencode:ses_0639f2a84ffeJpeFixKaxv6dil",
       "agent": "Sisyphus-Junior",
       "category": "deep",
-      "updated_at": "2026-07-26T03:21:31.423Z",
+      "updated_at": "2026-07-26T03:29:14.085Z",
       "started_at": "2026-07-26T03:21:31.423Z",
+      "status": "completed",
+      "ended_at": "2026-07-26T03:29:14.085Z",
+      "elapsed_ms": 462662
+    },
+    "todo:12": {
+      "task_key": "todo:12",
+      "task_label": "12",
+      "task_title": "Offload cycle detection to Web Worker for >50 nodes",
+      "session_id": "opencode:ses_063867731ffeDLSF5A0TF55VBo",
+      "agent": "Sisyphus-Junior",
+      "category": "visual-engineering",
+      "updated_at": "2026-07-26T03:40:36.233Z",
+      "started_at": "2026-07-26T03:40:36.233Z",
+      "status": "running"
+    },
+    "todo:11": {
+      "task_key": "todo:11",
+      "task_label": "11",
+      "task_title": "Add dagre auto-layout for DAG-style test sequences",
+      "session_id": "opencode:ses_063869ca1ffe74PhY2HT8x22Pl",
+      "agent": "Sisyphus-Junior",
+      "category": "visual-engineering",
+      "updated_at": "2026-07-26T03:51:53.898Z",
+      "started_at": "2026-07-26T03:51:53.898Z",
+      "status": "running"
+    },
+    "todo:10": {
+      "task_key": "todo:10",
+      "task_label": "10",
+      "task_title": "Complete loop container YAML ↔ Graph serialization (FOR/WHILE/FOREACH)",
+      "session_id": "opencode:ses_06386c542ffemKuPXZUQF1i3kF",
+      "agent": "Sisyphus-Junior",
+      "category": "visual-engineering",
+      "updated_at": "2026-07-26T04:14:16.188Z",
+      "started_at": "2026-07-26T04:14:16.188Z",
       "status": "running"
     }
   },
@@ -163,6 +233,6 @@
   "plan_name": "architecture-optimization",
   "status": "active",
   "started_at": "2026-07-25T15:13:30.883Z",
-  "updated_at": "2026-07-26T03:21:31.422Z",
+  "updated_at": "2026-07-26T04:14:16.187Z",
   "agent": "atlas"
 }

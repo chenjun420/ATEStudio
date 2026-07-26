@@ -35,6 +35,13 @@ const sequenceError = ref<string | null>(null)
 const { exportGraphToYaml, importYamlToGraph, graphToYaml } = useSerializer()
 
 // ============================================
+// Auto-Layout Toggle
+// ============================================
+
+/** Whether dagre auto-layout is enabled for YAML imports. Default: true (on). */
+const autoLayoutEnabled = ref(true)
+
+// ============================================
 // Execution Status
 // ============================================
 
@@ -266,7 +273,7 @@ function handleImportYaml() {
     
     try {
       const content = await file.text()
-      importYamlToGraph(graphInstance.value!, content, true)
+      importYamlToGraph(graphInstance.value!, content, true, { autoLayout: autoLayoutEnabled.value })
       ElMessage.success('YAML imported successfully')
       updateZoomFromGraph()
     } catch (error) {
@@ -608,6 +615,28 @@ onUnmounted(() => {
         </svg>
       </button>
     </div>
+
+    <!-- Divider -->
+    <div class="tw-w-px tw-h-6 tw-bg-neutral-200"></div>
+
+    <!-- Auto-layout toggle -->
+    <div class="tw-flex tw-items-center tw-gap-1">
+      <button
+        class="tw-p-1.5 tw-rounded tw-transition-colors tw-flex tw-items-center tw-gap-1 tw-text-sm tw-font-medium"
+        :class="autoLayoutEnabled ? 'tw-text-primary-600 tw-bg-primary-50 hover:tw-bg-primary-100' : 'tw-text-neutral-400 tw-bg-neutral-50 hover:tw-bg-neutral-100'"
+        title="Toggle auto-layout (dagre)"
+        @click="autoLayoutEnabled = !autoLayoutEnabled"
+      >
+        <svg class="tw-w-4 tw-h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1V5zm10 0a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zM4 15a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1v-4zm10 0a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z" />
+        </svg>
+        <span v-if="autoLayoutEnabled" class="tw-text-xs">Auto</span>
+        <span v-else class="tw-text-xs">Manual</span>
+      </button>
+    </div>
+
+    <!-- Divider -->
+    <div class="tw-w-px tw-h-6 tw-bg-neutral-200"></div>
 
     <!-- Spacer -->
     <div class="tw-flex-1"></div>

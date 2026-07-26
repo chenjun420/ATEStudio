@@ -292,7 +292,7 @@ Your next move: approve the plan to proceed to high-accuracy dual review (Momus 
   - Evidence: `.omo/evidence/task-6-architecture-optimization.json`
   **Commit**: Y | `refactor(events): reorganize event schema to TEMS A4 categories with severity and recoverability`
 
-- [ ] 7. Harden existing SSE heartbeat and fix JetStream replay pagination bug
+- [x] 7. Harden existing SSE heartbeat and fix JetStream replay pagination bug
   **What to do**: The SSE endpoint in `executions.py` already implements keep-alive (`: keep-alive\n\n` at L92) and Last-Event-ID replay (`replay_from_jetstream` at L70-77). Harden these existing mechanisms.
   - **Bug fix — JetStream replay pagination**: `replay_from_jetstream` fetches `batch=100` but doesn't paginate — if >100 events were missed, the rest are silently lost (L135). Fix: loop `fetch(batch=100)` until `StreamNotFoundError` or empty batch.
   - **Harden 1 — reduce heartbeat interval**: Change keep-alive from 30s to 15s (proxies like nginx default to 60s timeout; 30s is marginal).
@@ -324,7 +324,7 @@ Your next move: approve the plan to proceed to high-accuracy dual review (Momus 
   - Evidence: `.omo/evidence/task-7-architecture-optimization.json`
   **Commit**: Y | `fix(sse): harden heartbeat, fix replay pagination, add multi-client support`
 
-- [ ] 8. Add `skip_if` precondition to DSL for rule-based adaptive skipping
+- [x] 8. Add `skip_if` precondition to DSL for rule-based adaptive skipping
   **What to do**: Extend `YamlStep` and `YamlLoop` with a `skip_if` field that allows steps to be skipped based on variable expressions.
   - In `src/shared/dsl.py`: add `skip_if: str | None = None` to `YamlStep` and `YamlLoop`. Add `skip_reason: str | None = None` for logging.
   - In `src/ate_platform/scheduler/scanner_scheduler.py`: before dispatching a step, evaluate `skip_if` via `ConditionEvaluator.evaluate_skip_condition()`. If true, set step status to `SKIPPED` (new `StepStatus.SKIPPED`), log reason, and cascade to dependents (dependents whose preconditions include SKIPPED treat it as satisfied).
@@ -358,7 +358,7 @@ Your next move: approve the plan to proceed to high-accuracy dual review (Momus 
   - Evidence: `.omo/evidence/task-8-architecture-optimization.json`
   **Commit**: Y | `feat(dsl): add skip_if precondition for rule-based adaptive test skipping`
 
-- [ ] 9. Implement frontend state update batching (50ms window + dedup)
+- [x] 9. Implement frontend state update batching (50ms window + dedup)
   **What to do**: Add a batching layer between SSE events and X6 graph updates to reduce reactive overhead.
   - In `frontend/src/composables/useExecutionStatus.ts`: replace direct `graph.setData()` calls with a `BatchBuffer` class.
   - `BatchBuffer` maintains a `Map<nodeId, Partial<NodeData>>`. `push(nodeId, data)` merges data. Every 50ms, `flush()` calls `graph.setData()` once with all accumulated changes, then clears the map.

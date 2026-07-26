@@ -1,11 +1,19 @@
 import type { Graph } from '@antv/x6'
 import type { Cell } from '@antv/x6'
+import { ref, onUnmounted } from 'vue'
+import type { Ref } from 'vue'
+import type { DependencyCheckInput, DependencyCheckOutput } from '@/workers/dependencyCheck.worker'
 
 /**
  * Composable for detecting circular dependencies in X6 graph
  * Uses DFS to check if adding an edge would create a cycle
  * Supports scoped cycle detection: back-edges within loop containers are allowed
+ *
+ * For graphs with > NODE_THRESHOLD nodes, cycle detection is offloaded to a
+ * Web Worker to avoid blocking the main thread.
  */
+
+const NODE_THRESHOLD = 50
 
 /**
  * Find the parent container node for a given node
@@ -41,6 +49,58 @@ export function isWithinContainer(
 }
 
 /**
+ * Serialize graph nodes and edges into arrays for Worker transfer.
+ * Extracts all node IDs and edge [source, target] pairs.
+ */
+function serializeGraph(graph: Graph): { nodes: string[]; edges: [string, string][] } {
+  const nodes = graph.getNodes().map(n => n.id)
+  const edges: [string, string][] = []
+  graph.getEdges().forEach(edge => {
+    const source = edge.getSourceCellId()
+    const target = edge.getTargetCellId()
+    if (source && target) {
+      edges.push([source, target])
+    }
+  })
+  return { nodes, edges }
+}
+
+/**
+ * Check if adding an edge from source to target would create a cycle,
+ * offloading to a Web Worker for large graphs.
+ *
+ * @param worker - The Web Worker instance to use
+ * @param graph - The X6 graph instance
+ * @param sourceId - The source node ID
+ * @param targetId - The target node ID
+ * @returns Promise resolving to true if adding the edge would create a cycle
+ */
+async function wouldCreateCycleWorker(
+  worker: Worker,
+  graph: Graph,
+  sourceId: string,
+  targetId: string
+): Promise<boolean> {
+  const { nodes, edges } = serializeGraph(graph)
+
+  return new Promise<boolean>((resolve) => {
+    const handler = (event: MessageEvent<DependencyCheckOutput>) => {
+      worker.removeEventListener('message', handler)
+      resolve(event.data.hasCycle)
+    }
+    worker.addEventListener('message', handler)
+
+    const input: DependencyCheckInput & { sourceId: string; targetId: string } = {
+      nodes,
+      edges,
+      sourceId,
+      targetId,
+    }
+    worker.postMessage(input)
+  })
+}
+
+/**
  * Check if adding an edge from source to target would create a cycle
  * @param graph - The X6 graph instance
  * @param sourceId - The source node ID
@@ -60,12 +120,6 @@ export function wouldCreateCycle(
     return false
   }
 
-  // If target can already reach source, adding source->target would create a cycle
-  // We need to check if there's a path from target back to source
-
-  // Get all edges in the graph
-  const edges = graph.getEdges()
-
   // Build adjacency list (node -> list of nodes it points to)
   const adjacencyList = new Map<string, Set<string>>()
 
@@ -75,6 +129,7 @@ export function wouldCreateCycle(
   })
 
   // Build adjacency list from edges
+  const edges = graph.getEdges()
   edges.forEach(edge => {
     const source = edge.getSourceCellId()
     const target = edge.getTargetCellId()
@@ -218,14 +273,74 @@ export function validateConnection(
 }
 
 /**
- * Composable function for dependency checking
+ * Composable function for dependency checking.
+ *
+ * Returns `wouldCreateCycleAsync`: for graphs with >50 nodes, offloads to a
+ * Web Worker (lazily created and reused). For ≤50 nodes, runs synchronously
+ * on the UI thread. Also exposes `isChecking` for loading state.
  */
 export function useDependencyCheck() {
+  const isChecking: Ref<boolean> = ref(false)
+  let worker: Worker | null = null
+
+  function getWorker(): Worker {
+    if (!worker) {
+      worker = new Worker(
+        new URL('@/workers/dependencyCheck.worker.ts', import.meta.url),
+        { type: 'module' }
+      )
+    }
+    return worker
+  }
+
+  /**
+   * Check if adding an edge would create a cycle.
+   * For graphs with >50 nodes, delegates to a Web Worker (returns Promise).
+   * For ≤50 nodes, runs synchronously on UI thread.
+   */
+  async function wouldCreateCycleAsync(
+    graph: Graph,
+    sourceId: string,
+    targetId: string,
+    containerId?: string
+  ): Promise<boolean> {
+    // Container-scoped back-edges are always allowed (no cycle in outer scope)
+    if (containerId && isWithinContainer(graph, sourceId, targetId, containerId)) {
+      return false
+    }
+
+    const nodeCount = graph.getNodes().length
+
+    if (nodeCount <= NODE_THRESHOLD) {
+      // Small graph: run on UI thread synchronously
+      return wouldCreateCycle(graph, sourceId, targetId, containerId)
+    }
+
+    // Large graph: offload to Web Worker
+    isChecking.value = true
+    try {
+      const w = getWorker()
+      return await wouldCreateCycleWorker(w, graph, sourceId, targetId)
+    } finally {
+      isChecking.value = false
+    }
+  }
+
+  // Terminate worker on component unmount
+  onUnmounted(() => {
+    if (worker) {
+      worker.terminate()
+      worker = null
+    }
+  })
+
   return {
     wouldCreateCycle,
+    wouldCreateCycleAsync,
     validateConnection,
     getDependencyChain,
     findContainerForNode,
     isWithinContainer,
+    isChecking,
   }
 }
