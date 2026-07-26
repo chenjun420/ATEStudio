@@ -482,7 +482,7 @@ Your next move: approve the plan to proceed to high-accuracy dual review (Momus 
 
 ### Wave 4: Resilience Hardening (P2)
 
-- [ ] 13. Add upload queue size and TTL pruning to SQLiteCache
+- [x] 13. Add upload queue size and TTL pruning to SQLiteCache
   **What to do**: Add configurable limits to the upload queue to prevent disk exhaustion during prolonged NATS outages.
   - In `src/ate_platform/data/cache.py`: add `max_queue_size: int = 1000` and `max_queue_age_seconds: int = 3600` (1 hour) to `SQLiteCache.__init__`.
   - On `enqueue_upload()`, after inserting: `SELECT COUNT(*) FROM upload_queue`. If count > `max_queue_size`, `DELETE FROM upload_queue WHERE id IN (SELECT id FROM upload_queue ORDER BY created_at ASC LIMIT (count - max_queue_size))`.
@@ -510,7 +510,7 @@ Your next move: approve the plan to proceed to high-accuracy dual review (Momus 
   - Evidence: `.omo/evidence/task-13-architecture-optimization.json`
   **Commit**: Y | `feat(cache): add size and TTL pruning to upload queue`
 
-- [ ] 14. Add WatchDog health monitor for _scan_loop
+- [x] 14. Add WatchDog health monitor for _scan_loop
   **What to do**: Create an independent asyncio health monitor that detects _scan_loop stalls.
   - New file `src/ate_platform/scheduler/watchdog.py`: `WatchDog` class with `start(interval=3.0)` — independent asyncio task that checks a shared `heartbeat_counter`. If counter hasn't incremented for `3 * scan_interval` (300ms default), logs CRITICAL, publishes `ALARM.HEARTBEAT_LOST` event, and calls `ScannerScheduler.emergency_shutdown()`.
   - In `scanner_scheduler.py`: increment `self._heartbeat` at the top of each `_scan_loop` iteration (or each `_tick()` call post-Task-1).
@@ -537,7 +537,7 @@ Your next move: approve the plan to proceed to high-accuracy dual review (Momus 
   - Evidence: `.omo/evidence/task-14-architecture-optimization.json`
   **Commit**: Y | `feat(scheduler): add WatchDog health monitor with heartbeat and deadlock detection`
 
-- [ ] 15. Add worker pool exhaustion detection and alarm
+- [x] 15. Add worker pool exhaustion detection and alarm
   **What to do**: Detect when all workers in ThreadPoolExecutor are busy and resource dependencies may cause deadlock.
   - In `src/ate_platform/executor/process_executor.py`: add `_active_count` atomic counter. `execute_async()` increments before submitting, decrements in `done_callback`.
   - Add `get_pool_utilization() -> float` returning `active / max_workers`.
@@ -565,7 +565,7 @@ Your next move: approve the plan to proceed to high-accuracy dual review (Momus 
   - Evidence: `.omo/evidence/task-15-architecture-optimization.json`
   **Commit**: Y | `feat(executor): add worker pool exhaustion detection with deadlock risk alarm`
 
-- [ ] 16. Index failed test sequences in Qdrant for RAG failure diagnosis
+- [x] 16. Index failed test sequences in Qdrant for RAG failure diagnosis
   **What to do**: Extend the planned Qdrant RAG system to index failed test sequences alongside successful ones.
   - New file `src/ate_cloud/services/failure_indexer.py`: `FailureIndexer` class that listens for `STEP_FAILED` and `EXECUTION_COMPLETED` (with `result: FAILED`) events.
   - On failure, extract: `sequence_yaml` (the full sequence), `failed_step_id`, `failed_step_name`, `error_message`, `variable_snapshot` (all variable values at time of failure), `step_history` (ordered list of step status transitions).
@@ -595,10 +595,10 @@ Your next move: approve the plan to proceed to high-accuracy dual review (Momus 
 
 ## Final verification wave
 > Runs in parallel after ALL todos. ALL must APPROVE. Surface results and wait for the user's explicit okay before declaring complete.
-- [ ] F1. Plan compliance audit
-- [ ] F2. Code quality review
-- [ ] F3. Real manual QA
-- [ ] F4. Scope fidelity
+- [x] F1. Plan compliance audit
+- [x] F2. Code quality review
+- [x] F3. Real manual QA
+- [x] F4. Scope fidelity
 
 ## Commit strategy
 - One commit per task (16 commits total), each self-contained and passing tests
