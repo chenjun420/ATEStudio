@@ -1,0 +1,36 @@
+{
+  "max_concurrency": 2,
+  "name": "simple_plan",
+  "scope": {
+    "name": "production"
+  },
+  "steps": [
+    {
+      "export_outputs": false,
+      "id": "step1",
+      "on_fail": null,
+      "params": {
+        "input": "data.csv"
+      },
+      "preconditions": [],
+      "resources": {},
+      "retry": 2,
+      "script": "python script1.py",
+      "timeout": 120
+    },
+    {
+      "export_outputs": false,
+      "id": "step2",
+      "on_fail": "continue",
+      "params": {},
+      "preconditions": [
+        "step1"
+      ],
+      "resources": {},
+      "retry": 0,
+      "script": "python script2.py",
+      "timeout": 60
+    }
+  ],
+  "version": "1.0"
+}

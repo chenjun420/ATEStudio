@@ -1,0 +1,138 @@
+syntax = "proto3";
+
+package ate_platform.drivers.grpc;
+
+// Instrument RPC service — exposes SCPI/VISA instrument methods over gRPC.
+// Allows remote clients to control instruments registered on an InstrumentServer.
+
+service InstrumentService {
+  // Connect to a VISA resource on the server side.
+  rpc Connect(ConnectRequest) returns (ConnectResponse);
+
+  // Disconnect from the current instrument.
+  rpc Disconnect(DisconnectRequest) returns (DisconnectResponse);
+
+  // Send a SCPI query and read the response.
+  rpc Query(QueryRequest) returns (QueryResponse);
+
+  // Send a SCPI write command (no response expected).
+  rpc Write(WriteRequest) returns (WriteResponse);
+
+  // Read a response from the instrument.
+  rpc Read(ReadRequest) returns (ReadResponse);
+
+  // Get instrument identity (*IDN?).
+  rpc GetIdentity(GetIdentityRequest) returns (GetIdentityResponse);
+
+  // Check if the instrument is connected.
+  rpc IsConnected(IsConnectedRequest) returns (IsConnectedResponse);
+
+  // List all registered instruments on the server.
+  rpc ListInstruments(ListInstrumentsRequest) returns (ListInstrumentsResponse);
+}
+
+// --- Connect ---
+
+message ConnectRequest {
+  string session_id = 1;    // Client session identifier
+  string instrument_id = 2; // Registered instrument name on the server
+  string address = 3;       // VISA resource address
+}
+
+message ConnectResponse {
+  bool success = 1;
+  string error = 2;         // Empty on success
+}
+
+// --- Disconnect ---
+
+message DisconnectRequest {
+  string session_id = 1;
+  string instrument_id = 2;
+}
+
+message DisconnectResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+// --- Query ---
+
+message QueryRequest {
+  string session_id = 1;
+  string instrument_id = 2;
+  string command = 3;
+  optional double delay = 4; // Delay in seconds between write and read
+}
+
+message QueryResponse {
+  string response = 1;
+  bool success = 2;
+  string error = 3;
+}
+
+// --- Write ---
+
+message WriteRequest {
+  string session_id = 1;
+  string instrument_id = 2;
+  string command = 3;
+}
+
+message WriteResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+// --- Read ---
+
+message ReadRequest {
+  string session_id = 1;
+  string instrument_id = 2;
+}
+
+message ReadResponse {
+  string response = 1;
+  bool success = 2;
+  string error = 3;
+}
+
+// --- GetIdentity ---
+
+message GetIdentityRequest {
+  string session_id = 1;
+  string instrument_id = 2;
+}
+
+message GetIdentityResponse {
+  string identity = 1;
+  bool success = 2;
+  string error = 3;
+}
+
+// --- IsConnected ---
+
+message IsConnectedRequest {
+  string session_id = 1;
+  string instrument_id = 2;
+}
+
+message IsConnectedResponse {
+  bool connected = 1;
+}
+
+// --- ListInstruments ---
+
+message ListInstrumentsRequest {
+  string session_id = 1;
+}
+
+message InstrumentInfo {
+  string instrument_id = 1;
+  string address = 2;
+  bool connected = 3;
+}
+
+message ListInstrumentsResponse {
+  repeated InstrumentInfo instruments = 1;
+}

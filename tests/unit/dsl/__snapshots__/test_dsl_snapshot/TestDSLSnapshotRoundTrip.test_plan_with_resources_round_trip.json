@@ -1,0 +1,52 @@
+{
+  "max_concurrency": 1,
+  "name": "resource_plan",
+  "scope": {
+    "name": "production"
+  },
+  "steps": [
+    {
+      "export_outputs": false,
+      "id": "init",
+      "on_fail": null,
+      "params": {},
+      "preconditions": [],
+      "resources": {
+        "gpib_bus": 1
+      },
+      "retry": 0,
+      "script": "init.py",
+      "timeout": 30
+    },
+    {
+      "export_outputs": true,
+      "id": "measure",
+      "on_fail": null,
+      "params": {},
+      "preconditions": [
+        "init"
+      ],
+      "resources": {
+        "dmm": 1,
+        "gpib_bus": 1
+      },
+      "retry": 0,
+      "script": "measure.py",
+      "timeout": 60
+    },
+    {
+      "export_outputs": false,
+      "id": "cleanup",
+      "on_fail": "ignore",
+      "params": {},
+      "preconditions": [
+        "measure"
+      ],
+      "resources": {},
+      "retry": 0,
+      "script": "cleanup.py",
+      "timeout": 60
+    }
+  ],
+  "version": "1.5"
+}

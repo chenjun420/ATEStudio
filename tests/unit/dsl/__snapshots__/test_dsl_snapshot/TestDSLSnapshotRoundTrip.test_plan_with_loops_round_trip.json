@@ -1,0 +1,81 @@
+{
+  "max_concurrency": 4,
+  "name": "loop_plan",
+  "scope": {
+    "environment": "staging"
+  },
+  "steps": [
+    {
+      "collection": null,
+      "condition": null,
+      "count": 5,
+      "execution_mode": "SERIAL",
+      "id": "for_loop",
+      "iterator_var": null,
+      "loop_type": "FOR",
+      "max_iterations": 1000,
+      "steps": [
+        {
+          "export_outputs": false,
+          "id": "inner_step",
+          "on_fail": null,
+          "params": {
+            "channel": 1
+          },
+          "preconditions": [],
+          "resources": {},
+          "retry": 0,
+          "script": "measure.py",
+          "timeout": 60
+        }
+      ]
+    },
+    {
+      "collection": null,
+      "condition": "result.status == 'pending'",
+      "count": null,
+      "execution_mode": "SERIAL",
+      "id": "while_loop",
+      "iterator_var": null,
+      "loop_type": "WHILE",
+      "max_iterations": 100,
+      "steps": [
+        {
+          "export_outputs": false,
+          "id": "poll",
+          "on_fail": null,
+          "params": {},
+          "preconditions": [],
+          "resources": {},
+          "retry": 0,
+          "script": "poll.py",
+          "timeout": 60
+        }
+      ]
+    },
+    {
+      "collection": "channels",
+      "condition": null,
+      "count": null,
+      "execution_mode": "PARALLEL",
+      "id": "foreach_loop",
+      "iterator_var": "ch",
+      "loop_type": "FOREACH",
+      "max_iterations": 1000,
+      "steps": [
+        {
+          "export_outputs": false,
+          "id": "measure",
+          "on_fail": null,
+          "params": {},
+          "preconditions": [],
+          "resources": {},
+          "retry": 0,
+          "script": "measure.py",
+          "timeout": 60
+        }
+      ]
+    }
+  ],
+  "version": "2.0"
+}

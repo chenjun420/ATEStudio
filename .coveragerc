@@ -1,0 +1,12 @@
+[run]
+source = src
+branch = True
+omit =
+    */tests/*
+    */__init__.py
+    */migrations/*
+
+[report]
+fail_under = 80
+show_missing = True
+skip_covered = False

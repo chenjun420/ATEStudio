@@ -37,6 +37,7 @@ def _is_in_async_context() -> bool:
         return False
 
 from ..types import Condition, LoopResult, StepStatus
+from .adaptive_skip import AdaptiveConditionEvaluator, SkipConditions
 from .condition_evaluator import ConditionEvaluator
 from .event_bus import Event, EventBus, EventType
 from .resource_manager import ResourceManager
@@ -103,6 +104,7 @@ class ScannerScheduler:
         resource_manager: ResourceManager,
         scan_interval: float = DEFAULT_SCAN_INTERVAL,
         step_executor: StepExecutor | None = None,
+        adaptive_skip_evaluator: AdaptiveConditionEvaluator | None = None,
     ) -> None:
         """Initialize the scanner scheduler.
 
@@ -115,6 +117,10 @@ class ScannerScheduler:
             scan_interval: Time between scans in seconds (default 100ms)
             step_executor: Optional StepExecutor for step execution.
                 Defaults to ProcessStepExecutor if not provided.
+            adaptive_skip_evaluator: Optional AdaptiveConditionEvaluator for
+                context-aware skip conditions (SPC Cpk, fault probability,
+                product context). When None, only basic skip_if expressions
+                are evaluated.
         """
         self._event_bus: EventBus = event_bus
         self._registry: StepRegistry = registry
@@ -122,6 +128,9 @@ class ScannerScheduler:
         self._variable_space: VariableSpace = variable_space
         self._resource_manager: ResourceManager = resource_manager
         self._scan_interval: float = scan_interval
+        self._adaptive_skip_evaluator: AdaptiveConditionEvaluator | None = (
+            adaptive_skip_evaluator
+        )
 
         # Step executor — defaults to ProcessStepExecutor
         if step_executor is not None:
@@ -160,6 +169,12 @@ class ScannerScheduler:
         # Skip condition registry: maps step_id → (skip_if_expression, skip_reason).
         # Populated via register_skip_conditions() before start().
         self._skip_conditions: dict[str, tuple[str, str | None]] = {}
+
+        # Adaptive skip conditions: maps step_id → SkipConditions (typed).
+        # Populated via register_adaptive_skip_conditions() before start().
+        # When present, _evaluate_step_skip() checks these first, falling back
+        # to basic skip_if expressions when no adaptive conditions are registered.
+        self._adaptive_skip_conditions: dict[str, SkipConditions] = {}
 
         # Timestamp of last reactive dispatch — used by watchdog to detect
         # whether any progress happened since the last scan.
@@ -300,6 +315,28 @@ class ScannerScheduler:
         """
         self._skip_conditions: dict[str, tuple[str, str | None]] = dict(skip_conditions)
 
+    def register_adaptive_skip_conditions(
+        self,
+        adaptive_skip_conditions: dict[str, SkipConditions],
+    ) -> None:
+        """Register context-aware adaptive skip conditions for steps.
+
+        These are evaluated before dispatching a step, taking precedence
+        over basic skip_if expressions. The AdaptiveConditionEvaluator
+        integrates SPC Cpk, FaultPredictor probability, step results,
+        and product context variables to decide whether a step should
+        be skipped.
+
+        If a step has both adaptive and basic skip_if conditions,
+        adaptive conditions are checked first. If adaptive conditions
+        match, the step is skipped immediately. Otherwise, the basic
+        skip_if expression is evaluated as a fallback.
+
+        Args:
+            adaptive_skip_conditions: Mapping of step_id to SkipConditions.
+        """
+        self._adaptive_skip_conditions = dict(adaptive_skip_conditions)
+
     def _setup_event_handlers(self) -> None:
         """Set up event subscriptions with reactive dispatch wiring."""
         scheduler_self = self  # Capture for closures
@@ -416,14 +453,11 @@ class ScannerScheduler:
             if step_id in self._notified_ready or step_id in self._pending_dispatch:
                 continue
 
-            # Check skip_if before dispatching
-            skip_info = self._skip_conditions.get(step_id)
-            if skip_info is not None:
-                skip_expr, skip_reason = skip_info
-                if self._evaluate_skip_expression(skip_expr):
-                    reason = skip_reason or f"skip_if: {skip_expr}"
-                    await self._handle_step_skipped(step_id, reason)
-                    continue
+            # Check skip conditions before dispatching (adaptive + basic)
+            if self._evaluate_step_skip(step_id):
+                reason = self._get_skip_reason(step_id)
+                await self._handle_step_skipped(step_id, reason)
+                continue
 
             # Get condition for the step (if any)
             condition = self._registry.get_condition(step_id)
@@ -517,15 +551,11 @@ class ScannerScheduler:
             if status.value != "PENDING":
                 return  # No longer pending
 
-            # Check skip_if before any other work
-            skip_info = self._skip_conditions.get(step_id)
-            if skip_info is not None:
-                skip_expr, skip_reason = skip_info
-                should_skip = self._evaluate_skip_expression(skip_expr)
-                if should_skip:
-                    reason = skip_reason or f"skip_if: {skip_expr}"
-                    await self._handle_step_skipped(step_id, reason)
-                    return
+            # Check skip conditions before any other work (adaptive + basic)
+            if self._evaluate_step_skip(step_id):
+                reason = self._get_skip_reason(step_id)
+                await self._handle_step_skipped(step_id, reason)
+                return
 
             # Check if already notified (race with emergency scan)
             if step_id in self._notified_ready:
@@ -688,6 +718,72 @@ class ScannerScheduler:
             variable_space=self._variable_space,
         )
         return evaluator.evaluate_skip_condition(expression)
+
+    def _evaluate_step_skip(self, step_id: str) -> bool:
+        """Evaluate whether a step should be skipped (adaptive + basic).
+
+        Checks adaptive skip conditions first (context-aware: SPC Cpk,
+        fault probability, product context, step results). If adaptive
+        conditions are registered for this step and match, returns True.
+
+        Falls back to basic skip_if expression evaluation when no
+        adaptive conditions are registered or when adaptive conditions
+        don't match but a basic skip_if expression exists.
+
+        Args:
+            step_id: The step to evaluate.
+
+        Returns:
+            True if the step should be skipped, False otherwise.
+        """
+        # Phase 1: Check adaptive skip conditions (context-aware)
+        adaptive_cond = self._adaptive_skip_conditions.get(step_id)
+        if adaptive_cond is not None and self._adaptive_skip_evaluator is not None:
+            # Update step_results in the evaluator from current registry state
+            all_steps = self._registry.get_all_steps()
+            step_results: dict[str, Any] = {}
+            for sid, st in all_steps.items():
+                step_results[sid] = {"status": st, "outputs": {}}
+            self._adaptive_skip_evaluator._step_results = step_results
+            self._adaptive_skip_evaluator._variable_space = self._variable_space
+
+            if self._adaptive_skip_evaluator.should_skip(adaptive_cond):
+                return True
+
+        # Phase 2: Fall back to basic skip_if expression
+        skip_info = self._skip_conditions.get(step_id)
+        if skip_info is not None:
+            skip_expr, _skip_reason = skip_info
+            return self._evaluate_skip_expression(skip_expr)
+
+        return False
+
+    def _get_skip_reason(self, step_id: str) -> str:
+        """Get the human-readable skip reason for a step.
+
+        Checks adaptive skip conditions first (for their declared reason),
+        then falls back to the basic skip_if reason or expression.
+
+        Args:
+            step_id: The step to get the reason for.
+
+        Returns:
+            Human-readable reason string.
+        """
+        # Adaptive reason
+        adaptive_cond = self._adaptive_skip_conditions.get(step_id)
+        if adaptive_cond is not None and self._adaptive_skip_evaluator is not None:
+            reason = self._adaptive_skip_evaluator.evaluate_skip_reason(adaptive_cond)
+            if reason:
+                return reason
+
+        # Basic skip_if reason
+        skip_info = self._skip_conditions.get(step_id)
+        if skip_info is not None:
+            skip_expr, skip_reason = skip_info
+            return skip_reason or f"skip_if: {skip_expr}"
+
+        return "Adaptive skip condition met"
 
     async def _handle_step_skipped(self, step_id: str, reason: str) -> None:
         """Mark a step as SKIPPED and publish the STEP_SKIPPED event.
@@ -879,4 +975,6 @@ class ScannerScheduler:
             "dependency_index_size": len(self._dependency_index),
             "last_dispatch_time": self._last_dispatch_time,
             "watchdog_running": self._watchdog is not None and self._watchdog.is_running,
+            "adaptive_skip_enabled": self._adaptive_skip_evaluator is not None,
+            "adaptive_skip_count": len(self._adaptive_skip_conditions),
         }

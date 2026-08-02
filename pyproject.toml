@@ -22,6 +22,10 @@ dependencies = [
     "sse-starlette>=2.0.0",
     "gitpython>=3.1.0",
     "qdrant-client>=1.12.0",
+    "langchain-openai>=0.2.0",
+    "langchain-core>=0.3.0",
+    "langchain-neo4j>=0.2.0",
+    "neo4j>=5.0.0",
 ]
 
 [project.optional-dependencies]
@@ -53,8 +57,15 @@ strict = true
 warn_return_any = true
 warn_unused_configs = true
 [[tool.mypy.overrides]]
-module = ["pyvisa", "pyvisa.*", "nats", "nats.*", "aiosqlite", "httpx", "sqlalchemy", "sqlalchemy.*", "asyncpg", "git", "git.*"]
+module = ["pyvisa", "pyvisa.*", "nats", "nats.*", "aiosqlite", "httpx", "sqlalchemy", "sqlalchemy.*", "asyncpg", "git", "git.*", "grpc", "grpc.*", "google.protobuf", "google.protobuf.*"]
 ignore_missing_imports = true
+
+# Dynamic protobuf message classes (built at runtime via descriptor_pool +
+# message_factory) are not statically visible to mypy — they appear as plain
+# variables rather than types. Suppress the resulting type-check errors.
+[[tool.mypy.overrides]]
+module = ["ate_platform.drivers.grpc.protocol", "ate_platform.drivers.grpc.grpc_driver_stub", "ate_platform.drivers.grpc.instrument_server"]
+disable_error_code = ["valid-type", "attr-defined", "no-any-return", "misc", "unused-ignore"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

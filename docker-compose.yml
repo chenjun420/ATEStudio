@@ -1,0 +1,219 @@
+# =============================================================================
+# ATE Studio - Docker Compose Deployment
+#
+# Profiles:
+#   dev   — All services (ate-cloud + ate-platform + nats + qdrant + neo4j)
+#   cloud — Cloud only (ate-cloud + nats + qdrant + neo4j, no ate-platform)
+#
+# Usage:
+#   docker compose --profile dev up -d       # Full stack (development)
+#   docker compose --profile cloud up -d     # Cloud-only deployment
+#
+# Environment variables (set in .env file or shell):
+#   NEO4J_PASSWORD               Neo4j password (default: atestudio)
+#   ATE_CLOUD_DATABASE_TYPE      sqlite | postgresql | mysql (default: sqlite)
+#   ATE_CLOUD_EMBEDDING_DIMENSIONS  Embedding vector size (default: 1536)
+#   ATE_SIMULATION_MODE          true | false (default: true for Docker)
+# =============================================================================
+
+name: ate-studio
+
+services:
+  # ---------------------------------------------------------------------------
+  # NATS JetStream — Cloud-edge messaging (required, no silent degradation)
+  # ---------------------------------------------------------------------------
+  nats:
+    profiles: [dev, cloud]
+    image: nats:2.10-alpine
+    command: >-
+      -js
+      --store_dir /data/jetstream
+      -m 8222
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    volumes:
+      - nats-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8222/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+    networks:
+      - ate-network
+
+  # ---------------------------------------------------------------------------
+  # Qdrant — Vector database for fault indexing and RAG (required)
+  # ---------------------------------------------------------------------------
+  qdrant:
+    profiles: [dev, cloud]
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant-data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:6333/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1.0'
+    networks:
+      - ate-network
+
+  # ---------------------------------------------------------------------------
+  # Neo4j 5 — Knowledge graph for FMEA diagnostics (required)
+  # ---------------------------------------------------------------------------
+  neo4j:
+    profiles: [dev, cloud]
+    image: neo4j:5-community
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4j-data:/data
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-atestudio}
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_server_memory_heap_max__size: 512M
+      NEO4J_server_memory_pagecache_size: 256M
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p '${NEO4J_PASSWORD:-atestudio}' 'RETURN 1'"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+    networks:
+      - ate-network
+
+  # ---------------------------------------------------------------------------
+  # ate-cloud — FastAPI cloud service (API, SSE, script versioning, RAG)
+  # ---------------------------------------------------------------------------
+  ate-cloud:
+    profiles: [dev, cloud]
+    build: .
+    image: ate-studio:latest
+    ports:
+      - "8000:8000"
+    volumes:
+      - ate-scripts:/app/scripts
+      - ate-data:/app/data
+    environment:
+      ATE_CLOUD_DATABASE_TYPE: ${ATE_CLOUD_DATABASE_TYPE:-sqlite}
+      ATE_CLOUD_SQLITE_DB_PATH: /app/data/ate_platform.db
+      ATE_CLOUD_NATS_URL: nats://nats:4222
+      ATE_CLOUD_QDRANT_URL: http://qdrant:6333
+      ATE_CLOUD_EMBEDDING_DIMENSIONS: ${ATE_CLOUD_EMBEDDING_DIMENSIONS:-1536}
+      ATE_SIMULATION_MODE: ${ATE_SIMULATION_MODE:-true}
+      SCRIPTS_ROOT_DIR: /app/scripts
+    depends_on:
+      nats:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/api/v1/health/db"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1.0'
+    networks:
+      - ate-network
+
+  # ---------------------------------------------------------------------------
+  # ate-platform — Edge execution engine (JetStreamWorker)
+  # Dev-only: edge workers run on production stations, not in cloud deploy
+  # ---------------------------------------------------------------------------
+  ate-platform:
+    profiles: [dev]
+    build: .
+    image: ate-studio:latest
+    command:
+      - sh
+      - -c
+      - |
+        python -c "
+        import asyncio, os
+        from ate_platform.scheduler.jetstream_worker import JetStreamWorker
+
+        async def main():
+            worker = JetStreamWorker(
+                nats_url=os.environ.get('ATE_CLOUD_NATS_URL', 'nats://nats:4222')
+            )
+            await worker.start()
+            print(f'JetStreamWorker {worker.worker_id} started')
+            while True:
+                await worker.pull_and_process_one(timeout=5.0)
+
+        asyncio.run(main())
+        "
+    volumes:
+      - ate-scripts:/app/scripts
+      - ate-data:/app/data
+    environment:
+      ATE_CLOUD_NATS_URL: nats://nats:4222
+      ATE_SIMULATION_MODE: ${ATE_SIMULATION_MODE:-true}
+      ATE_PLATFORM_WORKER_ID_PATH: /app/data/worker_id
+    depends_on:
+      nats:
+        condition: service_healthy
+      ate-cloud:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1.0'
+    networks:
+      - ate-network
+
+# =============================================================================
+# Volumes — persistent data storage
+# =============================================================================
+volumes:
+  nats-data:       # NATS JetStream persistent storage
+  qdrant-data:     # Qdrant vector index storage
+  neo4j-data:      # Neo4j graph database storage
+  ate-scripts:     # Shared test scripts (ate-cloud writes, ate-platform reads)
+  ate-data:        # SQLite database + worker ID
+
+# =============================================================================
+# Network — custom bridge for service isolation
+# =============================================================================
+networks:
+  ate-network:
+    driver: bridge

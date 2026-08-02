@@ -7,7 +7,12 @@ import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
  * - /                     - Redirects to sequence editor (default landing)
  * - /sequence             - Sequence diagram editor (main workspace)
  * - /sequence/:id         - Open specific sequence
+ * - /dashboard            - Production dashboard
+ * - /measurements         - Measurement explorer with SPC charts
+ * - /history              - Execution history with filters and detail panel
+ * - /stations             - Station management
  * - /settings             - Application settings
+ * - /operator/:station_id - Read-only operator interaction mode (no sidebar)
  */
 const routes: RouteRecordRaw[] = [
   {
@@ -34,6 +39,42 @@ const routes: RouteRecordRaw[] = [
     props: true,
   },
   {
+    path: '/dashboard',
+    name: 'Dashboard',
+    component: () => import('@/views/Dashboard.vue'),
+    meta: {
+      title: 'Dashboard',
+      description: 'Production overview dashboard',
+    },
+  },
+  {
+    path: '/measurements',
+    name: 'MeasurementExplorer',
+    component: () => import('@/components/MeasurementExplorer.vue'),
+    meta: {
+      title: 'Measurement Explorer',
+      description: 'SPC control charts and measurement analysis',
+    },
+  },
+  {
+    path: '/history',
+    name: 'ExecutionHistory',
+    component: () => import('@/views/ExecutionHistory.vue'),
+    meta: {
+      title: 'Execution History',
+      description: 'Browse and filter execution history',
+    },
+  },
+  {
+    path: '/stations',
+    name: 'StationManagement',
+    component: () => import('@/views/StationManagement.vue'),
+    meta: {
+      title: 'Station Management',
+      description: 'Workstation monitoring and management',
+    },
+  },
+  {
     path: '/settings',
     name: 'Settings',
     component: () => import('@/views/Settings/index.vue'),
@@ -41,6 +82,16 @@ const routes: RouteRecordRaw[] = [
       title: 'Settings',
       description: 'Application settings',
     },
+  },
+  {
+    path: '/operator/:station_id',
+    name: 'OperatorView',
+    component: () => import('@/views/OperatorView.vue'),
+    meta: {
+      title: 'Operator Station',
+      description: 'Read-only operator interaction mode',
+    },
+    props: true,
   },
   {
     path: '/:pathMatch(.*)*',

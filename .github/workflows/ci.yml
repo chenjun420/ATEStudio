@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'src/**'
+      - 'frontend/src/**'
+      - 'tests/**'
+      - 'pyproject.toml'
+  pull_request:
+    branches: [main, master]
+    paths:
+      - 'src/**'
+      - 'frontend/src/**'
+      - 'tests/**'
+      - 'pyproject.toml'
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+      - name: Install dependencies
+        run: uv sync --group dev
+      - name: Ruff check
+        run: uv run ruff check .
+      - name: MyPy type check
+        run: uv run mypy src/
+
+  test:
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+      - name: Install dependencies
+        run: uv sync --group dev
+      - name: Install pytest-cov
+        run: uv pip install pytest-cov
+      - name: Run tests with coverage
+        run: uv run pytest tests/ -v --cov=src/ --cov-branch --cov-fail-under=80
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Vue type check
+        run: npx vue-tsc --noEmit
+      - name: Vitest run
+        run: npx vitest run
+
+  security:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - name: Install dependencies
+        run: uv sync
+      - name: Install bandit
+        run: uv pip install bandit
+      - name: Bandit security scan
+        run: uv run bandit -r src/ -ll
