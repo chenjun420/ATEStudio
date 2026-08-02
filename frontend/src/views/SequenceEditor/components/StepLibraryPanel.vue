@@ -508,7 +508,7 @@ function getCategoryIcon(categoryName: string): string {
 
 .tab-button.active {
   background: var(--color-bg-tertiary, #f3f4f6);
-  color: var(--color-primary, #8b5cf6);
+  color: var(--color-primary, #409eff);
 }
 
 .tab-icon {
@@ -522,7 +522,7 @@ function getCategoryIcon(categoryName: string): string {
 }
 
 .tab-button.active .tab-label {
-  color: var(--color-primary, #8b5cf6);
+  color: var(--color-primary, #409eff);
 }
 
 .tab-count {
@@ -534,7 +534,7 @@ function getCategoryIcon(categoryName: string): string {
 }
 
 .tab-button.active .tab-count {
-  background: var(--color-primary, #8b5cf6);
+  background: var(--color-primary, #409eff);
   color: white;
 }
 
@@ -566,7 +566,7 @@ function getCategoryIcon(categoryName: string): string {
   width: 24px;
   height: 24px;
   border: 2px solid var(--color-border-default, #e5e7eb);
-  border-top-color: var(--color-primary, #8b5cf6);
+  border-top-color: var(--color-primary, #409eff);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
@@ -655,7 +655,7 @@ function getCategoryIcon(categoryName: string): string {
 }
 
 .script-item:hover {
-  border-color: var(--color-primary, #8b5cf6);
+  border-color: var(--color-primary, #409eff);
   box-shadow: 0 2px 4px rgba(139, 92, 246, 0.1);
 }
 
@@ -735,7 +735,7 @@ function getCategoryIcon(categoryName: string): string {
 }
 
 .template-item:hover {
-  border-color: var(--color-primary, #8b5cf6);
+  border-color: var(--color-primary, #409eff);
   box-shadow: 0 2px 4px rgba(139, 92, 246, 0.1);
 }
 
@@ -782,7 +782,7 @@ function getCategoryIcon(categoryName: string): string {
 
 .preview-label {
   font-size: 0.625rem;
-  color: var(--color-primary, #8b5cf6);
+  color: var(--color-primary, #409eff);
   padding: 0.125rem 0.375rem;
   background: rgba(139, 92, 246, 0.1);
   border-radius: var(--radius-sm, 0.25rem);

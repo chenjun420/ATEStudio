@@ -1,9 +1,11 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
+import { useAuth } from '@/composables/useAuth'
 
 /**
  * Route definitions for ATE Studio
  *
  * Structure:
+ * - /login               - Login page (public, no layout)
  * - /                     - Portal home page (app entry cards)
  * - /node/*               - Node Management app (wrapped in AppLayout)
  * - /flow/*               - Flow Management app (wrapped in AppLayout)
@@ -16,6 +18,17 @@ import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
  */
 
 const routes: RouteRecordRaw[] = [
+  // Login page (public, no layout)
+  {
+    path: '/login',
+    name: 'Login',
+    component: () => import('@/views/Login.vue'),
+    meta: {
+      title: 'Login',
+      public: true,
+    },
+  },
+
   // Portal home page
   {
     path: '/',
@@ -142,6 +155,18 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '系统设置' },
       },
       {
+        path: 'users',
+        name: 'UserManagement',
+        component: () => import('@/views/UserManagement.vue'),
+        meta: { title: '用户管理', requiresAdmin: true },
+      },
+      {
+        path: 'roles',
+        name: 'RoleManagement',
+        component: () => import('@/views/RoleManagement.vue'),
+        meta: { title: '角色权限', requiresAuth: true, requiresAdmin: true },
+      },
+      {
         path: 'changeover',
         name: 'ProductChangeover',
         component: () => import('@/views/ProductChangeover.vue'),
@@ -199,10 +224,27 @@ const router = createRouter({
   },
 })
 
-// Navigation guard for page title updates
+// Navigation guard — auth check + page title
 router.beforeEach((to) => {
   const title = to.meta.title as string | undefined
   document.title = title ? `${title} | ATE Studio` : 'ATE Studio'
+
+  const { isAuthenticated, isAdmin } = useAuth()
+
+  // If going to /login and already authenticated, redirect to /
+  if (to.path === '/login' && isAuthenticated.value) {
+    return { path: '/' }
+  }
+
+  // If route is not public and user is not authenticated, redirect to login
+  if (!to.meta.public && !isAuthenticated.value) {
+    return { path: '/login', query: { redirect: to.fullPath } }
+  }
+
+  // Admin-only routes
+  if (to.meta.requiresAdmin && !isAdmin.value) {
+    return { path: '/' }
+  }
 })
 
 export default router

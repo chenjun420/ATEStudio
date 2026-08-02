@@ -18,6 +18,18 @@ class LoginRequest(BaseModel):
     password: str = Field(..., min_length=1)
 
 
+class RegisterRequest(BaseModel):
+    """Registration request with username and password.
+
+    Attributes:
+        username: Desired login name (1-255 characters, unique).
+        password: Plaintext password (minimum 8 characters).
+    """
+
+    username: str = Field(..., min_length=1, max_length=255)
+    password: str = Field(..., min_length=8)
+
+
 class RefreshRequest(BaseModel):
     """Token refresh request.
 

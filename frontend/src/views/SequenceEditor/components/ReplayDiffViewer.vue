@@ -300,10 +300,10 @@ function cellClass(row: DiffRow, side: 'original' | 'replayed'): string {
   flex-direction: column;
   height: 100%;
   min-height: 200px;
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--color-border-default);
   border-radius: 6px;
   overflow: hidden;
-  background: #ffffff;
+  background: var(--color-bg-elevated);
 }
 
 /* Summary header */
@@ -311,14 +311,14 @@ function cellClass(row: DiffRow, side: 'original' | 'replayed'): string {
   display: flex;
   gap: 1rem;
   padding: 0.5rem 0.75rem;
-  background: #f9fafb;
-  border-bottom: 1px solid #e5e7eb;
+  background: var(--color-bg-secondary);
+  border-bottom: 1px solid var(--color-border-default);
   font-size: 0.75rem;
-  color: #4b5563;
+  color: var(--color-text-secondary);
 }
 
 .summary-item strong {
-  color: #111827;
+  color: var(--color-text-primary);
 }
 
 .summary-added strong {
@@ -341,15 +341,15 @@ function cellClass(row: DiffRow, side: 'original' | 'replayed'): string {
   justify-content: center;
   flex: 1;
   padding: 2rem;
-  color: #6b7280;
+  color: var(--color-text-secondary);
   text-align: center;
 }
 
 /* Column headers */
 .diff-header {
   display: flex;
-  border-bottom: 1px solid #e5e7eb;
-  background: #f3f4f6;
+  border-bottom: 1px solid var(--color-border-default);
+  background: var(--color-bg-tertiary);
 }
 
 .diff-col-header {
@@ -357,20 +357,20 @@ function cellClass(row: DiffRow, side: 'original' | 'replayed'): string {
   padding: 0.5rem 0.75rem;
   font-size: 0.75rem;
   font-weight: 600;
-  color: #374151;
+  color: var(--color-text-primary);
 }
 
 .diff-col-original {
-  border-right: 1px solid #e5e7eb;
+  border-right: 1px solid var(--color-border-default);
 }
 
 .diff-col-replayed {
-  border-left: 1px solid #e5e7eb;
+  border-left: 1px solid var(--color-border-default);
 }
 
 .diff-col-divider {
   width: 1px;
-  background: #e5e7eb;
+  background: var(--color-border-default);
 }
 
 /* Virtual scroller */
@@ -383,7 +383,7 @@ function cellClass(row: DiffRow, side: 'original' | 'replayed'): string {
 .diff-row {
   display: flex;
   height: 100%;
-  border-bottom: 1px solid #f3f4f6;
+  border-bottom: 1px solid var(--color-border-default);
 }
 
 .diff-cell {
@@ -398,44 +398,44 @@ function cellClass(row: DiffRow, side: 'original' | 'replayed'): string {
 }
 
 .diff-cell-original {
-  border-right: 1px solid #f3f4f6;
+  border-right: 1px solid var(--color-border-default);
 }
 
 .diff-cell-replayed {
-  border-left: 1px solid #f3f4f6;
+  border-left: 1px solid var(--color-border-default);
 }
 
 .diff-cell-divider {
   width: 1px;
-  background: #f3f4f6;
+  background: var(--color-border-default);
 }
 
 .cell-time {
-  color: #6b7280;
+  color: var(--color-text-secondary);
   white-space: nowrap;
 }
 
 .cell-step {
-  color: #374151;
+  color: var(--color-text-primary);
   font-weight: 500;
   white-space: nowrap;
 }
 
 .cell-type {
-  color: #4b5563;
+  color: var(--color-text-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .cell-placeholder {
-  color: #d1d5db;
+  color: var(--color-text-tertiary);
   font-style: italic;
 }
 
 /* Row highlight colors */
 .diff-row-same {
-  background: #ffffff;
+  background: var(--color-bg-elevated);
 }
 
 .diff-row-added {
@@ -467,6 +467,6 @@ function cellClass(row: DiffRow, side: 'original' | 'replayed'): string {
 }
 
 .cell-empty {
-  background: #f9fafb;
+  background: var(--color-bg-secondary);
 }
 </style>

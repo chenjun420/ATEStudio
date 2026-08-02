@@ -32,6 +32,8 @@ def _dev_user() -> User:
         role="admin",
         scopes=[],
         is_active=True,
+        theme_mode="auto",
+        language="en",
     )
 
 
@@ -58,9 +60,10 @@ async def get_current_user(
         HTTPException: 401 if not authenticated or token invalid.
         HTTPException: 403 if required scopes are missing.
     """
-    if settings.dev_mode:
+    if settings.dev_mode and credentials is None:
         return _dev_user()
 
+    # In dev mode with a token, or in production: decode the JWT and fetch the real user.
     if credentials is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

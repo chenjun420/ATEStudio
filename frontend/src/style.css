@@ -36,7 +36,7 @@
   /* Border colors */
   --color-border-default: #e5e7eb;
   --color-border-muted: #f3f4f6;
-  --color-border-accent: rgba(139, 92, 246, 0.3);
+  --color-border-accent: rgba(64, 158, 255, 0.3);
   
   /* Semantic colors */
   --color-success: #67c23a;
@@ -62,7 +62,7 @@
   --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
   --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
   --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
-  --shadow-glow: 0 0 20px rgba(139, 92, 246, 0.3);
+  --shadow-glow: 0 0 20px rgba(64, 158, 255, 0.3);
   
   /* Transitions */
   --transition-fast: 150ms ease;
@@ -79,27 +79,163 @@
   --z-tooltip: 1070;
 }
 
-/* Dark mode */
-@media (prefers-color-scheme: dark) {
-  :root {
-    --color-bg-primary: #0f0f11;
-    --color-bg-secondary: #1a1a1d;
-    --color-bg-tertiary: #27272a;
-    --color-bg-elevated: #1f1f23;
-    
-    --color-text-primary: #f9fafb;
-    --color-text-secondary: #d1d5db;
-    --color-text-tertiary: #9ca3af;
-    
-    --color-border-default: #374151;
-    --color-border-muted: #1f2937;
-    --color-border-accent: rgba(167, 139, 250, 0.3);
-    
-    --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.3);
-    --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.4), 0 2px 4px -1px rgba(0, 0, 0, 0.3);
-    --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.4), 0 4px 6px -2px rgba(0, 0, 0, 0.3);
-    --shadow-glow: 0 0 25px rgba(139, 92, 246, 0.4);
-  }
+/* ============================================
+   Dark Theme — applied via html.dark class
+   Element Plus dark css-vars.css handles EP components;
+   these override our custom design tokens.
+   ============================================ */
+html.dark {
+  /* Core palette — keep blue accent, slightly brighter for dark bg */
+  --color-primary: #409eff;
+  --color-primary-light: #66b1ff;
+  --color-primary-dark: #337ecc;
+
+  /* Background colors */
+  --color-bg-primary: #141414;
+  --color-bg-secondary: #1d1e1f;
+  --color-bg-tertiary: #262727;
+  --color-bg-elevated: #1d1e1f;
+
+  /* Text colors */
+  --color-text-primary: #e5eaf3;
+  --color-text-secondary: #cfd3dc;
+  --color-text-tertiary: #a3a6ad;
+  --color-text-inverse: #ffffff;
+
+  /* Border colors */
+  --color-border-default: #363637;
+  --color-border-muted: #2a2b2c;
+  --color-border-accent: rgba(64, 158, 255, 0.3);
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.4), 0 2px 4px -1px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.4), 0 4px 6px -2px rgba(0, 0, 0, 0.3);
+  --shadow-glow: 0 0 25px rgba(64, 158, 255, 0.3);
+}
+
+/* ============================================
+   Element Plus Dark Mode Overrides
+   Ensures all EP components use our dark tokens
+   ============================================ */
+html.dark .el-card {
+  --el-card-bg-color: var(--color-bg-elevated);
+  --el-card-border-color: var(--color-border-default);
+}
+
+html.dark .el-table {
+  --el-table-bg-color: var(--color-bg-elevated);
+  --el-table-tr-bg-color: var(--color-bg-elevated);
+  --el-table-header-bg-color: var(--color-bg-secondary);
+  --el-table-border-color: var(--color-border-default);
+  --el-table-text-color: var(--color-text-primary);
+  --el-table-header-text-color: var(--color-text-secondary);
+}
+
+html.dark .el-table__row:hover > td {
+  background-color: var(--color-bg-tertiary) !important;
+}
+
+html.dark .el-dialog {
+  --el-dialog-bg-color: var(--color-bg-elevated);
+  --el-dialog-title-font-size: 16px;
+}
+
+html.dark .el-dialog__title,
+html.dark .el-dialog__body {
+  color: var(--color-text-primary);
+}
+
+html.dark .el-input {
+  --el-input-bg-color: var(--color-bg-primary);
+  --el-input-border-color: var(--color-border-default);
+  --el-input-text-color: var(--color-text-primary);
+}
+
+html.dark .el-textarea__inner {
+  background-color: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  border-color: var(--color-border-default);
+}
+
+html.dark .el-select .el-input__wrapper,
+html.dark .el-select .el-select__wrapper {
+  background-color: var(--color-bg-primary) !important;
+}
+
+html.dark .el-select-dropdown {
+  --el-select-dropdown-bg-color: var(--color-bg-elevated);
+}
+
+html.dark .el-select-dropdown__item {
+  color: var(--color-text-secondary);
+}
+
+html.dark .el-select-dropdown__item.hover,
+html.dark .el-select-dropdown__item:hover {
+  background-color: var(--color-bg-tertiary);
+}
+
+html.dark .el-menu {
+  --el-menu-bg-color: var(--color-bg-secondary);
+  --el-menu-text-color: var(--color-text-secondary);
+  --el-menu-active-color: var(--color-primary);
+}
+
+html.dark .el-button--default {
+  --el-button-bg-color: var(--color-bg-secondary);
+  --el-button-border-color: var(--color-border-default);
+  --el-button-text-color: var(--color-text-primary);
+  --el-button-hover-bg-color: var(--color-bg-tertiary);
+  --el-button-hover-text-color: var(--color-text-primary);
+  --el-button-hover-border-color: var(--color-primary);
+}
+
+html.dark .el-button--default.is-plain {
+  --el-button-bg-color: var(--color-bg-elevated);
+}
+
+html.dark .el-form-item__label {
+  color: var(--color-text-secondary);
+}
+
+html.dark .el-pagination {
+  --el-pagination-bg-color: var(--color-bg-elevated);
+  --el-pagination-text-color: var(--color-text-primary);
+  --el-pagination-button-bg-color: var(--color-bg-elevated);
+}
+
+html.dark .el-tag {
+  --el-tag-bg-color: var(--color-bg-tertiary);
+  --el-tag-border-color: var(--color-border-default);
+}
+
+html.dark .el-collapse-item__header,
+html.dark .el-collapse-item__content {
+  background-color: var(--color-bg-elevated);
+  color: var(--color-text-primary);
+}
+
+html.dark .el-descriptions {
+  --el-descriptions-item-bordered-label-background: var(--color-bg-secondary);
+}
+
+html.dark .el-switch {
+  --el-switch-off-color: var(--color-border-default);
+}
+
+html.dark .el-empty__description p {
+  color: var(--color-text-tertiary);
+}
+
+html.dark .el-message-box {
+  --el-messagebox-title-color: var(--color-text-primary);
+  --el-messagebox-content-color: var(--color-text-primary);
+  --el-messagebox-bg-color: var(--color-bg-elevated);
+}
+
+html.dark .el-overlay-dialog {
+  background-color: rgba(0, 0, 0, 0.6);
 }
 
 /* ============================================

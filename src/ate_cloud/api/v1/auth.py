@@ -1,10 +1,13 @@
 """Authentication API endpoints.
 
 Provides:
-    POST /api/v1/auth/login   — authenticate with username/password, return tokens
-    POST /api/v1/auth/refresh — exchange refresh token for new token pair (rotation)
-    GET  /api/v1/auth/me      — return current authenticated user info
+    POST /api/v1/auth/login     — authenticate with username/password, return tokens
+    POST /api/v1/auth/register  — public registration, auto-login after register
+    POST /api/v1/auth/refresh   — exchange refresh token for new token pair (rotation)
+    GET  /api/v1/auth/me        — return current authenticated user info
 """
+
+import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
@@ -18,12 +21,18 @@ from ate_cloud.auth.jwt import (
     create_refresh_token,
     verify_token,
 )
-from ate_cloud.auth.password import verify_password
+from ate_cloud.auth.password import hash_password, verify_password
 from ate_cloud.auth.rbac import get_effective_scopes
 from ate_cloud.config import settings
 from ate_cloud.db import get_db
 from ate_cloud.models.user import User
-from ate_cloud.schemas.auth import LoginRequest, RefreshRequest, TokenResponse, UserResponse
+from ate_cloud.schemas.auth import (
+    LoginRequest,
+    RefreshRequest,
+    RegisterRequest,
+    TokenResponse,
+    UserResponse,
+)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -57,6 +66,56 @@ async def login(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid username or password",
         )
+
+    scopes = get_effective_scopes(user.role, user.scopes)
+    access_token = create_access_token(user.id, scopes)
+    refresh_token = create_refresh_token(user.id)
+
+    return TokenResponse(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        expires_in=settings.jwt_expire_minutes * 60,
+    )
+
+
+@router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
+async def register(
+    request: RegisterRequest,
+    db: AsyncSession = Depends(get_db),
+) -> TokenResponse:
+    """Register a new user and return tokens (auto-login).
+
+    Creates a user with role="read" and is_active=True. If the username
+    already exists, returns 409 Conflict.
+
+    Args:
+        request: Registration data (username, password).
+        db: Database session.
+
+    Returns:
+        TokenResponse with access and refresh tokens for the new user.
+
+    Raises:
+        HTTPException: 409 if username already exists.
+    """
+    existing = await db.execute(select(User).where(User.username == request.username))
+    if existing.scalar_one_or_none() is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Username already exists",
+        )
+
+    user = User(
+        id=str(uuid.uuid4()),
+        username=request.username,
+        password_hash=hash_password(request.password),
+        role="read",
+        scopes=None,
+        is_active=True,
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
 
     scopes = get_effective_scopes(user.role, user.scopes)
     access_token = create_access_token(user.id, scopes)

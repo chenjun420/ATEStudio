@@ -1,12 +1,6 @@
-import axios from 'axios'
+import http from './interceptor'
 
-const api = axios.create({
-  baseURL: '/api/v1',
-  timeout: 10000,
-  headers: {
-    'Content-Type': 'application/json',
-  },
-})
+const api = http
 
 /** Calibration status values returned by the backend. */
 export type CalibrationStatus = 'VALID' | 'EXPIRING' | 'EXPIRED' | 'UNKNOWN'

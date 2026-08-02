@@ -428,7 +428,7 @@ onMounted(() => {
 .toolbar-title {
   font-size: 18px;
   font-weight: 600;
-  color: #303133;
+  color: var(--color-text-primary);
 }
 
 .toolbar-actions {
@@ -451,13 +451,13 @@ onMounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: #606266;
+  color: var(--color-text-secondary);
   font-family: monospace;
   font-size: 13px;
 }
 
 .config-empty {
-  color: #c0c4cc;
+  color: var(--color-text-tertiary);
 }
 
 .full-width {

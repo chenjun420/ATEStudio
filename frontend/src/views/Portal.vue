@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { useApps } from '@/composables/useApps'
+import { useAuth } from '@/composables/useAuth'
 import {
   Monitor,
   Connection,
@@ -12,7 +14,9 @@ import {
 } from '@element-plus/icons-vue'
 
 const router = useRouter()
+const { t } = useI18n()
 const { apps, loading, loadApps, ensureSeed } = useApps()
+const { user, isAuthenticated, init } = useAuth()
 
 // Icon mapping — maps backend icon names to Element Plus icon components
 const iconMap: Record<string, typeof Monitor> = {
@@ -23,6 +27,11 @@ const iconMap: Record<string, typeof Monitor> = {
 }
 
 onMounted(async () => {
+  await init()
+  if (!isAuthenticated.value) {
+    router.push('/login')
+    return
+  }
   await ensureSeed()
 })
 
@@ -58,7 +67,10 @@ function getAppRoute(app: { code: string }): string {
       <div class="portal-header-content">
         <div class="portal-logo">
           <h1 class="portal-title">ATE Studio</h1>
-          <span class="portal-subtitle">电子生产测试平台</span>
+          <span class="portal-subtitle">{{ t('portal.selectApp') }}</span>
+        </div>
+        <div v-if="user" class="portal-welcome">
+          {{ t('auth.welcome') }}, {{ user.username }}
         </div>
       </div>
     </header>
@@ -107,7 +119,7 @@ function getAppRoute(app: { code: string }): string {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
-  background: linear-gradient(135deg, #f0f7ff 0%, #e8f4ff 100%);
+  background: var(--color-bg-secondary);
 }
 
 .portal-header {
@@ -121,6 +133,7 @@ function getAppRoute(app: { code: string }): string {
   margin: 0 auto;
   display: flex;
   align-items: center;
+  justify-content: space-between;
 }
 
 .portal-logo {
@@ -142,6 +155,12 @@ function getAppRoute(app: { code: string }): string {
   color: rgba(255, 255, 255, 0.85);
 }
 
+.portal-welcome {
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.9);
+  font-weight: 500;
+}
+
 .portal-main {
   flex: 1;
   display: flex;
@@ -159,7 +178,7 @@ function getAppRoute(app: { code: string }): string {
 }
 
 .portal-card {
-  background: #ffffff;
+  background: var(--color-bg-elevated);
   border-radius: 16px;
   padding: 32px 24px;
   display: flex;
@@ -167,8 +186,8 @@ function getAppRoute(app: { code: string }): string {
   gap: 20px;
   cursor: pointer;
   transition: all 0.3s ease;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
-  border: 1px solid #ebeef5;
+  box-shadow: var(--shadow-md);
+  border: 1px solid var(--color-border-default);
   position: relative;
   overflow: hidden;
 }
@@ -187,8 +206,8 @@ function getAppRoute(app: { code: string }): string {
 
 .portal-card:hover {
   transform: translateY(-4px);
-  box-shadow: 0 8px 24px rgba(64, 158, 255, 0.15);
-  border-color: #409eff;
+  box-shadow: var(--shadow-lg);
+  border-color: var(--color-primary);
 }
 
 .portal-card:hover::before {
@@ -200,11 +219,11 @@ function getAppRoute(app: { code: string }): string {
   width: 64px;
   height: 64px;
   border-radius: 12px;
-  background: linear-gradient(135deg, #ecf5ff 0%, #d9ecff 100%);
+  background: var(--color-bg-tertiary);
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #409eff;
+  color: var(--color-primary);
 }
 
 .portal-card-body {
@@ -215,13 +234,13 @@ function getAppRoute(app: { code: string }): string {
 .portal-card-title {
   font-size: 18px;
   font-weight: 600;
-  color: #303133;
+  color: var(--color-text-primary);
   margin: 0 0 6px 0;
 }
 
 .portal-card-desc {
   font-size: 13px;
-  color: #909399;
+  color: var(--color-text-secondary);
   margin: 0;
   line-height: 1.5;
   overflow: hidden;
@@ -233,12 +252,12 @@ function getAppRoute(app: { code: string }): string {
 
 .portal-card-arrow {
   flex-shrink: 0;
-  color: #c0c4cc;
+  color: var(--color-text-tertiary);
   transition: color 0.3s ease, transform 0.3s ease;
 }
 
 .portal-card:hover .portal-card-arrow {
-  color: #409eff;
+  color: var(--color-primary);
   transform: translateX(4px);
 }
 
@@ -253,13 +272,13 @@ function getAppRoute(app: { code: string }): string {
 .skeleton-card {
   padding: 32px 24px;
   border-radius: 16px;
-  border: 1px solid #ebeef5;
+  border: 1px solid var(--color-border-default);
 }
 
 .portal-footer {
   text-align: center;
   padding: 16px;
-  color: #909399;
+  color: var(--color-text-tertiary);
   font-size: 12px;
 }
 </style>

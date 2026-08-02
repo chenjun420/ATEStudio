@@ -697,20 +697,20 @@ onUnmounted(() => {
 /* Ensure Element Plus select matches our design system */
 :deep(.el-input__wrapper) {
   border-radius: 6px;
-  box-shadow: 0 0 0 1px #d1d5db;
+  box-shadow: 0 0 0 1px var(--color-border-default);
   transition: box-shadow 0.15s ease;
 }
 
 :deep(.el-input__wrapper:hover) {
-  box-shadow: 0 0 0 1px #9ca3af;
+  box-shadow: 0 0 0 1px var(--color-text-tertiary);
 }
 
 :deep(.el-input__wrapper.is-focus) {
-  box-shadow: 0 0 0 2px #3b82f6;
+  box-shadow: 0 0 0 2px var(--color-primary);
 }
 
 :deep(.el-input__inner) {
   font-size: 14px;
-  color: #374151;
+  color: var(--color-text-primary);
 }
 </style>

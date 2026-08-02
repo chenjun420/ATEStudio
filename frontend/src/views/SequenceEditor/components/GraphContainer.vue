@@ -706,7 +706,7 @@ async function handleContextMenuEditScript() {
   width: 100%;
   height: 100%;
   min-height: 400px;
-  background: #fafafa;
+  background: var(--color-bg-secondary);
   position: relative;
 }
 
@@ -714,10 +714,10 @@ async function handleContextMenuEditScript() {
   position: fixed;
   z-index: 1000;
   min-width: 160px;
-  background: white;
-  border: 1px solid #e5e7eb;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-default);
   border-radius: 8px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--shadow-lg);
   padding: 4px;
 }
 
@@ -728,7 +728,7 @@ async function handleContextMenuEditScript() {
   width: 100%;
   padding: 8px 12px;
   font-size: 13px;
-  color: #374151;
+  color: var(--color-text-primary);
   background: none;
   border: none;
   border-radius: 6px;
@@ -737,7 +737,7 @@ async function handleContextMenuEditScript() {
 }
 
 .context-menu-item:hover {
-  background: #f3f4f6;
-  color: #8b5cf6;
+  background: var(--color-bg-tertiary);
+  color: var(--color-primary);
 }
 </style>

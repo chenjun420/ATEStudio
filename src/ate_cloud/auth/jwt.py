@@ -1,4 +1,4 @@
-"""JWT token creation and verification using PyJWT with RS256.
+"""JWT token creation and verification using PyJWT.
 
 Access tokens are short-lived (Settings.jwt_expire_minutes, default 30min).
 Refresh tokens are longer-lived (7 days) with rotation: each refresh
@@ -6,8 +6,10 @@ consumes the old refresh token and issues a new pair.
 
 Token claims validated on decode: iss, aud, exp, nbf.
 
-RS256 requires an RSA private key stored in Settings.jwt_secret as a PEM
-string. The public key is derived from the private key for verification.
+Supports both HS256 (shared HMAC secret) and RS256 (RSA PEM key pair):
+  - HS256: Settings.jwt_secret is used directly as the HMAC key string.
+  - RS256: Settings.jwt_secret must be a PEM-encoded RSA private key;
+           the public key is derived from it for verification.
 """
 
 import uuid
@@ -22,7 +24,6 @@ from ate_cloud.config import settings
 # Token metadata — constant issuer and audience for ATE Cloud API.
 _ISSUER = "ate-cloud"
 _AUDIENCE = "ate-cloud-api"
-_ALGORITHM = "RS256"
 
 # Refresh tokens are valid for 7 days regardless of access token expiry.
 _REFRESH_TOKEN_DAYS = 7
@@ -38,16 +39,26 @@ class TokenError(Exception):
 
 
 def _load_keys() -> tuple[Any, Any]:
-    """Load the RSA private and public keys from Settings.jwt_secret.
+    """Load the signing and verification keys from Settings.jwt_secret.
+
+    For HS256, the secret string is used directly as both the signing
+    and verification key. For RS256, jwt_secret must be a PEM-encoded
+    RSA private key; the public key is derived from it.
 
     Returns:
-        Tuple of (private_key, public_key) cryptography key objects.
+        Tuple of (signing_key, verification_key). For HS256 both elements
+        are the secret string; for RS256 they are cryptography key objects.
 
     Raises:
         TokenError: If jwt_secret is not configured.
     """
     if not settings.jwt_secret:
         raise TokenError("JWT_SECRET not configured")
+
+    algorithm = settings.jwt_algorithm
+    if algorithm == "HS256":
+        return settings.jwt_secret, settings.jwt_secret
+
     private_key = serialization.load_pem_private_key(
         settings.jwt_secret.encode(),
         password=None,
@@ -63,7 +74,7 @@ def create_access_token(user_id: str, scopes: list[str]) -> str:
         scopes: Permission scopes to embed in the token.
 
     Returns:
-        Encoded JWT string (RS256).
+        Encoded JWT string.
     """
     now = datetime.now(UTC)
     expire = now + timedelta(minutes=settings.jwt_expire_minutes)
@@ -79,7 +90,7 @@ def create_access_token(user_id: str, scopes: list[str]) -> str:
         "scopes": scopes,
     }
     private_key, _ = _load_keys()
-    return jwt.encode(payload, private_key, algorithm=_ALGORITHM)
+    return jwt.encode(payload, private_key, algorithm=settings.jwt_algorithm)
 
 
 def create_refresh_token(user_id: str) -> str:
@@ -91,7 +102,7 @@ def create_refresh_token(user_id: str) -> str:
         user_id: User identifier (subject claim).
 
     Returns:
-        Encoded JWT string (RS256).
+        Encoded JWT string.
     """
     now = datetime.now(UTC)
     expire = now + timedelta(days=_REFRESH_TOKEN_DAYS)
@@ -107,7 +118,7 @@ def create_refresh_token(user_id: str) -> str:
         "type": "refresh",
     }
     private_key, _ = _load_keys()
-    token = jwt.encode(payload, private_key, algorithm=_ALGORITHM)
+    token = jwt.encode(payload, private_key, algorithm=settings.jwt_algorithm)
     store_refresh_token(jti, user_id)
     return token
 
@@ -115,8 +126,8 @@ def create_refresh_token(user_id: str) -> str:
 def verify_token(token: str, expected_type: str = "access") -> dict[str, Any]:
     """Verify and decode a JWT token.
 
-    Validates iss, aud, exp, and nbf claims. Pinning algorithms=["RS256"]
-    prevents algorithm confusion attacks.
+    Verifies iss, aud, exp, and nbf claims. The algorithm is pinned to
+    settings.jwt_algorithm to prevent algorithm confusion attacks.
 
     Args:
         token: Encoded JWT string.
@@ -133,7 +144,7 @@ def verify_token(token: str, expected_type: str = "access") -> dict[str, Any]:
         payload = jwt.decode(
             token,
             public_key,
-            algorithms=[_ALGORITHM],
+            algorithms=[settings.jwt_algorithm],
             audience=_AUDIENCE,
             issuer=_ISSUER,
         )

@@ -1,14 +1,8 @@
-import axios from 'axios'
+import http from './interceptor'
 import type { YamlSequence } from '@/types/dsl'
 import type { NodeGroup } from '@/models/nodes/types'
 
-const api = axios.create({
-  baseURL: '/api/v1',
-  timeout: 10000,
-  headers: {
-    'Content-Type': 'application/json',
-  },
-})
+const api = http
 
 /**
  * Sequence entity returned from the backend

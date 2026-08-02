@@ -228,11 +228,11 @@ function handleExecutionEnded() {
 </script>
 
 <template>
-  <div style="display: flex; height: 100vh; background-color: #fafafa;">
+  <div style="display: flex; height: 100vh; background-color: var(--color-bg-secondary);">
     <!-- Left sidebar: Step Library + Node Manager + Sequence List -->
-    <aside style="width: 256px; border-right: 1px solid #e5e7eb; background: white; display: flex; flex-direction: column;">
+    <aside style="width: 256px; border-right: 1px solid var(--color-border-default); background: var(--color-bg-elevated); display: flex; flex-direction: column;">
       <!-- Tab header -->
-      <div style="display: flex; border-bottom: 1px solid #e5e7eb;">
+      <div style="display: flex; border-bottom: 1px solid var(--color-border-default);">
         <button
           class="sidebar-tab"
           :class="{ active: leftSidebarTab === 'library' }"
@@ -280,7 +280,7 @@ function handleExecutionEnded() {
       />
       
       <!-- Toolbar header -->
-      <header style="height: 48px; border-bottom: 1px solid #e5e7eb; background: white; display: flex; align-items: center; padding: 0 16px;">
+      <header style="height: 48px; border-bottom: 1px solid var(--color-border-default); background: var(--color-bg-elevated); display: flex; align-items: center; padding: 0 16px;">
         <Toolbar @sequence-selected="handleSequenceSelected" @sequence-created="handleSequenceCreated" @execution-started="handleExecutionStarted" @execution-ended="handleExecutionEnded" />
       </header>
 
@@ -310,7 +310,7 @@ function handleExecutionEnded() {
     </main>
 
     <!-- Right sidebar: Property Panel -->
-    <aside style="width: 320px; border-left: 1px solid #e5e7eb; background: white;">
+    <aside style="width: 320px; border-left: 1px solid var(--color-border-default); background: var(--color-bg-elevated);">
       <PropertyPanel @edit-script="handleEditScript" />
     </aside>
 
@@ -345,7 +345,7 @@ function handleExecutionEnded() {
 }
 
 .sidebar-tab.active {
-  color: var(--color-primary, #8b5cf6);
-  border-bottom-color: var(--color-primary, #8b5cf6);
+  color: var(--color-primary, #409eff);
+  border-bottom-color: var(--color-primary, #409eff);
 }
 </style>

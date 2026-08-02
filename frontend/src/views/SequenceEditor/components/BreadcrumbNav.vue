@@ -49,37 +49,37 @@ function handleClick(item: BreadcrumbItem, index: number) {
   align-items: center;
   gap: 4px;
   padding: 6px 12px;
-  background: white;
-  border-bottom: 1px solid #e5e7eb;
+  background: var(--color-bg-elevated);
+  border-bottom: 1px solid var(--color-border-default);
   font-size: 13px;
   min-height: 32px;
   flex-shrink: 0;
 }
 
 .breadcrumb-item {
-  color: #6b7280;
+  color: var(--color-text-secondary);
   white-space: nowrap;
 }
 
 .breadcrumb-item.clickable {
-  color: #3b82f6;
+  color: var(--color-primary);
   cursor: pointer;
   transition: color 150ms ease;
 }
 
 .breadcrumb-item.clickable:hover {
-  color: #1d4ed8;
+  color: var(--color-primary-dark);
   text-decoration: underline;
 }
 
 .breadcrumb-item.current {
-  color: #111827;
+  color: var(--color-text-primary);
   font-weight: 600;
   cursor: default;
 }
 
 .breadcrumb-separator {
-  color: #d1d5db;
+  color: var(--color-text-tertiary);
   user-select: none;
 }
 </style>

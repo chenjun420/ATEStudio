@@ -297,7 +297,7 @@ function formatDate(dateString?: string): string {
   width: 24px;
   height: 24px;
   border: 2px solid var(--color-border-default, #e5e7eb);
-  border-top-color: var(--color-primary, #8b5cf6);
+  border-top-color: var(--color-primary, #409eff);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
@@ -334,7 +334,7 @@ function formatDate(dateString?: string): string {
 }
 
 .sequence-item:hover {
-  border-color: var(--color-primary, #8b5cf6);
+  border-color: var(--color-primary, #409eff);
   box-shadow: 0 2px 4px rgba(139, 92, 246, 0.1);
 }
 

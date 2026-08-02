@@ -710,7 +710,7 @@ function rowKey(row: ExecutionListItem): string {
 }
 
 .eh-pass-rate-low {
-  color: #ef4444;
+  color: var(--color-error);
 }
 
 /* ─── Pagination ─── */
@@ -808,7 +808,7 @@ function rowKey(row: ExecutionListItem): string {
 
 .eh-step-error {
   font-size: 0.75rem;
-  color: #ef4444;
+  color: var(--color-error);
   padding: var(--spacing-xs) var(--spacing-sm);
   background-color: rgba(239, 68, 68, 0.05);
   border-radius: var(--radius-sm);
@@ -873,7 +873,7 @@ function rowKey(row: ExecutionListItem): string {
 
 .eh-event-error {
   font-size: 0.75rem;
-  color: #ef4444;
+  color: var(--color-error);
   flex-basis: 100%;
 }
 

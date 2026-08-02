@@ -514,7 +514,7 @@ onMounted(() => {
   height: 40px;
   border-radius: 6px;
   overflow: hidden;
-  background-color: #f5f7fa;
+  background-color: var(--color-bg-secondary);
 }
 
 .progress-segment {

@@ -1,12 +1,6 @@
-import axios from 'axios'
+import http from './interceptor'
 
-const api = axios.create({
-  baseURL: '/api/v1',
-  timeout: 10000,
-  headers: {
-    'Content-Type': 'application/json',
-  },
-})
+const api = http
 
 /**
  * Worker metadata returned by GET /api/v1/workers.

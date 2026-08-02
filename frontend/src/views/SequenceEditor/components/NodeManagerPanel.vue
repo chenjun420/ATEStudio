@@ -140,7 +140,7 @@ const newGroupName = ref('')
 
 // Group color options
 const groupColors = [
-  '#8b5cf6', // Primary purple
+  '#409eff', // Primary blue
   '#3b82f6', // Blue
   '#10b981', // Green
   '#f59e0b', // Orange
@@ -659,7 +659,7 @@ onUnmounted(() => {
   padding: 0 var(--spacing-md, 1rem);
   margin: var(--spacing-xs, 0.25rem) 0;
   background: var(--color-bg-secondary, #f9fafb);
-  border-left: 3px solid var(--color-primary, #8b5cf6);
+  border-left: 3px solid var(--color-primary, #409eff);
   border-radius: var(--radius-md, 0.375rem);
   cursor: pointer;
   transition: background-color var(--transition-fast, 150ms ease);
@@ -733,12 +733,12 @@ onUnmounted(() => {
 
 .node-item:hover {
   background: var(--color-bg-secondary, #f9fafb);
-  border-color: var(--color-primary, #8b5cf6);
+  border-color: var(--color-primary, #409eff);
 }
 
 .node-item.selected {
   background: var(--color-primary-50, #ede9fe);
-  border-color: var(--color-primary, #8b5cf6);
+  border-color: var(--color-primary, #409eff);
 }
 
 .node-item:active {

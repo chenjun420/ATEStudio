@@ -137,7 +137,7 @@ const statusStyles: Record<string, string> = {
 // Preset colors for node appearance (using design tokens + common colors)
 const presetColors = [
   { name: 'Default', value: '#e5e7eb', cssVar: 'var(--color-border-default)' },
-  { name: 'Primary', value: '#8b5cf6', cssVar: 'var(--color-primary)' },
+  { name: 'Primary', value: '#409eff', cssVar: 'var(--color-primary)' },
   { name: 'Blue', value: '#3b82f6', cssVar: 'var(--color-info)' },
   { name: 'Green', value: '#10b981', cssVar: 'var(--color-success)' },
   { name: 'Orange', value: '#f59e0b', cssVar: 'var(--color-warning)' },

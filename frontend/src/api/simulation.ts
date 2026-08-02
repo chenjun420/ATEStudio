@@ -1,12 +1,6 @@
-import axios from 'axios'
+import http from './interceptor'
 
-const api = axios.create({
-  baseURL: '/api/v1',
-  timeout: 30000,
-  headers: {
-    'Content-Type': 'application/json',
-  },
-})
+const api = http
 
 // ─── Simulation tiers (D7 - 3-tier simulation) ──────────────────────────────
 

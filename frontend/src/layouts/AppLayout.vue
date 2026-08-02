@@ -1,18 +1,27 @@
 <script setup lang="ts">
-import { onMounted, watch, computed } from 'vue'
+import { ref, onMounted, watch, computed } from 'vue'
 import { useRouter, useRoute, RouterView } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { useApps } from '@/composables/useApps'
+import { useAuth } from '@/composables/useAuth'
+import PasswordChange from '@/views/PasswordChange.vue'
 import {
   Monitor,
   Connection,
   DataLine,
   Setting,
   ArrowLeft,
+  User,
+  ArrowDown,
 } from '@element-plus/icons-vue'
 
 const router = useRouter()
 const route = useRoute()
+const { t } = useI18n()
 const { apps, currentAppMenus, loading, loadApps, loadAppMenus } = useApps()
+const { user, isAdmin, logout } = useAuth()
+
+const passwordChangeRef = ref<InstanceType<typeof PasswordChange> | null>(null)
 
 // Icon mapping
 const iconMap: Record<string, typeof Monitor> = {
@@ -105,6 +114,26 @@ function handleMenuSelect(index: string) {
 function goHome() {
   router.push('/')
 }
+
+function handleCommand(command: string): void {
+  switch (command) {
+    case 'settings':
+      router.push('/system/settings')
+      break
+    case 'users':
+      router.push('/system/users')
+      break
+    case 'roles':
+      router.push('/system/roles')
+      break
+    case 'password':
+      passwordChangeRef.value?.open()
+      break
+    case 'logout':
+      logout()
+      break
+  }
+}
 </script>
 
 <template>
@@ -142,8 +171,35 @@ function goHome() {
       <div class="header-right">
         <el-button text class="home-btn" @click="goHome">
           <el-icon><ArrowLeft /></el-icon>
-          <span>返回首页</span>
+          <span>{{ t('common.home') }}</span>
         </el-button>
+
+        <el-dropdown class="user-dropdown" @command="handleCommand">
+          <div class="user-trigger">
+            <el-icon><User /></el-icon>
+            <span class="user-name">{{ user?.username || '' }}</span>
+            <el-icon><ArrowDown /></el-icon>
+          </div>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="settings">
+                {{ t('menu.settings') }}
+              </el-dropdown-item>
+              <el-dropdown-item v-if="isAdmin" command="users">
+                {{ t('menu.userManagement') }}
+              </el-dropdown-item>
+              <el-dropdown-item v-if="isAdmin" command="roles">
+                {{ t('rbac.title') }}
+              </el-dropdown-item>
+              <el-dropdown-item command="password" divided>
+                {{ t('auth.changePassword') }}
+              </el-dropdown-item>
+              <el-dropdown-item command="logout" divided>
+                {{ t('auth.logout') }}
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
       </div>
     </header>
 
@@ -151,6 +207,9 @@ function goHome() {
     <main class="app-content" v-loading="loading">
       <RouterView />
     </main>
+
+    <!-- Password Change Dialog -->
+    <PasswordChange ref="passwordChangeRef" />
   </div>
 </template>
 
@@ -210,6 +269,34 @@ function goHome() {
 
 .header-right {
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.user-dropdown {
+  cursor: pointer;
+}
+
+.user-trigger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: rgba(255, 255, 255, 0.85);
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: var(--radius-md);
+  transition: background-color var(--transition-fast);
+}
+
+.user-trigger:hover {
+  background-color: rgba(255, 255, 255, 0.15);
+  color: #fff;
+}
+
+.user-name {
+  font-size: 14px;
+  white-space: nowrap;
 }
 
 .home-btn {
@@ -219,7 +306,7 @@ function goHome() {
 .app-content {
   flex: 1;
   overflow: auto;
-  background-color: #f5f7fa;
+  background-color: var(--color-bg-primary);
   padding: 0;
 }
 

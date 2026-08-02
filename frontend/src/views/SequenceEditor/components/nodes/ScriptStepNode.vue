@@ -294,14 +294,12 @@ function handleEditClick(event: MouseEvent) {
 }
 
 /* Dark mode adjustments */
-@media (prefers-color-scheme: dark) {
-  .script-step-node {
-    background-color: var(--node-bg-color);
-  }
-  
-  .port-dot {
-    background-color: var(--color-bg-elevated);
-  }
+html.dark .script-step-node {
+  background-color: var(--node-bg-color);
+}
+
+html.dark .port-dot {
+  background-color: var(--color-bg-elevated);
 }
 
 /* Edit button */

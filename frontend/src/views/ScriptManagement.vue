@@ -825,13 +825,13 @@ onMounted(() => {
 
 .script-name {
   font-weight: 600;
-  color: #303133;
+  color: var(--color-text-primary);
   font-size: 14px;
 }
 
 .script-desc {
   font-size: 12px;
-  color: #909399;
+  color: var(--color-text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -848,13 +848,13 @@ onMounted(() => {
 }
 
 .muted {
-  color: #c0c4cc;
+  color: var(--color-text-tertiary);
 }
 
 .hash-text {
   font-family: 'Consolas', 'Monaco', monospace;
   font-size: 13px;
-  color: #409eff;
+  color: var(--color-primary);
 }
 
 /* ─── Edit Content ────────────────────────────────────────────────────── */
@@ -894,7 +894,7 @@ onMounted(() => {
 
 .ai-result-section {
   margin-top: 20px;
-  border-top: 1px solid #ebeef5;
+  border-top: 1px solid var(--color-border-default);
   padding-top: 16px;
 }
 
@@ -908,7 +908,7 @@ onMounted(() => {
 
 .result-label {
   font-weight: 600;
-  color: #303133;
+  color: var(--color-text-primary);
   margin-bottom: 8px;
   font-size: 14px;
 }
@@ -922,11 +922,11 @@ onMounted(() => {
 }
 
 .error-list li {
-  color: #f56c6c;
+  color: var(--color-error);
 }
 
 .suggestion-list li {
-  color: #e6a23c;
+  color: var(--color-warning);
 }
 
 /* ─── Responsive ──────────────────────────────────────────────────────── */

@@ -246,7 +246,7 @@ onUnmounted(() => {
   right: 0;
   bottom: 0;
   z-index: var(--z-modal);
-  background-color: rgba(0, 0, 0, 0.1);
+  background-color: rgba(0, 0, 0, 0.3);
   display: flex;
   align-items: flex-start;
   justify-content: flex-start;
@@ -465,13 +465,11 @@ onUnmounted(() => {
 }
 
 /* Dark mode */
-@media (prefers-color-scheme: dark) {
-  .quick-edit-overlay {
-    background-color: rgba(0, 0, 0, 0.3);
-  }
-  
-  .quick-edit-form {
-    background-color: var(--color-bg-elevated);
-  }
+html.dark .quick-edit-overlay {
+  background-color: rgba(0, 0, 0, 0.5);
+}
+
+html.dark .quick-edit-form {
+  background-color: var(--color-bg-elevated);
 }
 </style>

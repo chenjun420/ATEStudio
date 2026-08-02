@@ -556,7 +556,7 @@ defineExpose({
   width: 100%;
   height: 100%;
   min-height: 400px;
-  background: #f0f7ff;
+  background: var(--color-bg-secondary);
   position: relative;
 }
 
@@ -568,11 +568,11 @@ defineExpose({
   align-items: center;
   gap: 4px;
   padding: 4px 8px;
-  background: rgba(59, 130, 246, 0.1);
-  border: 1px solid rgba(59, 130, 246, 0.2);
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border-default);
   border-radius: 4px;
   font-size: 11px;
-  color: #3b82f6;
+  color: var(--color-primary);
   pointer-events: none;
   z-index: 10;
 }

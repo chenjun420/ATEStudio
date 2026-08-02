@@ -2,9 +2,12 @@ import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 import ElementPlus from 'element-plus'
 import 'element-plus/dist/index.css'
+import 'element-plus/theme-chalk/dark/css-vars.css'
 import { Graph, Shape } from '@antv/x6'
 import App from './App.vue'
 import router from './router'
+import i18n from './i18n'
+import { initTheme } from './composables/useTheme'
 import './style.css'
 
 const app = createApp(App)
@@ -18,6 +21,12 @@ app.use(router)
 // Install Element Plus UI components
 app.use(ElementPlus)
 
+// Install vue-i18n for internationalization
+app.use(i18n)
+
+// Initialize theme — auto-detect system dark/light preference
+initTheme()
+
 // Register custom X6 node shapes
 // These will be extended later with Vue components for rich rendering
 Graph.registerNode('step-node', {
@@ -26,8 +35,8 @@ Graph.registerNode('step-node', {
   height: 60,
   attrs: {
     body: {
-      fill: '#8b5cf6',
-      stroke: '#7c3aed',
+      fill: '#409eff',
+      stroke: '#337ecc',
       strokeWidth: 2,
       rx: 8,
       ry: 8,
