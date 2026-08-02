@@ -175,11 +175,23 @@ def _build_worker_info(
     if raw_value:
         decoded: str = raw_value.decode("utf-8")
         metadata = json.loads(decoded)
+
+    # Prefer KV entry creation timestamp; fall back to metadata timestamp
+    # (nats-py may return None for `created` on some KV implementations).
+    heartbeat_time = created
+    if heartbeat_time is None:
+        ts_str = metadata.get("timestamp")
+        if ts_str:
+            try:
+                heartbeat_time = datetime.fromisoformat(ts_str)
+            except (ValueError, TypeError):
+                heartbeat_time = None
+
     return WorkerInfo(
         worker_id=worker_id,
         hostname=metadata.get("hostname", ""),
         capabilities=metadata.get("capabilities", []),
         max_concurrent_tasks=metadata.get("max_concurrent_tasks", 0),
         current_tasks=metadata.get("current_tasks", 0),
-        last_heartbeat=created,
+        last_heartbeat=heartbeat_time,
     )

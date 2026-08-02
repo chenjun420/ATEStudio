@@ -19,6 +19,7 @@ import {
   type WorkerHealthResponse,
   type HeartbeatHistoryResponse,
   type WorkerSyncResponse,
+  type WorkerRestartResponse,
 } from '@/api/stations'
 
 /** Refresh interval in milliseconds (15s). */
@@ -133,8 +134,8 @@ export function useStations() {
     return result
   }
 
-  /** Trigger a worker restart (via sync endpoint). */
-  async function restartWorkerAction(workerId: string): Promise<WorkerSyncResponse> {
+  /** Trigger a worker restart via NATS control message. */
+  async function restartWorkerAction(workerId: string): Promise<WorkerRestartResponse> {
     const result = await apiRestartWorker(workerId)
     void refresh()
     return result

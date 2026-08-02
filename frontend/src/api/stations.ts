@@ -163,10 +163,21 @@ export async function syncWorker(workerId: string): Promise<WorkerSyncResponse> 
 }
 
 /**
- * POST /api/v1/workers/{workerId}/restart — trigger a worker restart.
- * Falls back to sync endpoint if restart endpoint is not available.
+ * Response from POST /api/v1/workers/{workerId}/restart.
  */
-export async function restartWorker(workerId: string): Promise<WorkerSyncResponse> {
-  const response = await api.post<WorkerSyncResponse>(`/workers/${workerId}/sync`)
+export interface WorkerRestartResponse {
+  status: string
+  worker_id: string
+}
+
+/**
+ * POST /api/v1/workers/{workerId}/restart — trigger a worker restart.
+ *
+ * Publishes a restart control message to the worker via NATS on
+ * ``ate.control.{workerId}``. The worker's control subscription
+ * handles the restart action.
+ */
+export async function restartWorker(workerId: string): Promise<WorkerRestartResponse> {
+  const response = await api.post<WorkerRestartResponse>(`/workers/${workerId}/restart`)
   return response.data
 }

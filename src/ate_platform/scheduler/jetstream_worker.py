@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import socket
+from datetime import datetime
 import uuid
 from pathlib import Path
 from typing import Any
@@ -261,6 +262,7 @@ class JetStreamWorker:
             "capabilities": ["script_execution"],
             "max_concurrent_tasks": self._max_concurrent_tasks,
             "current_tasks": 0 if self._current_scheduler is None else 1,
+            "timestamp": datetime.now().isoformat(),
         }
 
     async def start(self, nc: NatsClient | None = None) -> None:
