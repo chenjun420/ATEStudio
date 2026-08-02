@@ -9,17 +9,17 @@
    Design Tokens - ATE Studio Theme
    ============================================ */
 :root {
-  /* Core palette - Purple accent theme */
-  --color-primary: #8b5cf6;
-  --color-primary-light: #a78bfa;
-  --color-primary-dark: #7c3aed;
+  /* Core palette - Element Plus Blue theme */
+  --color-primary: #409eff;
+  --color-primary-light: #66b1ff;
+  --color-primary-dark: #337ecc;
   
   /* Accent colors */
-  --color-accent-purple: #aa3bff;
-  --color-accent-blue: #3b82f6;
-  --color-accent-green: #10b981;
-  --color-accent-orange: #f59e0b;
-  --color-accent-red: #ef4444;
+  --color-accent-blue: #409eff;
+  --color-accent-purple: #8b5cf6;
+  --color-accent-green: #67c23a;
+  --color-accent-orange: #e6a23c;
+  --color-accent-red: #f56c6c;
   
   /* Background colors */
   --color-bg-primary: #ffffff;
@@ -39,10 +39,10 @@
   --color-border-accent: rgba(139, 92, 246, 0.3);
   
   /* Semantic colors */
-  --color-success: #10b981;
-  --color-warning: #f59e0b;
-  --color-error: #ef4444;
-  --color-info: #3b82f6;
+  --color-success: #67c23a;
+  --color-warning: #e6a23c;
+  --color-error: #f56c6c;
+  --color-info: #409eff;
   
   /* Spacing */
   --spacing-xs: 0.25rem;

@@ -38,7 +38,7 @@ import {
   ElStatistic,
   ElIcon,
 } from 'element-plus'
-import { Refresh, Plus, Delete, optimize as OptimizeIcon } from '@element-plus/icons-vue'
+import { Refresh, Plus, Delete, Aim as OptimizeIcon } from '@element-plus/icons-vue'
 import axios from 'axios'
 
 const api = axios.create({

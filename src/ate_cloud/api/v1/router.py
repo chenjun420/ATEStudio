@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 
+from ate_cloud.api.v1.apps import router as apps_router
 from ate_cloud.api.v1.changeover import router as changeover_router
 from ate_cloud.api.v1.dashboard import router as dashboard_router
 from ate_cloud.api.v1.debug import router as debug_router
@@ -26,3 +27,4 @@ api_router.include_router(changeover_router)
 api_router.include_router(dashboard_router)
 api_router.include_router(resources_router)
 api_router.include_router(reports_router)
+api_router.include_router(apps_router)
