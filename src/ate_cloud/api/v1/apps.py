@@ -129,6 +129,7 @@ async def seed_apps(db: AsyncSession = Depends(get_db)) -> dict:
                 {"code": "history", "name": "执行历史", "route_path": "/monitor/history", "route_name": "ExecutionHistory", "icon": "Clock", "sort_order": 2},
                 {"code": "measurements", "name": "测量数据", "route_path": "/monitor/measurements", "route_name": "MeasurementExplorer", "icon": "TrendCharts", "sort_order": 3},
                 {"code": "reports", "name": "测试报告", "route_path": "/monitor/reports", "route_name": "Reports", "icon": "Tickets", "sort_order": 4},
+                {"code": "tracing", "name": "追溯查询", "route_path": "/monitor/tracing", "route_name": "TracingViewer", "icon": "Search", "sort_order": 5},
             ],
         },
         {

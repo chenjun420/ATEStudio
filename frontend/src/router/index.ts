@@ -47,7 +47,7 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'templates',
         name: 'NodeTemplates',
-        component: () => import('@/views/StationManagement.vue'),
+        component: () => import('@/views/NodeTemplates.vue'),
         meta: { title: '节点模板' },
       },
     ],
@@ -80,13 +80,13 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'scripts',
         name: 'ScriptManagement',
-        component: () => import('@/views/SequenceEditor/index.vue'),
+        component: () => import('@/views/ScriptManagement.vue'),
         meta: { title: '脚本管理' },
       },
       {
         path: 'binding',
         name: 'NodeFlowBinding',
-        component: () => import('@/views/SequenceEditor/index.vue'),
+        component: () => import('@/views/NodeFlowBinding.vue'),
         meta: { title: '节点流程绑定' },
       },
     ],
@@ -118,8 +118,14 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'reports',
         name: 'Reports',
-        component: () => import('@/views/ExecutionHistory.vue'),
+        component: () => import('@/views/Reports.vue'),
         meta: { title: '测试报告' },
+      },
+      {
+        path: 'tracing',
+        name: 'TracingViewer',
+        component: () => import('@/views/TracingViewer.vue'),
+        meta: { title: '追溯查询' },
       },
     ],
   },

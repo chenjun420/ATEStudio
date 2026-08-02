@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, watch, computed, ref } from 'vue'
+import { onMounted, watch, computed } from 'vue'
 import { useRouter, useRoute, RouterView } from 'vue-router'
 import { useApps } from '@/composables/useApps'
 import {
@@ -8,15 +8,11 @@ import {
   DataLine,
   Setting,
   ArrowLeft,
-  Fold,
-  Expand,
 } from '@element-plus/icons-vue'
 
 const router = useRouter()
 const route = useRoute()
 const { apps, currentAppMenus, loading, loadApps, loadAppMenus } = useApps()
-
-const isCollapse = ref(false)
 
 // Icon mapping
 const iconMap: Record<string, typeof Monitor> = {
@@ -109,173 +105,115 @@ function handleMenuSelect(index: string) {
 function goHome() {
   router.push('/')
 }
-
-function toggleSidebar() {
-  isCollapse.value = !isCollapse.value
-}
 </script>
 
 <template>
   <div class="app-layout">
-    <!-- Sidebar -->
-    <aside class="app-sidebar" :class="{ collapsed: isCollapse }">
-      <div class="sidebar-header">
-        <el-icon :size="24" class="sidebar-logo" @click="goHome">
+    <!-- Header: blue gradient, full width -->
+    <header class="app-header">
+      <div class="header-left">
+        <!-- Logo + App name -->
+        <el-icon :size="22" class="header-logo" @click="goHome">
           <component :is="iconMap[activeApp?.icon || 'Monitor'] || Monitor" />
         </el-icon>
-        <span v-show="!isCollapse" class="sidebar-title">
-          {{ activeApp?.name || 'ATE Studio' }}
-        </span>
+        <span class="header-title">{{ activeApp?.name || 'ATE Studio' }}</span>
       </div>
-      <el-menu
-        :default-active="activeMenu"
-        :collapse="isCollapse"
-        :collapse-transition="false"
-        class="sidebar-menu"
-        @select="handleMenuSelect"
-      >
-        <el-menu-item
-          v-for="menu in flatMenus"
-          :key="menu.route_path"
-          :index="menu.route_path"
+
+      <!-- Horizontal menu in center -->
+      <nav class="header-menu">
+        <el-menu
+          :default-active="activeMenu"
+          mode="horizontal"
+          class="top-menu"
+          @select="handleMenuSelect"
+          :ellipsis="false"
         >
-          <el-icon>
-            <component :is="menuIconMap[menu.icon || 'List'] || Monitor" />
-          </el-icon>
-          <template #title>{{ menu.name }}</template>
-        </el-menu-item>
-      </el-menu>
-    </aside>
+          <el-menu-item
+            v-for="menu in flatMenus"
+            :key="menu.route_path"
+            :index="menu.route_path"
+          >
+            <el-icon><component :is="menuIconMap[menu.icon || 'List'] || Monitor" /></el-icon>
+            <span>{{ menu.name }}</span>
+          </el-menu-item>
+        </el-menu>
+      </nav>
 
-    <!-- Main area -->
-    <div class="app-main">
-      <!-- Top header -->
-      <header class="app-header">
-        <div class="header-left">
-          <el-button text @click="toggleSidebar" class="collapse-btn">
-            <el-icon :size="18">
-              <component :is="isCollapse ? Expand : Fold" />
-            </el-icon>
-          </el-button>
-          <el-button text @click="goHome" class="home-btn">
-            <el-icon :size="16"><ArrowLeft /></el-icon>
-            <span>返回首页</span>
-          </el-button>
-        </div>
-        <div class="header-right">
-          <span class="header-app-name">{{ activeApp?.name || '' }}</span>
-        </div>
-      </header>
+      <div class="header-right">
+        <el-button text class="home-btn" @click="goHome">
+          <el-icon><ArrowLeft /></el-icon>
+          <span>返回首页</span>
+        </el-button>
+      </div>
+    </header>
 
-      <!-- Content area -->
-      <main class="app-content" v-loading="loading">
-        <RouterView />
-      </main>
-    </div>
+    <!-- Content: full width below header -->
+    <main class="app-content" v-loading="loading">
+      <RouterView />
+    </main>
   </div>
 </template>
 
 <style scoped>
 .app-layout {
   display: flex;
+  flex-direction: column;
   height: 100vh;
   overflow: hidden;
 }
 
-.app-sidebar {
-  width: 220px;
-  background-color: #ffffff;
-  border-right: 1px solid #e4e7ed;
-  display: flex;
-  flex-direction: column;
-  transition: width 0.3s ease;
-  flex-shrink: 0;
-}
-
-.app-sidebar.collapsed {
-  width: 64px;
-}
-
-.sidebar-header {
+.app-header {
+  background: linear-gradient(135deg, #409eff 0%, #337ecc 100%);
   height: 56px;
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 0 16px;
-  border-bottom: 1px solid #e4e7ed;
-  flex-shrink: 0;
-}
-
-.sidebar-logo {
-  color: #409eff;
-  cursor: pointer;
-  flex-shrink: 0;
-}
-
-.sidebar-title {
-  font-size: 15px;
-  font-weight: 600;
-  color: #303133;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.sidebar-menu {
-  flex: 1;
-  border-right: none;
-  overflow-y: auto;
-  overflow-x: hidden;
-}
-
-.sidebar-menu:not(.el-menu--collapse) {
-  width: 220px;
-}
-
-.app-main {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  min-width: 0;
-}
-
-.app-header {
-  height: 48px;
-  background-color: #ffffff;
-  border-bottom: 1px solid #e4e7ed;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 16px;
+  padding: 0 24px;
+  box-shadow: 0 2px 8px rgba(64, 158, 255, 0.15);
   flex-shrink: 0;
 }
 
 .header-left {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
+  flex-shrink: 0;
 }
 
-.collapse-btn {
-  padding: 4px 8px;
+.header-logo {
+  color: #fff;
+  cursor: pointer;
 }
 
-.home-btn {
-  padding: 4px 8px;
-  color: #606266;
+.header-title {
+  color: #fff;
+  font-size: 16px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.header-menu {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  min-width: 0;
+}
+
+.top-menu {
+  --el-menu-bg-color: transparent;
+  --el-menu-text-color: rgba(255, 255, 255, 0.85);
+  --el-menu-active-color: #fff;
+  --el-menu-hover-text-color: #fff;
+  --el-menu-hover-bg-color: rgba(255, 255, 255, 0.15);
+  border-bottom: none;
+  height: 56px;
 }
 
 .header-right {
-  display: flex;
-  align-items: center;
-  gap: 12px;
+  flex-shrink: 0;
 }
 
-.header-app-name {
-  font-size: 14px;
-  font-weight: 500;
-  color: #909399;
+.home-btn {
+  color: rgba(255, 255, 255, 0.85);
 }
 
 .app-content {
@@ -283,5 +221,23 @@ function toggleSidebar() {
   overflow: auto;
   background-color: #f5f7fa;
   padding: 0;
+}
+
+.top-menu .el-menu-item {
+  height: 56px;
+  line-height: 56px;
+  color: rgba(255, 255, 255, 0.85);
+  border-bottom: 2px solid transparent;
+}
+
+.top-menu .el-menu-item:hover {
+  background-color: rgba(255, 255, 255, 0.15) !important;
+  color: #fff !important;
+}
+
+.top-menu .el-menu-item.is-active {
+  color: #fff !important;
+  border-bottom-color: #fff !important;
+  background-color: rgba(255, 255, 255, 0.1) !important;
 }
 </style>

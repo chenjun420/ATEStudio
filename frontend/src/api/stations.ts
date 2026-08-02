@@ -174,10 +174,146 @@ export interface WorkerRestartResponse {
  * POST /api/v1/workers/{workerId}/restart — trigger a worker restart.
  *
  * Publishes a restart control message to the worker via NATS on
- * ``ate.control.{workerId}``. The worker's control subscription
+ * ``ate.control.{workerId}`. The worker's control subscription
  * handles the restart action.
  */
 export async function restartWorker(workerId: string): Promise<WorkerRestartResponse> {
   const response = await api.post<WorkerRestartResponse>(`/workers/${workerId}/restart`)
+  return response.data
+}
+
+// ─── Node Registration ──────────────────────────────────────────────────────
+
+/**
+ * Payload for registering a new worker node.
+ */
+export interface WorkerRegisterRequest {
+  worker_id: string
+  hostname: string
+  capabilities?: string[]
+  max_concurrent_tasks?: number
+}
+
+/**
+ * POST /api/v1/workers — manually register a node.
+ *
+ * Writes a heartbeat entry to the ``ate-workers`` KV bucket so that a
+ * worker appears in the registry without having sent its own heartbeat
+ * yet. The per-key TTL (30s) still applies — the worker must take over
+ * heartbeating to stay visible.
+ */
+export async function registerWorker(data: WorkerRegisterRequest): Promise<WorkerInfo> {
+  const response = await api.post<WorkerInfo>('/workers', data)
+  return response.data
+}
+
+/**
+ * DELETE /api/v1/workers/{workerId} — delete a registered node.
+ *
+ * Removes the worker's heartbeat key from the ``ate-workers`` KV bucket.
+ */
+export async function deleteWorker(workerId: string): Promise<void> {
+  await api.delete(`/workers/${workerId}`)
+}
+
+// ─── Node-Flow Bindings ─────────────────────────────────────────────────────
+
+/**
+ * Node-flow binding returned from the backend.
+ */
+export interface NodeFlowBinding {
+  id: string
+  worker_id: string
+  sequence_id: string
+  sequence_name: string | null
+  is_active: boolean
+  priority: number
+  config: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+}
+
+/**
+ * Payload for creating a new node-flow binding.
+ */
+export interface NodeFlowBindingCreate {
+  worker_id: string
+  sequence_id: string
+  is_active?: boolean
+  priority?: number
+  config?: Record<string, unknown> | null
+}
+
+/**
+ * Payload for updating an existing binding.
+ */
+export interface NodeFlowBindingUpdate {
+  is_active?: boolean
+  priority?: number
+  config?: Record<string, unknown> | null
+}
+
+/**
+ * List response for node-flow bindings.
+ */
+export interface NodeFlowBindingListResponse {
+  items: NodeFlowBinding[]
+  total: number
+}
+
+/**
+ * Response from triggering execution from a binding.
+ */
+export interface BindingExecuteResponse {
+  execution_id: string
+  status: string
+}
+
+/**
+ * POST /api/v1/node-flow-bindings — create a new binding.
+ */
+export async function createNodeFlowBinding(data: NodeFlowBindingCreate): Promise<NodeFlowBinding> {
+  const response = await api.post<NodeFlowBinding>('/node-flow-bindings', data)
+  return response.data
+}
+
+/**
+ * GET /api/v1/node-flow-bindings — list all bindings.
+ */
+export async function listNodeFlowBindings(skip = 0, limit = 100): Promise<NodeFlowBindingListResponse> {
+  const response = await api.get<NodeFlowBindingListResponse>('/node-flow-bindings', {
+    params: { skip, limit },
+  })
+  return response.data
+}
+
+/**
+ * GET /api/v1/node-flow-bindings/by-worker/{workerId} — list bindings for a worker.
+ */
+export async function listBindingsByWorker(workerId: string): Promise<NodeFlowBindingListResponse> {
+  const response = await api.get<NodeFlowBindingListResponse>(`/node-flow-bindings/by-worker/${workerId}`)
+  return response.data
+}
+
+/**
+ * PUT /api/v1/node-flow-bindings/{bindingId} — update a binding.
+ */
+export async function updateNodeFlowBinding(bindingId: string, data: NodeFlowBindingUpdate): Promise<NodeFlowBinding> {
+  const response = await api.put<NodeFlowBinding>(`/node-flow-bindings/${bindingId}`, data)
+  return response.data
+}
+
+/**
+ * DELETE /api/v1/node-flow-bindings/{bindingId} — delete a binding.
+ */
+export async function deleteNodeFlowBinding(bindingId: string): Promise<void> {
+  await api.delete(`/node-flow-bindings/${bindingId}`)
+}
+
+/**
+ * POST /api/v1/node-flow-bindings/{bindingId}/execute — trigger execution from a binding.
+ */
+export async function executeBinding(bindingId: string): Promise<BindingExecuteResponse> {
+  const response = await api.post<BindingExecuteResponse>(`/node-flow-bindings/${bindingId}/execute`)
   return response.data
 }

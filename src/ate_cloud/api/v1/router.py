@@ -6,6 +6,7 @@ from ate_cloud.api.v1.dashboard import router as dashboard_router
 from ate_cloud.api.v1.debug import router as debug_router
 from ate_cloud.api.v1.executions import router as executions_router
 from ate_cloud.api.v1.health import router as health_router
+from ate_cloud.api.v1.node_flow_bindings import router as node_flow_bindings_router
 from ate_cloud.api.v1.node_templates import router as node_templates_router
 from ate_cloud.api.v1.reports import router as reports_router
 from ate_cloud.api.v1.resources import router as resources_router
@@ -28,3 +29,4 @@ api_router.include_router(dashboard_router)
 api_router.include_router(resources_router)
 api_router.include_router(reports_router)
 api_router.include_router(apps_router)
+api_router.include_router(node_flow_bindings_router)

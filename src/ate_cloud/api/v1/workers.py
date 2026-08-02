@@ -15,6 +15,7 @@ JetStreamWorker instances via the ``ate-workers`` JetStream KV bucket:
 
 import json
 import os
+from datetime import datetime, timezone
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -93,6 +94,108 @@ async def list_workers(
             detail=str(e),
         ) from e
     return WorkerListResponse(workers=workers, total=len(workers))
+
+
+@router.post("", response_model=WorkerInfo, status_code=status.HTTP_201_CREATED)
+async def register_worker(
+    request: Request,
+    service: Annotated[WorkerRegistryService, Depends(_get_worker_service)],
+) -> WorkerInfo:
+    """POST /api/v1/workers — manually register a node.
+
+    Writes a heartbeat entry to the ``ate-workers`` KV bucket so that a
+    worker appears in the registry without having sent its own heartbeat
+    yet. The per-key TTL (30s) still applies — the worker must take over
+    heartbeating to stay visible.
+
+    Request body (JSON):
+        - worker_id: Unique worker identifier.
+        - hostname: Hostname of the machine.
+        - capabilities: List of capability tags.
+        - max_concurrent_tasks: Max concurrent tasks the worker accepts.
+
+    Returns:
+        WorkerInfo for the newly registered worker.
+    """
+    body = await request.json()
+    worker_id = body.get("worker_id")
+    if not worker_id or not isinstance(worker_id, str):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Request body must contain 'worker_id' field",
+        )
+    hostname = body.get("hostname", "")
+    capabilities = body.get("capabilities", [])
+    max_concurrent_tasks = body.get("max_concurrent_tasks", 0)
+
+    payload = json.dumps({
+        "hostname": hostname,
+        "capabilities": capabilities,
+        "max_concurrent_tasks": max_concurrent_tasks,
+        "current_tasks": 0,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }).encode("utf-8")
+
+    try:
+        kv = await service._get_kv()  # noqa: SLF001 — same-bucket access for registration
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"KV bucket not available: {e}",
+        ) from e
+
+    key = f"workers.{worker_id}"
+    try:
+        await kv.put(key, payload)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to register worker: {e}",
+        ) from e
+
+    return WorkerInfo(
+        worker_id=worker_id,
+        hostname=hostname,
+        capabilities=capabilities,
+        max_concurrent_tasks=max_concurrent_tasks,
+        current_tasks=0,
+        last_heartbeat=datetime.now(timezone.utc),
+    )
+
+
+@router.delete("/{worker_id}")
+async def delete_worker(
+    worker_id: str,
+    service: Annotated[WorkerRegistryService, Depends(_get_worker_service)],
+) -> dict[str, Any]:
+    """DELETE /api/v1/workers/{worker_id} — delete a registered node.
+
+    Removes the worker's key from the ``ate-workers`` KV bucket. The
+    worker will no longer appear in the registry. If the worker is still
+    running and heartbeating, it will re-register itself on the next
+    heartbeat cycle.
+
+    Returns:
+        dict with status "deleted" and the worker_id.
+    """
+    try:
+        kv = await service._get_kv()  # noqa: SLF001 — same-bucket access for deletion
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"KV bucket not available: {e}",
+        ) from e
+
+    key = f"workers.{worker_id}"
+    try:
+        await kv.delete(key)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to delete worker: {e}",
+        ) from e
+
+    return {"status": "deleted", "worker_id": worker_id}
 
 
 @router.get("/{worker_id}", response_model=WorkerInfo)

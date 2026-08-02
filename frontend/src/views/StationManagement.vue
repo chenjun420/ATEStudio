@@ -15,13 +15,19 @@
  *
  * Route: /stations
  */
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import {
   ElButton,
   ElDialog,
   ElEmpty,
+  ElForm,
+  ElFormItem,
   ElInput,
+  ElInputNumber,
   ElMessage,
+  ElMessageBox,
+  ElOption,
+  ElSelect,
   ElSkeleton,
   ElTable,
   ElTableColumn,
@@ -29,7 +35,17 @@ import {
   type TableColumnCtx,
 } from 'element-plus'
 import { useStations, type WorkerStatus } from '@/composables/useStations'
-import type { WorkerInfo } from '@/api/stations'
+import {
+  type NodeFlowBinding,
+  type WorkerInfo,
+  createNodeFlowBinding,
+  deleteWorker,
+  executeBinding,
+  listBindingsByWorker,
+  listNodeFlowBindings,
+  registerWorker,
+} from '@/api/stations'
+import { fetchSequences, type Sequence } from '@/api/sequences'
 
 // ─── Composable state ───────────────────────────────────────────────────────
 
@@ -58,6 +74,31 @@ const configWorkerId = ref('')
 const configKey = ref('')
 const configValue = ref('')
 const configLoading = ref(false)
+
+// ─── Registration dialog state ──────────────────────────────────────────────
+
+const registerDialogVisible = ref(false)
+const registerForm = ref({
+  worker_id: '',
+  hostname: '',
+  capabilities: '',
+  max_concurrent_tasks: 1,
+})
+const registerLoading = ref(false)
+
+// ─── Bind-flow dialog state ─────────────────────────────────────────────────
+
+const bindDialogVisible = ref(false)
+const bindWorkerId = ref('')
+const bindWorkerHostname = ref('')
+const bindSelectedSequence = ref('')
+const bindSequences = ref<Sequence[]>([])
+const bindLoading = ref(false)
+const bindSequencesLoading = ref(false)
+
+// ─── Bindings map (worker_id → active binding) ──────────────────────────────
+
+const bindingsMap = ref<Map<string, NodeFlowBinding>>(new Map())
 
 // ─── Action loading state ───────────────────────────────────────────────────
 
@@ -91,6 +132,42 @@ const lastUpdatedText = computed(() => {
   if (!lastUpdated.value) return ''
   return lastUpdated.value.toLocaleTimeString()
 })
+
+// ─── Binding helpers ────────────────────────────────────────────────────────
+
+function bindingStatusLabel(workerId: string): string {
+  const binding = bindingsMap.value.get(workerId)
+  if (binding && binding.is_active && binding.sequence_name) {
+    return `已绑定: ${binding.sequence_name}`
+  }
+  return '未绑定'
+}
+
+function bindingTagType(workerId: string): 'success' | 'info' {
+  const binding = bindingsMap.value.get(workerId)
+  if (binding && binding.is_active) return 'success'
+  return 'info'
+}
+
+function hasActiveBinding(workerId: string): boolean {
+  const binding = bindingsMap.value.get(workerId)
+  return !!binding && binding.is_active
+}
+
+async function loadAllBindings(): Promise<void> {
+  try {
+    const response = await listNodeFlowBindings(0, 500)
+    const map = new Map<string, NodeFlowBinding>()
+    for (const item of response.items) {
+      if (item.is_active) {
+        map.set(item.worker_id, item)
+      }
+    }
+    bindingsMap.value = map
+  } catch {
+    // Silently fail — binding status is non-critical display info
+  }
+}
 
 // ─── Status helpers ─────────────────────────────────────────────────────────
 
@@ -326,6 +403,156 @@ async function handleRestart(worker: WorkerInfo): Promise<void> {
   }
 }
 
+// ─── Register node ──────────────────────────────────────────────────────────
+
+function openRegisterDialog(): void {
+  registerForm.value = {
+    worker_id: '',
+    hostname: '',
+    capabilities: '',
+    max_concurrent_tasks: 1,
+  }
+  registerDialogVisible.value = true
+}
+
+async function submitRegister(): Promise<void> {
+  if (!registerForm.value.worker_id.trim()) {
+    ElMessage.warning('请输入 Worker ID')
+    return
+  }
+  if (!registerForm.value.hostname.trim()) {
+    ElMessage.warning('请输入 Hostname')
+    return
+  }
+
+  registerLoading.value = true
+  try {
+    const capabilities = registerForm.value.capabilities
+      .split(',')
+      .map((c) => c.trim())
+      .filter((c) => c.length > 0)
+
+    await registerWorker({
+      worker_id: registerForm.value.worker_id.trim(),
+      hostname: registerForm.value.hostname.trim(),
+      capabilities,
+      max_concurrent_tasks: registerForm.value.max_concurrent_tasks,
+    })
+
+    ElMessage.success(`节点 ${registerForm.value.worker_id} 注册成功`)
+    registerDialogVisible.value = false
+    await refresh()
+  } catch (e: unknown) {
+    ElMessage.error(e instanceof Error ? e.message : '注册失败')
+  } finally {
+    registerLoading.value = false
+  }
+}
+
+// ─── Delete node ────────────────────────────────────────────────────────────
+
+async function handleDelete(worker: WorkerInfo): Promise<void> {
+  try {
+    await ElMessageBox.confirm(
+      `确定要删除节点 "${worker.worker_id}" (${worker.hostname}) 吗？`,
+      '删除确认',
+      {
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+        type: 'warning',
+        confirmButtonClass: 'el-button--danger',
+      },
+    )
+  } catch {
+    return // User cancelled
+  }
+
+  setActionLoading(worker.worker_id, 'delete')
+  try {
+    await deleteWorker(worker.worker_id)
+    ElMessage.success(`节点 ${worker.worker_id} 已删除`)
+    bindingsMap.value.delete(worker.worker_id)
+    bindingsMap.value = new Map(bindingsMap.value)
+    await refresh()
+  } catch (e: unknown) {
+    ElMessage.error(e instanceof Error ? e.message : '删除失败')
+  } finally {
+    clearActionLoading(worker.worker_id)
+  }
+}
+
+// ─── Bind flow ──────────────────────────────────────────────────────────────
+
+async function openBindDialog(worker: WorkerInfo): Promise<void> {
+  bindWorkerId.value = worker.worker_id
+  bindWorkerHostname.value = worker.hostname
+  bindSelectedSequence.value = ''
+  bindSequences.value = []
+  bindDialogVisible.value = true
+
+  bindSequencesLoading.value = true
+  try {
+    bindSequences.value = await fetchSequences()
+  } catch (e: unknown) {
+    ElMessage.error(e instanceof Error ? e.message : '加载流程列表失败')
+  } finally {
+    bindSequencesLoading.value = false
+  }
+}
+
+async function submitBind(): Promise<void> {
+  if (!bindSelectedSequence.value) {
+    ElMessage.warning('请选择一个流程')
+    return
+  }
+
+  bindLoading.value = true
+  try {
+    const binding = await createNodeFlowBinding({
+      worker_id: bindWorkerId.value,
+      sequence_id: bindSelectedSequence.value,
+      is_active: true,
+    })
+
+    // Update local bindings map
+    const seq = bindSequences.value.find((s) => s.id === bindSelectedSequence.value)
+    if (seq) {
+      binding.sequence_name = seq.name
+    }
+    bindingsMap.value.set(bindWorkerId.value, binding)
+    bindingsMap.value = new Map(bindingsMap.value)
+
+    ElMessage.success(`流程绑定成功: ${bindWorkerHostname.value} → ${seq?.name ?? bindSelectedSequence.value}`)
+    bindDialogVisible.value = false
+  } catch (e: unknown) {
+    ElMessage.error(e instanceof Error ? e.message : '绑定失败')
+  } finally {
+    bindLoading.value = false
+  }
+}
+
+// ─── Execute binding ────────────────────────────────────────────────────────
+
+async function handleExecute(worker: WorkerInfo): Promise<void> {
+  setActionLoading(worker.worker_id, 'execute')
+  try {
+    const bindingsResponse = await listBindingsByWorker(worker.worker_id)
+    const activeBinding = bindingsResponse.items.find((b) => b.is_active)
+
+    if (!activeBinding) {
+      ElMessage.warning(`节点 ${worker.hostname} 没有已绑定的流程，请先绑定`)
+      return
+    }
+
+    const result = await executeBinding(activeBinding.id)
+    ElMessage.success(`执行已触发，Execution ID: ${result.execution_id}`)
+  } catch (e: unknown) {
+    ElMessage.error(e instanceof Error ? e.message : '执行失败')
+  } finally {
+    clearActionLoading(worker.worker_id)
+  }
+}
+
 // ─── Watch for expanded row chart redraws ───────────────────────────────────
 
 watch(workerDetails, () => {
@@ -335,6 +562,12 @@ watch(workerDetails, () => {
     })
   })
 }, { deep: true })
+
+// ─── Load bindings on mount ─────────────────────────────────────────────────
+
+onMounted(() => {
+  void loadAllBindings()
+})
 
 // ─── Type for table column scope ────────────────────────────────────────────
 
@@ -364,6 +597,9 @@ type Scope = {
         <ElTag type="danger" size="small" data-testid="count-offline">
           {{ offlineCount }} Offline
         </ElTag>
+        <ElButton size="small" type="success" @click="openRegisterDialog" data-testid="btn-register">
+          注册节点
+        </ElButton>
         <ElButton size="small" :loading="loading" @click="refresh" data-testid="btn-refresh">
           Refresh
         </ElButton>
@@ -539,6 +775,19 @@ type Scope = {
           </template>
         </ElTableColumn>
 
+        <!-- Flow Binding -->
+        <ElTableColumn
+          label="流程绑定"
+          width="180"
+          data-testid="col-binding"
+        >
+          <template #default="{ row }: Scope">
+            <ElTag :type="bindingTagType(row.worker_id)" size="small">
+              {{ bindingStatusLabel(row.worker_id) }}
+            </ElTag>
+          </template>
+        </ElTableColumn>
+
         <!-- Current Task -->
         <ElTableColumn
           label="Current Task"
@@ -577,7 +826,7 @@ type Scope = {
         <!-- Actions -->
         <ElTableColumn
           label="Actions"
-          width="240"
+          width="440"
           fixed="right"
           data-testid="col-actions"
         >
@@ -607,6 +856,33 @@ type Scope = {
                 data-testid="btn-sync"
               >
                 同步
+              </ElButton>
+              <ElButton
+                size="small"
+                type="info"
+                @click="openBindDialog(row)"
+                data-testid="btn-bind-flow"
+              >
+                绑定流程
+              </ElButton>
+              <ElButton
+                size="small"
+                type="success"
+                :disabled="!hasActiveBinding(row.worker_id)"
+                :loading="actionLoading.get(row.worker_id) === 'execute'"
+                @click="handleExecute(row)"
+                data-testid="btn-execute"
+              >
+                执行
+              </ElButton>
+              <ElButton
+                size="small"
+                type="danger"
+                :loading="actionLoading.get(row.worker_id) === 'delete'"
+                @click="handleDelete(row)"
+                data-testid="btn-delete"
+              >
+                删除
               </ElButton>
             </div>
           </template>
@@ -654,6 +930,106 @@ type Scope = {
           data-testid="btn-config-submit"
         >
           Update
+        </ElButton>
+      </template>
+    </ElDialog>
+
+    <!-- ─── Register Node Dialog ─── -->
+    <ElDialog
+      v-model="registerDialogVisible"
+      title="注册节点"
+      width="520px"
+      data-testid="register-dialog"
+    >
+      <ElForm label-width="140px" label-position="right">
+        <ElFormItem label="Worker ID" required>
+          <ElInput
+            v-model="registerForm.worker_id"
+            placeholder="e.g. station-01"
+            data-testid="register-worker-id"
+          />
+        </ElFormItem>
+        <ElFormItem label="Hostname" required>
+          <ElInput
+            v-model="registerForm.hostname"
+            placeholder="e.g. 192.168.1.100"
+            data-testid="register-hostname"
+          />
+        </ElFormItem>
+        <ElFormItem label="Capabilities">
+          <ElInput
+            v-model="registerForm.capabilities"
+            placeholder="逗号分隔，e.g. dmm,psu,oscilloscope"
+            data-testid="register-capabilities"
+          />
+        </ElFormItem>
+        <ElFormItem label="Max Concurrent">
+          <ElInputNumber
+            v-model="registerForm.max_concurrent_tasks"
+            :min="1"
+            :max="100"
+            data-testid="register-max-tasks"
+          />
+        </ElFormItem>
+      </ElForm>
+      <template #footer>
+        <ElButton @click="registerDialogVisible = false" data-testid="btn-register-cancel">
+          取消
+        </ElButton>
+        <ElButton
+          type="primary"
+          :loading="registerLoading"
+          @click="submitRegister"
+          data-testid="btn-register-submit"
+        >
+          注册
+        </ElButton>
+      </template>
+    </ElDialog>
+
+    <!-- ─── Bind Flow Dialog ─── -->
+    <ElDialog
+      v-model="bindDialogVisible"
+      title="绑定流程"
+      width="520px"
+      data-testid="bind-flow-dialog"
+    >
+      <div class="sm-bind-dialog-body">
+        <div class="sm-config-row">
+          <span class="sm-config-label">Worker:</span>
+          <span class="sm-config-value">{{ bindWorkerId }} ({{ bindWorkerHostname }})</span>
+        </div>
+        <ElForm label-width="100px" label-position="right">
+          <ElFormItem label="选择流程" required>
+            <ElSelect
+              v-model="bindSelectedSequence"
+              placeholder="请选择流程"
+              :loading="bindSequencesLoading"
+              filterable
+              style="width: 100%"
+              data-testid="bind-sequence-select"
+            >
+              <ElOption
+                v-for="seq in bindSequences"
+                :key="seq.id"
+                :label="seq.name"
+                :value="seq.id"
+              />
+            </ElSelect>
+          </ElFormItem>
+        </ElForm>
+      </div>
+      <template #footer>
+        <ElButton @click="bindDialogVisible = false" data-testid="btn-bind-cancel">
+          取消
+        </ElButton>
+        <ElButton
+          type="primary"
+          :loading="bindLoading"
+          @click="submitBind"
+          data-testid="btn-bind-submit"
+        >
+          绑定
         </ElButton>
       </template>
     </ElDialog>
@@ -741,7 +1117,8 @@ type Scope = {
 .sm-actions {
   display: flex;
   gap: var(--spacing-xs);
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
+  align-items: center;
 }
 
 /* ─── Expand panel ─── */
@@ -849,6 +1226,13 @@ type Scope = {
   font-size: 0.875rem;
   font-weight: 500;
   color: var(--color-text-primary);
+}
+
+/* ─── Bind dialog ─── */
+.sm-bind-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
 }
 
 /* ─── Responsive ─── */
