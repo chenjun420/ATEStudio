@@ -178,7 +178,12 @@ class ConditionEvaluator:
             else:
                 # Compare status (condition.status is a string like "PASSED")
                 expected_status = StepStatus[condition.status]
-                results.append(step_status == expected_status)
+                # SKIPPED satisfies any precondition — a skipped step's
+                # dependents should proceed (standard workflow semantics).
+                if step_status == StepStatus.SKIPPED:
+                    results.append(True)
+                else:
+                    results.append(step_status == expected_status)
 
         # Evaluate expression
         if condition.expression is not None:

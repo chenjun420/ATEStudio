@@ -98,8 +98,32 @@ class PlanBootstrapper:
         for step_id, condition in steps:
             if not self.step_registry.has_step(step_id):
                 self.step_registry.register(step_id, condition)
-        self.scheduler.compile_plan(steps, dut_id=dut_id)
+        self.scheduler.compile_plan(steps)
+
+        # Register skip_if conditions so the scheduler can evaluate them
+        # before dispatching steps. Without this, _skip_conditions stays
+        # empty and skip_if expressions are never checked.
+        skip_conditions: dict[str, tuple[str, str | None]] = {}
+        self._collect_skip_conditions(self._plan.steps, skip_conditions)
+        if skip_conditions:
+            self.scheduler.register_skip_conditions(skip_conditions)
+
         return self.scheduler
+
+    def _collect_skip_conditions(
+        self,
+        items: list[YamlStep | YamlLoop],
+        result: dict[str, tuple[str, str | None]],
+    ) -> None:
+        """Recursively collect skip_if expressions from steps and loops."""
+        for item in items:
+            if isinstance(item, YamlStep):
+                if item.skip_if is not None:
+                    result[item.id] = (item.skip_if, item.skip_reason)
+            else:  # YamlLoop
+                if item.skip_if is not None:
+                    result[item.id] = (item.skip_if, item.skip_reason)
+                self._collect_skip_conditions(item.steps, result)
 
     def _flatten(self) -> list[tuple[str, Condition | None]]:
         result: list[tuple[str, Condition | None]] = []
