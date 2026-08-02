@@ -8,6 +8,9 @@ import { useExecutionStatus } from '@/composables/useExecutionStatus'
 import { ElMessage, ElSelect, ElOption, ElButton } from 'element-plus'
 import { fetchSequences, createSequence, updateSequence, type Sequence } from '@/api/sequences'
 import { createExecution, abortExecution } from '@/api/executions'
+import { useAuth } from '@/composables/useAuth'
+
+const { hasScope } = useAuth()
 
 // Emit events for sequence selection and execution status
 const emit = defineEmits<{
@@ -467,6 +470,7 @@ onUnmounted(() => {
     <!-- File operations -->
     <div class="tw-flex tw-items-center tw-gap-2">
       <button
+        v-if="hasScope('flow:write')"
         class="tw-px-3 tw-py-1.5 tw-text-sm tw-font-medium tw-text-white tw-bg-primary-600 tw-rounded-md hover:tw-bg-primary-700 tw-transition-colors tw-flex tw-items-center tw-gap-1.5"
         title="Save (Ctrl+S)"
         @click="handleSave"

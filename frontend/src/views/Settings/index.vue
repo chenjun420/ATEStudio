@@ -8,7 +8,7 @@ import i18n from '@/i18n'
 
 const { t } = useI18n()
 const { mode, setMode } = useTheme()
-const { isAuthenticated, savePreferences, loadPreferences, preferences } = useAuth()
+const { isAuthenticated, hasScope, savePreferences, loadPreferences, preferences } = useAuth()
 
 const themeMode = ref<ThemeMode>(mode.value)
 const language = ref<string>('en')
@@ -82,7 +82,7 @@ onMounted(async () => {
 
       <el-form label-position="top">
         <el-form-item :label="t('settings.themeMode')">
-          <el-radio-group :model-value="themeMode" @update:model-value="applyTheme">
+          <el-radio-group :model-value="themeMode" :disabled="!hasScope('system:write')" @update:model-value="applyTheme">
             <el-radio-button value="light">{{ t('settings.themeLight') }}</el-radio-button>
             <el-radio-button value="dark">{{ t('settings.themeDark') }}</el-radio-button>
             <el-radio-button value="auto">{{ t('settings.themeAuto') }}</el-radio-button>
@@ -90,7 +90,7 @@ onMounted(async () => {
         </el-form-item>
 
         <el-form-item :label="t('settings.language')">
-          <el-select :model-value="language" @update:model-value="applyLanguage" style="width: 240px">
+          <el-select :model-value="language" :disabled="!hasScope('system:write')" @update:model-value="applyLanguage" style="width: 240px">
             <el-option label="English" value="en" />
             <el-option label="中文" value="zh-CN" />
           </el-select>
@@ -99,7 +99,7 @@ onMounted(async () => {
     </el-card>
 
     <div class="actions">
-      <el-button type="primary" :loading="saving" @click="handleSave">
+      <el-button v-if="hasScope('system:write')" type="primary" :loading="saving" @click="handleSave">
         {{ t('settings.saveSettings') }}
       </el-button>
       <el-button @click="handleReset">{{ t('settings.resetDefaults') }}</el-button>

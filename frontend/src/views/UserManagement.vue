@@ -30,7 +30,7 @@ import {
 import type { UserResponse } from '@/api/auth'
 
 const { t } = useI18n()
-const { isAdmin, user: currentUser, logout } = useAuth()
+const { isAdmin, hasScope, user: currentUser, logout } = useAuth()
 
 const users = ref<UserResponse[]>([])
 const loading = ref(false)
@@ -201,7 +201,7 @@ onMounted(() => {
   <div class="user-management">
     <header class="page-header">
       <h1>{{ t('users.userList') }}</h1>
-      <el-button type="primary" @click="openCreateDialog" :disabled="!isAdmin">
+      <el-button v-if="hasScope('user:write')" type="primary" @click="openCreateDialog">
         {{ t('users.createUser') }}
       </el-button>
     </header>
@@ -245,10 +245,11 @@ onMounted(() => {
       </el-table-column>
       <el-table-column :label="t('common.actions')" width="160">
         <template #default="{ row }">
-          <el-button size="small" @click="openEditDialog(row)">
+          <el-button v-if="hasScope('user:write')" size="small" @click="openEditDialog(row)">
             {{ t('common.edit') }}
           </el-button>
           <el-button
+            v-if="hasScope('user:write')"
             size="small"
             type="danger"
             :disabled="row.id === currentUser?.id"

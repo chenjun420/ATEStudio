@@ -44,6 +44,9 @@ import {
   type ScriptContentResponse,
   type ScriptVersionInfo,
 } from '@/api/scripts'
+import { useAuth } from '@/composables/useAuth'
+
+const { hasScope } = useAuth()
 
 // ─── Local axios instance for AI generate/refine endpoints ──────────────────
 
@@ -393,7 +396,7 @@ onMounted(() => {
         <ElButton type="primary" @click="openGenerateDialog">AI 生成</ElButton>
         <ElButton type="success" @click="openRefineDialog">AI 优化</ElButton>
         <ElButton type="primary" plain @click="loadScripts">刷新</ElButton>
-        <ElButton type="primary" @click="openCreateDialog">新建脚本</ElButton>
+        <ElButton v-if="hasScope('flow:write')" type="primary" @click="openCreateDialog">新建脚本</ElButton>
       </div>
     </div>
 
@@ -448,13 +451,13 @@ onMounted(() => {
 
         <ElTableColumn label="操作" width="340" fixed="right" align="center">
           <template #default="{ row }">
-            <ElButton size="small" type="primary" link @click="openEditDialog(row)">
+            <ElButton v-if="hasScope('flow:write')" size="small" type="primary" link @click="openEditDialog(row)">
               编辑内容
             </ElButton>
             <ElButton size="small" type="info" link @click="openVersionDialog(row)">
               版本历史
             </ElButton>
-            <ElButton size="small" type="danger" link @click="handleDelete(row)">
+            <ElButton v-if="hasScope('flow:write')" size="small" type="danger" link @click="handleDelete(row)">
               删除
             </ElButton>
           </template>

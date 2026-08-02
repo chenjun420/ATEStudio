@@ -7,8 +7,8 @@ import { useAuth } from '@/composables/useAuth'
  * Structure:
  * - /login               - Login page (public, no layout)
  * - /                     - Portal home page (app entry cards)
- * - /node/*               - Node Management app (wrapped in AppLayout)
- * - /flow/*               - Flow Management app (wrapped in AppLayout)
+ * - /node/*               - Node Management app (test station nodes, wrapped in AppLayout)
+ * - /flow/*               - Flow Management app (sequences, flow node templates, scripts, binding, wrapped in AppLayout)
  * - /monitor/*            - Execution Monitoring app (wrapped in AppLayout)
  * - /system/*             - System Management app (wrapped in AppLayout)
  * - /operator/:station_id - Operator view (standalone, no layout)
@@ -57,12 +57,6 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '节点详情' },
         props: true,
       },
-      {
-        path: 'templates',
-        name: 'NodeTemplates',
-        component: () => import('@/views/NodeTemplates.vue'),
-        meta: { title: '节点模板' },
-      },
     ],
   },
 
@@ -89,6 +83,12 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/SequenceEditor/index.vue'),
         meta: { title: '流程编排' },
         props: true,
+      },
+      {
+        path: 'templates',
+        name: 'NodeTemplates',
+        component: () => import('@/views/NodeTemplates.vue'),
+        meta: { title: '流程节点模板' },
       },
       {
         path: 'scripts',

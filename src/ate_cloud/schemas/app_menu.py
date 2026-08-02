@@ -20,6 +20,7 @@ class AppMenuResponse(BaseModel):
     icon: Optional[str] = None
     sort_order: int
     is_active: bool
+    required_permissions: list[str] | None = None
 
 
 class AppMenuTree(AppMenuResponse):
@@ -53,3 +54,31 @@ class AppListResponse(BaseModel):
 
     items: list[AppResponse]
     total: int
+
+
+class MenuCreateRequest(BaseModel):
+    """Request body for creating a new menu item."""
+
+    code: str
+    name: str
+    route_path: str
+    route_name: Optional[str] = None
+    icon: Optional[str] = None
+    sort_order: int = 0
+    is_active: Optional[bool] = None
+    parent_id: Optional[str] = None
+    required_permissions: Optional[list[str]] = None
+
+
+class MenuUpdateRequest(BaseModel):
+    """Request body for updating a menu item. All fields optional."""
+
+    code: Optional[str] = None
+    name: Optional[str] = None
+    route_path: Optional[str] = None
+    route_name: Optional[str] = None
+    icon: Optional[str] = None
+    sort_order: Optional[int] = None
+    is_active: Optional[bool] = None
+    parent_id: Optional[str] = None
+    required_permissions: Optional[list[str]] = None

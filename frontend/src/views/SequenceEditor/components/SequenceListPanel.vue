@@ -4,6 +4,9 @@ import { ElInput, ElScrollbar, ElEmpty, ElMessageBox, ElMessage } from 'element-
 import { Search, DocumentCopy, Delete } from '@element-plus/icons-vue'
 import { fetchSequences, deleteSequence, createSequence, type Sequence } from '@/api/sequences'
 import { useTabsStore } from '@/stores/tabs'
+import { useAuth } from '@/composables/useAuth'
+
+const { hasScope } = useAuth()
 
 const emit = defineEmits<{
   sequenceSelected: [sequence: Sequence]
@@ -235,7 +238,7 @@ function formatDate(dateString?: string): string {
           <el-icon class="context-menu-icon"><DocumentCopy /></el-icon>
           <span>Clone</span>
         </button>
-        <button class="context-menu-item context-menu-item-danger" @click="handleDelete">
+        <button v-if="hasScope('flow:write')" class="context-menu-item context-menu-item-danger" @click="handleDelete">
           <el-icon class="context-menu-icon"><Delete /></el-icon>
           <span>Delete</span>
         </button>

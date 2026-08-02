@@ -40,6 +40,9 @@ import {
 } from 'element-plus'
 import { Refresh, Plus, Delete, Aim as OptimizeIcon } from '@element-plus/icons-vue'
 import axios from 'axios'
+import { useAuth } from '@/composables/useAuth'
+
+const { hasScope } = useAuth()
 
 const api = axios.create({
   baseURL: '/api/v1',
@@ -288,7 +291,7 @@ onMounted(() => {
       <template #header>
         <div class="flex items-center justify-between">
           <span class="text-lg font-semibold">Changeover Cost Matrix</span>
-          <ElButton type="primary" :icon="Plus" size="small" @click="openCreateDialog">
+          <ElButton v-if="hasScope('system:write')" type="primary" :icon="Plus" size="small" @click="openCreateDialog">
             Add Transition
           </ElButton>
         </div>
@@ -314,7 +317,7 @@ onMounted(() => {
                 v-if="row.product !== toP"
                 class="cell-content"
                 :style="getCellColor(matrixData[row.product]?.[toP]?.cost ?? null)"
-                @click="openEditDialog(row.product, toP)"
+                @click="hasScope('system:write') && openEditDialog(row.product, toP)"
               >
                 <template v-if="matrixData[row.product]?.[toP]?.cost !== null && matrixData[row.product]?.[toP]?.cost !== undefined">
                   <ElTag :type="getCostTagType(matrixData[row.product]?.[toP]?.cost ?? null)" size="small">
@@ -324,6 +327,7 @@ onMounted(() => {
                     {{ matrixData[row.product]?.[toP]?.time_minutes ?? 0 }} min
                   </div>
                   <ElButton
+                    v-if="hasScope('system:write')"
                     type="danger"
                     :icon="Delete"
                     size="small"

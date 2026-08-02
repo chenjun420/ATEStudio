@@ -40,6 +40,9 @@ import {
   type NodeTemplateCreate,
   type NodeTemplateUpdate,
 } from '@/api/nodeTemplates'
+import { useAuth } from '@/composables/useAuth'
+
+const { hasScope } = useAuth()
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -328,6 +331,7 @@ onMounted(() => {
           data-testid="nt-search-input"
         />
         <ElButton
+          v-if="hasScope('flow:write')"
           type="primary"
           :icon="Plus"
           @click="openCreateDialog"
@@ -410,6 +414,7 @@ onMounted(() => {
           <template #default="{ row }">
             <div class="nt-actions">
               <ElButton
+                v-if="hasScope('flow:write')"
                 size="small"
                 type="primary"
                 @click="openEditDialog(row)"
@@ -418,6 +423,7 @@ onMounted(() => {
                 编辑
               </ElButton>
               <ElButton
+                v-if="hasScope('flow:write')"
                 size="small"
                 type="danger"
                 @click="handleDelete(row)"

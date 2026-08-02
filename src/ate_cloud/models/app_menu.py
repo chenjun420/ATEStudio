@@ -6,7 +6,7 @@ Menus represent navigation items within an app, mapped to frontend routes.
 
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import String, Text, Integer, DateTime, ForeignKey, func, Boolean
+from sqlalchemy import JSON, String, Text, Integer, DateTime, ForeignKey, func, Boolean
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from . import Base
 
@@ -54,6 +54,7 @@ class AppMenu(Base):
     icon: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    required_permissions: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

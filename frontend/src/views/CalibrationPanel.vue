@@ -42,6 +42,9 @@ import {
   type CalibrationCreate,
   type CalibrationStatus,
 } from '@/api/calibrations'
+import { useAuth } from '@/composables/useAuth'
+
+const { hasScope } = useAuth()
 
 // ─── State ───────────────────────────────────────────────────────────────────
 
@@ -291,7 +294,7 @@ onMounted(() => {
           Refresh Statuses
         </ElButton>
         <ElButton size="small" @click="loadRecords" data-testid="btn-reload">Reload</ElButton>
-        <ElButton type="primary" size="small" @click="openCreateDialog" data-testid="btn-create">
+        <ElButton v-if="hasScope('system:write')" type="primary" size="small" @click="openCreateDialog" data-testid="btn-create">
           Record Calibration
         </ElButton>
       </div>
@@ -378,8 +381,8 @@ onMounted(() => {
         <ElTableColumn prop="notes" label="Notes" min-width="160" show-overflow-tooltip />
         <ElTableColumn label="Actions" width="160" fixed="right">
           <template #default="{ row }">
-            <ElButton size="small" link @click="openEditDialog(row)">Edit</ElButton>
-            <ElButton size="small" link type="danger" @click="handleDelete(row)">Delete</ElButton>
+            <ElButton v-if="hasScope('system:write')" size="small" link @click="openEditDialog(row)">Edit</ElButton>
+            <ElButton v-if="hasScope('system:write')" size="small" link type="danger" @click="handleDelete(row)">Delete</ElButton>
           </template>
         </ElTableColumn>
       </ElTable>

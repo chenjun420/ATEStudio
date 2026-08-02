@@ -258,13 +258,29 @@ function handleCommand(command: string): void {
 }
 
 .top-menu {
-  --el-menu-bg-color: transparent;
-  --el-menu-text-color: rgba(255, 255, 255, 0.85);
-  --el-menu-active-color: #fff;
-  --el-menu-hover-text-color: #fff;
-  --el-menu-hover-bg-color: rgba(255, 255, 255, 0.15);
-  border-bottom: none;
+  background: transparent !important;
+  border-bottom: none !important;
   height: 56px;
+}
+
+.top-menu:deep(> .el-sub-menu__title),
+.top-menu :deep(.el-menu-item) {
+  height: 56px;
+  line-height: 56px;
+  background-color: transparent !important;
+  color: rgba(255, 255, 255, 0.85) !important;
+  border-bottom: 2px solid transparent;
+}
+
+.top-menu :deep(.el-menu-item:hover) {
+  background-color: rgba(255, 255, 255, 0.15) !important;
+  color: #fff !important;
+}
+
+.top-menu :deep(.el-menu-item.is-active) {
+  color: #fff !important;
+  border-bottom-color: #fff !important;
+  background-color: rgba(255, 255, 255, 0.1) !important;
 }
 
 .header-right {
@@ -308,23 +324,5 @@ function handleCommand(command: string): void {
   overflow: auto;
   background-color: var(--color-bg-primary);
   padding: 0;
-}
-
-.top-menu .el-menu-item {
-  height: 56px;
-  line-height: 56px;
-  color: rgba(255, 255, 255, 0.85);
-  border-bottom: 2px solid transparent;
-}
-
-.top-menu .el-menu-item:hover {
-  background-color: rgba(255, 255, 255, 0.15) !important;
-  color: #fff !important;
-}
-
-.top-menu .el-menu-item.is-active {
-  color: #fff !important;
-  border-bottom-color: #fff !important;
-  background-color: rgba(255, 255, 255, 0.1) !important;
 }
 </style>

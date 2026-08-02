@@ -29,8 +29,10 @@ import {
   type RoleCreate,
   type RoleUpdate,
 } from '@/api/rbac'
+import { useAuth } from '@/composables/useAuth'
 
 const { t } = useI18n()
+const { hasScope } = useAuth()
 
 const roles = ref<Role[]>([])
 const permissions = ref<Permission[]>([])
@@ -160,7 +162,7 @@ onMounted(() => {
         <el-button @click="handleSeed">
           {{ t('rbac.seed') }}
         </el-button>
-        <el-button type="primary" @click="openCreateDialog">
+        <el-button v-if="hasScope('admin')" type="primary" @click="openCreateDialog">
           {{ t('rbac.createRole') }}
         </el-button>
       </div>
@@ -202,10 +204,11 @@ onMounted(() => {
       </el-table-column>
       <el-table-column :label="t('common.actions')" width="160">
         <template #default="{ row }">
-          <el-button size="small" @click="openEditDialog(row)">
+          <el-button v-if="hasScope('admin')" size="small" @click="openEditDialog(row)">
             {{ t('common.edit') }}
           </el-button>
           <el-button
+            v-if="hasScope('admin')"
             size="small"
             type="danger"
             :disabled="row.is_system"

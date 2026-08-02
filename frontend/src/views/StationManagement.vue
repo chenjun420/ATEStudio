@@ -46,6 +46,9 @@ import {
   registerWorker,
 } from '@/api/stations'
 import { fetchSequences, type Sequence } from '@/api/sequences'
+import { useAuth } from '@/composables/useAuth'
+
+const { hasScope } = useAuth()
 
 // ─── Composable state ───────────────────────────────────────────────────────
 
@@ -597,7 +600,7 @@ type Scope = {
         <ElTag type="danger" size="small" data-testid="count-offline">
           {{ offlineCount }} Offline
         </ElTag>
-        <ElButton size="small" type="success" @click="openRegisterDialog" data-testid="btn-register">
+        <ElButton v-if="hasScope('node:write')" size="small" type="success" @click="openRegisterDialog" data-testid="btn-register">
           注册节点
         </ElButton>
         <ElButton size="small" :loading="loading" @click="refresh" data-testid="btn-refresh">
@@ -833,6 +836,7 @@ type Scope = {
           <template #default="{ row }: Scope">
             <div class="sm-actions">
               <ElButton
+                v-if="hasScope('node:write')"
                 size="small"
                 @click="openConfigDialog(row)"
                 data-testid="btn-config"
@@ -840,6 +844,7 @@ type Scope = {
                 配置
               </ElButton>
               <ElButton
+                v-if="hasScope('node:write')"
                 size="small"
                 type="warning"
                 :loading="actionLoading.get(row.worker_id) === 'restart'"
@@ -849,6 +854,7 @@ type Scope = {
                 重启
               </ElButton>
               <ElButton
+                v-if="hasScope('node:write')"
                 size="small"
                 type="primary"
                 :loading="actionLoading.get(row.worker_id) === 'sync'"
@@ -858,6 +864,7 @@ type Scope = {
                 同步
               </ElButton>
               <ElButton
+                v-if="hasScope('flow:write')"
                 size="small"
                 type="info"
                 @click="openBindDialog(row)"
@@ -866,6 +873,7 @@ type Scope = {
                 绑定流程
               </ElButton>
               <ElButton
+                v-if="hasScope('exec:run')"
                 size="small"
                 type="success"
                 :disabled="!hasActiveBinding(row.worker_id)"
@@ -876,6 +884,7 @@ type Scope = {
                 执行
               </ElButton>
               <ElButton
+                v-if="hasScope('node:write')"
                 size="small"
                 type="danger"
                 :loading="actionLoading.get(row.worker_id) === 'delete'"
