@@ -57,7 +57,7 @@ def _get_worker_service(request: Request) -> WorkerRegistryService:
 def _get_config_service(request: Request) -> ConfigDistributionService:
     """Dependency: get ConfigDistributionService from app state."""
     svc = getattr(request.app.state, "config_distribution", None)
-    if svc is None:
+    if not isinstance(svc, ConfigDistributionService):
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Config distribution service not available (NATS may be down)",
@@ -68,7 +68,7 @@ def _get_config_service(request: Request) -> ConfigDistributionService:
 def _get_versioning_service(request: Request) -> ScriptVersioningService:
     """Dependency: get ScriptVersioningService from app state."""
     svc = getattr(request.app.state, "script_versioning", None)
-    if svc is None:
+    if not isinstance(svc, ScriptVersioningService):
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Script versioning service not initialized",

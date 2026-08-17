@@ -15,9 +15,10 @@ Built-in functions for expressions:
 
 import asyncio
 import time
-from typing import Any
+from typing import Any, cast
 
-from simpleeval import SimpleEval
+# simpleeval 无 py.typed 标记，import 只能按未类型化第三方库处理
+from simpleeval import SimpleEval  # type: ignore[import-untyped]
 
 from ..exceptions import ConditionTimeoutError
 from ..types import Condition, StepStatus
@@ -142,7 +143,7 @@ class ConditionEvaluator:
                 except (KeyError, TypeError):
                     return None
 
-        return status
+        return cast(StepStatus, status)
 
     def evaluate(self, condition: Condition) -> bool:
         """Evaluate a condition and return the result.

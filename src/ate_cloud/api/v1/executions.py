@@ -16,9 +16,9 @@ from collections.abc import AsyncGenerator
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy import func, select
+from sqlalchemy import ColumnElement, String, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sse_starlette.sse import EventSourceResponse, ServerSentEvent
+from sse_starlette.sse import EventSourceResponse, ServerSentEvent  # type: ignore[attr-defined]
 
 from ate_cloud.db import get_db
 from ate_cloud.models.execution import Execution
@@ -62,7 +62,13 @@ def get_sse_bridge(request: Request) -> SSEBridge:
     Returns:
         SSEBridge instance attached to app.state.
     """
-    return request.app.state.sse_bridge
+    bridge = getattr(request.app.state, "sse_bridge", None)
+    if not isinstance(bridge, SSEBridge):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="SSE bridge not available",
+        )
+    return bridge
 
 
 @router.get("/{run_id}/events", response_class=EventSourceResponse)
@@ -292,11 +298,11 @@ async def simulate_execution(
                 bias=sim_data.bias,
                 seed=sim_data.seed,
             )
-            result = FullChainSimulator(
+            full_result = FullChainSimulator(
                 noise_config=noise_config,
                 fault_config=sim_data.fault_config,
             ).run(plan)
-            for decision in result.dry_run_result.decisions:
+            for decision in full_result.dry_run_result.decisions:
                 events.append(
                     SimulationResultEvent(
                         step_id=decision.step_id,
@@ -309,7 +315,7 @@ async def simulate_execution(
                         },
                     )
                 )
-            for meas in result.measurements:
+            for meas in full_result.measurements:
                 events.append(
                     SimulationResultEvent(
                         step_id=meas.step_id,
@@ -324,14 +330,14 @@ async def simulate_execution(
                         },
                     )
                 )
-            status = "passed" if result.all_passed else "failed"
+            status = "passed" if full_result.all_passed else "failed"
             statistics = {
-                "dry_run_passed": result.dry_run_result.passed,
-                "dry_run_failed": result.dry_run_result.failed,
-                "dry_run_skipped": result.dry_run_result.skipped,
-                "measurements": len(result.measurements),
-                "instrument_stats": result.instrument_stats,
-                "summary": result.summary,
+                "dry_run_passed": full_result.dry_run_result.passed,
+                "dry_run_failed": full_result.dry_run_result.failed,
+                "dry_run_skipped": full_result.dry_run_result.skipped,
+                "measurements": len(full_result.measurements),
+                "instrument_stats": full_result.instrument_stats,
+                "summary": full_result.summary,
             }
     except Exception as e:  # noqa: BLE001
         status = "error"
@@ -439,7 +445,7 @@ async def create_execution(
         data={"run_id": run_id, "sequence_id": execution_data.sequence_id, "status": "PENDING"},
     )
 
-    return execution
+    return ExecutionResponse.model_validate(execution)
 
 
 def _extract_product_type(config: dict[str, Any] | None) -> str | None:
@@ -562,7 +568,7 @@ async def search_executions(
     query = select(Execution)
     count_query = select(func.count()).select_from(Execution)
 
-    conditions = []
+    conditions: list[ColumnElement[bool]] = []
 
     if search_data.serial_number:
         conditions.append(
@@ -574,7 +580,7 @@ async def search_executions(
         # SQLite JSON: config->>'$.product_type'; PostgreSQL: config->>'product_type'
         # Using ilike on cast for cross-database compatibility.
         conditions.append(
-            func.cast(Execution.config, str).ilike(
+            func.cast(Execution.config, String).ilike(
                 f'%"product_type": "{search_data.product_type}"%'
             )
         )
@@ -639,7 +645,7 @@ async def get_execution(
     if not execution:
         raise HTTPException(status_code=404, detail="Execution not found")
 
-    return execution
+    return ExecutionResponse.model_validate(execution)
 
 
 @router.post("/{run_id}/abort", response_model=ExecutionAbortResponse)

@@ -319,7 +319,7 @@ class TestReplayPagination:
             meta = MagicMock()
             meta.sequence = MagicMock()
             meta.sequence.stream = i + 1
-            msg.metadata = AsyncMock(return_value=meta)
+            msg.metadata = meta
             msg.ack = AsyncMock()
             batch1.append(msg)
 
@@ -338,7 +338,7 @@ class TestReplayPagination:
             meta = MagicMock()
             meta.sequence = MagicMock()
             meta.sequence.stream = i + 101
-            msg.metadata = AsyncMock(return_value=meta)
+            msg.metadata = meta
             msg.ack = AsyncMock()
             batch2.append(msg)
 
@@ -428,7 +428,7 @@ class TestReplayPagination:
                 meta = MagicMock()
                 meta.sequence = MagicMock()
                 meta.sequence.stream = start + i
-                msg.metadata = AsyncMock(return_value=meta)
+                msg.metadata = meta
                 msg.ack = AsyncMock()
                 batch.append(msg)
             return batch

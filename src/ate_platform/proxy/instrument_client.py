@@ -16,6 +16,7 @@ import multiprocessing
 import threading
 import time
 import uuid
+from queue import Empty
 from typing import Any
 
 import structlog
@@ -35,8 +36,8 @@ class InstrumentClient:
 
     def __init__(
         self,
-        request_queue: multiprocessing.Queue,
-        response_queue: multiprocessing.Queue,
+        request_queue: multiprocessing.Queue[Any],
+        response_queue: multiprocessing.Queue[Any],
         resource_id: str,
         timeout: float = 30.0,
         stopped_event: threading.Event | None = None,
@@ -88,7 +89,7 @@ class InstrumentClient:
         while time.monotonic() < deadline:
             try:
                 resp = self.response_queue.get(timeout=min(0.5, self.timeout))
-            except (multiprocessing.queues.Empty, EOFError):
+            except (Empty, EOFError):
                 continue
             if resp.get("req_id") != req_id:
                 # 非本请求的响应：放回队列供其他客户端匹配

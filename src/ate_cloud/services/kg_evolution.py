@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import Any
+from typing import Any, cast
 
 from ate_cloud.services.embedding_service import EmbeddingService
 from ate_cloud.services.neo4j_graph_service import Neo4jGraphService
@@ -212,9 +212,11 @@ class KGEvolution:
         Returns:
             Dict with ``nodes_created`` and ``edges_created`` counts.
         """
-        embedding: list[float] = feedback.get("_embedding")
-        if embedding is None:
+        embedding_raw: Any = feedback.get("_embedding")
+        if embedding_raw is None:
             embedding = await self._embedding.embed(feedback["fault_symptom"])
+        else:
+            embedding = cast(list[float], embedding_raw)
 
         params: dict[str, Any] = {
             "fault_symptom": feedback["fault_symptom"],

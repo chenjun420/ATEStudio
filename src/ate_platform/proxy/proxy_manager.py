@@ -53,8 +53,8 @@ class ProxyManager:
         self.log_dir = log_dir
         self.inline = inline
 
-        self._request_queue = multiprocessing.Queue()
-        self._response_queue = multiprocessing.Queue()
+        self._request_queue: multiprocessing.Queue[Any] = multiprocessing.Queue()
+        self._response_queue: multiprocessing.Queue[Any] = multiprocessing.Queue()
         self._proxy: InstrumentProxy | None = None
         self._process: multiprocessing.Process | None = None
         self._thread: threading.Thread | None = None

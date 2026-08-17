@@ -21,6 +21,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
+from typing import Any
 
 from shared.dsl import YamlLoop, YamlPlan, YamlStep
 
@@ -137,7 +138,7 @@ class FullChainSimulator:
         self,
         noise_config: NoiseConfig | None = None,
         dry_run_scheduler: DryRunScheduler | None = None,
-        fault_config: list[dict] | None = None,
+        fault_config: list[dict[str, Any]] | None = None,
     ) -> None:
         """Initialize the full-chain simulator.
 
@@ -156,7 +157,7 @@ class FullChainSimulator:
             dry_run_scheduler or DryRunScheduler()
         )
         self._instrument_simulators: dict[str, InstrumentSimulator] = {}
-        self._fault_config: list[dict] | None = fault_config
+        self._fault_config: list[dict[str, Any]] | None = fault_config
 
     @property
     def dry_run_scheduler(self) -> DryRunScheduler:

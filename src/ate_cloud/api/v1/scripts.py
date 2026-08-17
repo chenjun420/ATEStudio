@@ -27,6 +27,7 @@ from ate_cloud.schemas.script import (
     ScriptCreate,
     ScriptResponse,
     ScriptUpdate,
+    ScriptVersionInfo,
     ScriptVersionListResponse,
 )
 from ate_cloud.services.script_versioning import ScriptVersioningService
@@ -85,7 +86,7 @@ async def get_script(
     if not script:
         raise HTTPException(status_code=404, detail="Script not found")
 
-    return script
+    return ScriptResponse.model_validate(script)
 
 
 @router.post("", response_model=ScriptResponse, status_code=status.HTTP_201_CREATED)
@@ -122,7 +123,7 @@ async def create_script(
         await db.rollback()
         raise HTTPException(status_code=409, detail="Script name already exists")
 
-    return script
+    return ScriptResponse.model_validate(script)
 
 
 @router.put("/{script_id}", response_model=ScriptResponse)
@@ -162,7 +163,7 @@ async def update_script(
         await db.rollback()
         raise HTTPException(status_code=409, detail="Script name already exists")
 
-    return script
+    return ScriptResponse.model_validate(script)
 
 
 @router.delete("/{script_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -202,7 +203,7 @@ def _get_versioning_service(request: Request) -> ScriptVersioningService:
         HTTPException: 503 if the service is not initialized.
     """
     service = getattr(request.app.state, "script_versioning", None)
-    if service is None:
+    if not isinstance(service, ScriptVersioningService):
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Script versioning service not initialized",
@@ -328,7 +329,9 @@ async def list_script_versions(
 
     versions = svc.list_versions(script.script_path)
 
-    return ScriptVersionListResponse(versions=versions)
+    return ScriptVersionListResponse(
+        versions=[ScriptVersionInfo.model_validate(v) for v in versions]
+    )
 
 
 @router.get(

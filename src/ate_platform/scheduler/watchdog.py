@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import asdict
 from typing import TYPE_CHECKING
 
@@ -65,10 +66,10 @@ class WatchDog:
 
     def __init__(
         self,
-        heartbeat_counter: "callable[[], int]",
+        heartbeat_counter: "Callable[[], int]",
         scan_interval: float = 5.0,
         event_bus: "EventBus | None" = None,
-        emergency_shutdown_callback: "callable[[], object] | None" = None,
+        emergency_shutdown_callback: "Callable[[], object] | None" = None,
     ) -> None:
         """Initialize the WatchDog.
 

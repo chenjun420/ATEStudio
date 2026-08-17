@@ -441,7 +441,7 @@ class ScannerScheduler:
             skip_conditions: Mapping of step_id to (skip_if_expression, skip_reason).
                 skip_reason may be None.
         """
-        self._skip_conditions: dict[str, tuple[str, str | None]] = dict(skip_conditions)
+        self._skip_conditions = dict(skip_conditions)
 
     def register_adaptive_skip_conditions(
         self,
@@ -851,7 +851,7 @@ class ScannerScheduler:
             step_results[sid] = {"status": st, "outputs": {}}
 
         evaluator = ConditionEvaluator(
-            step_results,  # type: ignore[arg-type]
+            step_results,
             resource_manager=self._resource_manager,
             variable_space=self._variable_space,
         )

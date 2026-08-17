@@ -7,12 +7,15 @@ sequence may be bound to multiple workers.
 """
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from . import Base
+
+if TYPE_CHECKING:
+    from .sequence import Sequence
 
 
 class NodeFlowBinding(Base):
@@ -52,4 +55,4 @@ class NodeFlowBinding(Base):
         nullable=False,
     )
 
-    sequence: Mapped["Sequence"] = relationship("Sequence")  # noqa: F821
+    sequence: Mapped["Sequence"] = relationship("Sequence")

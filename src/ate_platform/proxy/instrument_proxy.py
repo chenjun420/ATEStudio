@@ -33,8 +33,11 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from queue import Empty
 from typing import Any
 
+from ate_platform.drivers.base_hal import BaseDriver
+from ate_platform.drivers.base_mal import BaseAbstraction
 from ate_platform.drivers.mock_factory import MockDriverFactory
 from ate_platform.proxy.connection_pool import ConnectionPool
 
@@ -70,8 +73,8 @@ class InstrumentProxy:
 
     def __init__(
         self,
-        request_queue: multiprocessing.Queue,
-        response_queue: multiprocessing.Queue,
+        request_queue: multiprocessing.Queue[Any],
+        response_queue: multiprocessing.Queue[Any],
         config: dict[str, Any],
         simulation: bool = False,
         log_dir: str | Path | None = None,
@@ -118,7 +121,7 @@ class InstrumentProxy:
             while self._running:
                 try:
                     request = self.request_queue.get(timeout=1.0)
-                except multiprocessing.queues.Empty:
+                except (Empty, EOFError):
                     continue
                 if request is None:  # 停止信号
                     break
@@ -168,8 +171,8 @@ class InstrumentProxy:
             if abstraction_cls is None:
                 msg = f"No mock driver registered for resource '{res_id}' (type={driver_type})"
                 raise ValueError(msg)
-            mal = MockDriverFactory.create_mock(abstraction_cls)
-            return _DriverPair(hal=mal.driver, mal=mal)
+            mock = MockDriverFactory.create_mock(abstraction_cls)
+            return _DriverPair(hal=mock.driver, mal=mock)
 
         # 导入 examples 包触发内置驱动注册（dmm/psu/chroma_eload），幂等
         from ate_platform.drivers import examples as _examples  # noqa: F401
@@ -177,6 +180,9 @@ class InstrumentProxy:
 
         driver_name = inst_config.get("driver", res_id)
         hal_cls = DriverRegistry.get_driver(driver_name, layer="hal")
+        if not isinstance(hal_cls, type) or not issubclass(hal_cls, BaseDriver):
+            msg = f"Driver '{driver_name}' is not a BaseDriver subclass"
+            raise ValueError(msg)
         hal = hal_cls()
         # 配置了 address 时尝试预连接；失败仅告警，保留未连接状态，
         # 脚本侧可稍后通过 connect() 再试（设备可能在测试开始前才上电）。
@@ -190,11 +196,16 @@ class InstrumentProxy:
                     resource_id=res_id,
                     error=str(e),
                 )
+        mal_cls: type[BaseDriver] | type[BaseAbstraction] | None = None
         try:
             mal_cls = DriverRegistry.get_driver(driver_name, layer="mal")
-            mal = mal_cls(driver=hal)
         except KeyError:
-            mal = None  # 仅注册了 HAL 的旧式驱动：method 转发回退到 hal
+            pass  # 仅注册了 HAL 的旧式驱动：method 转发回退到 hal
+        mal: BaseAbstraction | None
+        if isinstance(mal_cls, type) and issubclass(mal_cls, BaseAbstraction):
+            mal = mal_cls(driver=hal)
+        else:
+            mal = None
         return _DriverPair(hal=hal, mal=mal)
 
     # ------------------------------------------------------------------
@@ -275,7 +286,7 @@ class InstrumentProxy:
     # ------------------------------------------------------------------
     # IPC 响应
     # ------------------------------------------------------------------
-    def _response(self, req_id: str, data: dict[str, Any]) -> None:
+    def _response(self, req_id: str | None, data: dict[str, Any]) -> None:
         """向响应队列写入一条响应。"""
         self.response_queue.put({"req_id": req_id, **data})
 
@@ -315,8 +326,8 @@ class InstrumentProxy:
 
 
 def serve(
-    request_queue: multiprocessing.Queue,
-    response_queue: multiprocessing.Queue,
+    request_queue: multiprocessing.Queue[Any],
+    response_queue: multiprocessing.Queue[Any],
     config: dict[str, Any],
     simulation: bool = False,
     log_dir: str | Path | None = None,
@@ -388,8 +399,8 @@ if __name__ == "__main__":  # pragma: no cover — 独立启动入口
     # 懒加载注册 Mock 类型
     _ensure_mock_types_registered()
 
-    request_queue: multiprocessing.Queue = multiprocessing.Queue()
-    response_queue: multiprocessing.Queue = multiprocessing.Queue()
+    request_queue: multiprocessing.Queue[Any] = multiprocessing.Queue()
+    response_queue: multiprocessing.Queue[Any] = multiprocessing.Queue()
 
     # 独立启动模式下从配置文件加载仪器配置
     import yaml

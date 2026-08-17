@@ -85,6 +85,7 @@ class EventType(Enum):
     DEADLOCK_DETECTED = "DEADLOCK_DETECTED"
     WORKER_EXHAUSTED = "WORKER_EXHAUSTED"
     HEARTBEAT_LOST = "HEARTBEAT_LOST"
+    ALARM_RAISED = "ALARM_RAISED"
 
     @classmethod
     def _missing_(cls, value: object) -> EventType | None:
@@ -123,6 +124,7 @@ EVENT_TYPE_CATEGORIES: dict[EventType, EventCategory] = {
     EventType.DEADLOCK_DETECTED: EventCategory.ALARM,
     EventType.WORKER_EXHAUSTED: EventCategory.ALARM,
     EventType.HEARTBEAT_LOST: EventCategory.ALARM,
+    EventType.ALARM_RAISED: EventCategory.ALARM,
 }
 
 
@@ -548,6 +550,35 @@ class HeartbeatLostData:
     run_id: str | None = None
 
 
+@dataclass
+class AlarmRaisedData:
+    """Data for ALARM_RAISED alarm events.
+
+    Emitted when an SPC processor raises a process-control alert (e.g.
+    Ppk below threshold or a Western Electric rule violation) and forwards
+    it to the failure index.
+
+    Attributes:
+        alarm_id: Unique identifier for the raised alarm.
+        product_type: Product type the alarm applies to.
+        measurement_name: Measurement name that triggered the alarm.
+        rule: Rule that fired (e.g. 'Ppk_below_1.00', 'WE1_beyond_3sigma').
+        severity: 'warning' or 'critical'.
+        message: Human-readable description.
+        value: The measured value that triggered the alarm.
+        sample_count: Number of samples seen when the alarm fired.
+    """
+
+    alarm_id: str = ""
+    product_type: str = ""
+    measurement_name: str = ""
+    rule: str = ""
+    severity: Literal["warning", "critical"] = "warning"
+    message: str = ""
+    value: float | None = None
+    sample_count: int = 0
+
+
 # Mapping from EventType to its typed data class
 EVENT_DATA_CLASSES: dict[EventType, type] = {
     # EVENT category
@@ -574,4 +605,5 @@ EVENT_DATA_CLASSES: dict[EventType, type] = {
     EventType.DEADLOCK_DETECTED: DeadlockDetectedData,
     EventType.WORKER_EXHAUSTED: WorkerExhaustedData,
     EventType.HEARTBEAT_LOST: HeartbeatLostData,
+    EventType.ALARM_RAISED: AlarmRaisedData,
 }

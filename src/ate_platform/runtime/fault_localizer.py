@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 import structlog
 
@@ -367,5 +367,5 @@ class FaultLocalizer:
         """取链路起点仪器 ID（若起点为仪器通道）。"""
         src = link.from_endpoint
         if src.entity_type == LinkEndpointType.INSTRUMENT_CHANNEL:
-            return src.entity_id
+            return cast(str, src.entity_id)
         return None

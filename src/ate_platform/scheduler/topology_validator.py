@@ -19,7 +19,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import structlog
 
@@ -167,7 +167,8 @@ class TopologyValidator:
         """检查 4：夹具控制步骤与拓扑夹具元件能力匹配（§6.7.2 检查 4）。"""
         fixture_caps: dict[str, set[str]] = {}
         for fixture in self.topology.fixtures:
-            caps = {a.type for a in fixture.actuators}
+            # ActuatorType/RelayType 均为 str 子类枚举，统一收窄为 set[str]
+            caps: set[str] = {a.type for a in fixture.actuators}
             caps |= {r.type for r in fixture.relays}
             fixture_caps[fixture.id] = caps
 
@@ -398,7 +399,8 @@ class TopologyValidator:
                 if "steps" in item:
                     return conv_loop(item)
                 return conv_step(item)
-            return item
+            # 非 dict 项直接透传（调用方保证为 YamlStep/YamlLoop）
+            return cast(YamlStep | YamlLoop, item)
 
         return YamlPlan(
             name=plan.get("name", "?"),

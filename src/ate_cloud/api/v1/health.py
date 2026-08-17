@@ -1,3 +1,5 @@
+from typing import Any
+
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import text
 from nats.js.errors import NotFoundError
@@ -11,7 +13,7 @@ router = APIRouter(tags=["health"])
 
 
 @router.get("/health/db")
-async def check_db_health():
+async def check_db_health() -> dict[str, str]:
     try:
         async with async_session_factory() as session:
             await session.execute(text("SELECT 1"))
@@ -20,11 +22,11 @@ async def check_db_health():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"Database connection failed: {str(e)}"
-        )
+        ) from e
 
 
 @router.get("/health/nats")
-async def check_nats_health():
+async def check_nats_health() -> dict[str, Any]:
     """Report NATS connection, JetStream, and worker registry KV status.
 
     Reads the module-level ``_nats_client`` set by the lifespan (read through
@@ -43,7 +45,7 @@ async def check_nats_health():
         )
 
     jetstream_available = False
-    js = None
+    js: Any = None
     try:
         js = nc.jetstream()
         await js.account_info()
@@ -52,7 +54,7 @@ async def check_nats_health():
         pass
 
     worker_registry_kv = "error"
-    if jetstream_available:
+    if jetstream_available and js is not None:
         try:
             await js.key_value(_WORKER_KV_BUCKET)
             worker_registry_kv = "ready"

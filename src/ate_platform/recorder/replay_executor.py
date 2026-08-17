@@ -27,8 +27,8 @@ from typing import TYPE_CHECKING, Any, Protocol
 from ate_platform.recorder.types import RecordedEvent, RecordedEventType
 
 if TYPE_CHECKING:
-    from nats import JetStreamContext
     from nats.aio.client import Client as NatsClient
+    from nats.js.client import JetStreamContext
 
 logger = logging.getLogger(__name__)
 
@@ -156,7 +156,7 @@ class ReplayExecutor:
             raise RuntimeError(
                 "No NATS client - use replay_from_events() for in-memory replay"
             )
-        return self._nc.jetstream()  # type: ignore[no-any-return]
+        return self._nc.jetstream()
 
     async def replay(
         self,

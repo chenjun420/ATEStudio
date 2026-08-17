@@ -227,7 +227,7 @@ class DiagnosisService:
 
         raw = await self._breaker.call(_do_llm_call)
         # CircuitBreaker.call infers T as Coroutine for async fn; runtime is str
-        result = self._parse_response(raw)  # type: ignore[arg-type]
+        result = self._parse_response(raw)
         result["diagnosis_id"] = diagnosis_id
         result["retrieved_cases"] = retrieved_cases
         return result

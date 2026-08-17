@@ -113,7 +113,7 @@ class _MockBaseDriver(BaseDriver):
                          responses.
         """
         # Bypass BaseDriver.__init__ to avoid creating a real ResourceManager
-        self._instrument: object = None
+        self._instrument = None
         self._address: str = ""
         self._mock_connected: bool = False
         self._mock_values: dict[str, str] = {
@@ -135,7 +135,7 @@ class _MockBaseDriver(BaseDriver):
         self._address = ""
 
     @property
-    def is_connected(self) -> bool:  # type: ignore[override]
+    def is_connected(self) -> bool:
         """Check if mock is connected."""
         return self._mock_connected
 

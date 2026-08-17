@@ -16,7 +16,12 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from shared.events import Event, EventCategory, EventType, get_event_category
+from shared.events import (
+    Event as Event,  # 显式 re-export：event_bus 作为 Event/EventType 的统一出口
+    EventCategory,
+    EventType as EventType,
+    get_event_category,
+)
 
 logger = logging.getLogger(__name__)
 

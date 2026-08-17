@@ -45,12 +45,19 @@ class EmbeddingService:
 
         self._model = model
         self._dimensions = dimensions
-        self._embeddings = OpenAIEmbeddings(
-            model=model,
-            api_key=SecretStr(api_key),
-            dimensions=dimensions,
-            **({"base_url": settings.openai_base_url} if settings.openai_base_url else {}),
-        )
+        if settings.openai_base_url:
+            self._embeddings = OpenAIEmbeddings(
+                model=model,
+                api_key=SecretStr(api_key),
+                dimensions=dimensions,
+                base_url=settings.openai_base_url,
+            )
+        else:
+            self._embeddings = OpenAIEmbeddings(
+                model=model,
+                api_key=SecretStr(api_key),
+                dimensions=dimensions,
+            )
         self._breaker = CircuitBreaker(
             failure_threshold=5,
             timeout=30.0,
@@ -91,9 +98,7 @@ class EmbeddingService:
         async def _do_embed() -> list[float]:
             return await self._embeddings.aembed_query(text)
 
-        # CircuitBreaker.call awaits fn internally; its Callable[..., T] signature
-        # doesn't express async unwrapping, so the arg-type is a known typing gap.
-        return await self._breaker.call(_do_embed)  # type: ignore[arg-type]
+        return await self._breaker.call(_do_embed)
 
     async def embed_batch(self, texts: list[str]) -> list[list[float]]:
         """Embed multiple texts in a single API call for efficiency.
@@ -119,7 +124,7 @@ class EmbeddingService:
         async def _do_batch() -> list[list[float]]:
             return await self._embeddings.aembed_documents(texts)
 
-        return await self._breaker.call(_do_batch)  # type: ignore[arg-type]
+        return await self._breaker.call(_do_batch)
 
     async def embed_many(self, texts: list[str]) -> list[list[float]]:
         """Alias for :meth:`embed_batch` (DeepAgents-compatible naming)."""

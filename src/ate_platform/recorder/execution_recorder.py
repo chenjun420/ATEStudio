@@ -24,8 +24,8 @@ from typing import TYPE_CHECKING, Any
 from ate_platform.recorder.types import RecordedEvent, RecordedEventType
 
 if TYPE_CHECKING:
-    from nats import JetStreamContext
     from nats.aio.client import Client as NatsClient
+    from nats.js.client import JetStreamContext
 
 logger = logging.getLogger(__name__)
 
@@ -136,7 +136,7 @@ class ExecutionRecorder:
 
         ``jetstream()`` is sync in nats-py (returns a context without I/O).
         """
-        return self._nc.jetstream()  # type: ignore[no-any-return]
+        return self._nc.jetstream()
 
     async def start(self) -> None:
         """Start the background flush task.

@@ -10,6 +10,7 @@ Provides DB-driven application and menu routing for the frontend Portal.
 """
 
 import uuid
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
@@ -288,14 +289,14 @@ async def delete_menu(
 
 
 @router.post("/seed", response_model=dict)
-async def seed_apps(db: AsyncSession = Depends(get_db)) -> dict:
+async def seed_apps(db: AsyncSession = Depends(get_db)) -> dict[str, object]:
     """Seed default apps and menus. Idempotent — uses code as unique key.
 
     If a menu already exists, its required_permissions are updated to match
     the seed data (other fields are left unchanged).
     """
     # Default apps with their menus
-    default_apps = [
+    default_apps: list[dict[str, Any]] = [
         {
             "code": "node-mgmt",
             "name": "节点管理",
@@ -366,10 +367,10 @@ async def seed_apps(db: AsyncSession = Depends(get_db)) -> dict:
             created_apps += 1
 
         for m_data in menus_data:
-            result = await db.execute(
+            menu_result = await db.execute(
                 select(AppMenu).where(AppMenu.app_id == app.id, AppMenu.code == m_data["code"])
             )
-            existing = result.scalar_one_or_none()
+            existing = menu_result.scalar_one_or_none()
             if existing is None:
                 menu = AppMenu(
                     id=str(uuid.uuid4()),

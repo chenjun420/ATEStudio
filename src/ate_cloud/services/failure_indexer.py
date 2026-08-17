@@ -13,7 +13,7 @@ import asyncio
 import logging
 import uuid
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
 from ate_cloud.config import settings
 from ate_cloud.nats.sse_bridge import SSEBridge
@@ -127,7 +127,7 @@ class FailureIndexer:
             return True
         if event.type == EventType.EXECUTION_COMPLETED:
             data = event.data
-            status = data.get("status", "").upper() if isinstance(data, dict) else ""
+            status = str(data.get("status", "")).upper() if isinstance(data, dict) else ""
             return status == "FAILED"
         return False
 
@@ -209,7 +209,7 @@ class FailureIndexer:
             return [0.0] * self._embedding_dim
         try:
             if self._embedding_service is not None:
-                return await self._embedding_service.embed(text)
+                return cast(list[float], await self._embedding_service.embed(text))
             if self._embedding_model is not None:
                 return self._embedding_model(text)
             return [0.0] * self._embedding_dim

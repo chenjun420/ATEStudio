@@ -188,7 +188,7 @@ class SSEBridge:
 
                         batch_yielded = 0
                         for msg in msgs:
-                            metadata = await msg.metadata()
+                            metadata = msg.metadata
                             if metadata and metadata.sequence.stream >= start_seq:
                                 data = json.loads(msg.data.decode())
                                 yield data

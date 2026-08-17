@@ -20,7 +20,7 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import wraps
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 from ..scheduler.resource_manager import ResourceManager
 from ..scheduler.variable_space import VariableSpace
@@ -249,7 +249,7 @@ class ContextProxy:
 
         # Add step context to log message
         structured_message = f"[Step:{self._step_id}] {message}"
-        _ = log_func(structured_message)  # type: ignore[func-returns-value]
+        _ = log_func(structured_message)
 
     def declare_output(self, name: str) -> None:
         """Declare an output variable.
@@ -299,6 +299,7 @@ def measure(*output_names: str) -> Callable[[F], F]:
             # Execute the function
             return func(proxy, *args, **kwargs)
 
-        return wrapper  # pyright: ignore[reportReturnType]
+        # wrapper 签名与泛型 F 不直接匹配，cast 保持装饰器类型契约
+        return cast(F, wrapper)
 
     return decorator

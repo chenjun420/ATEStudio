@@ -111,7 +111,7 @@ class Neo4jGraphService:
                 self._graph.query, cypher, params or {}
             )
 
-        return await self._breaker.call(_do_query)  # type: ignore[arg-type]
+        return await self._breaker.call(_do_query)
 
     async def write(
         self,

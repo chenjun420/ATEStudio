@@ -27,7 +27,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from simpleeval import SimpleEval
+from simpleeval import SimpleEval  # type: ignore[import-untyped]  # 第三方库无类型存根
 
 # 四层注入点（§7.7.1）
 LAYER_NETWORK = "network"
@@ -312,7 +312,7 @@ class FaultInjector:
     # ------------------------------------------------------------------
     # 匹配与执行
     # ------------------------------------------------------------------
-    def _base_context(self, target: str, method: str, context: dict[str, Any]) -> dict:
+    def _base_context(self, target: str, method: str, context: dict[str, Any]) -> dict[str, Any]:
         """合并注入器级上下文（elapsed_s）与调用方上下文。"""
         merged = {
             "elapsed_s": time.monotonic() - self._start_time,

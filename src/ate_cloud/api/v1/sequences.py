@@ -76,7 +76,7 @@ async def get_sequence(
     if not sequence:
         raise HTTPException(status_code=404, detail="Sequence not found")
 
-    return sequence
+    return SequenceResponse.model_validate(sequence)
 
 
 @router.post("", response_model=SequenceResponse, status_code=status.HTTP_201_CREATED)
@@ -111,7 +111,7 @@ async def create_sequence(
         await db.rollback()
         raise HTTPException(status_code=409, detail="Sequence name already exists")
 
-    return sequence
+    return SequenceResponse.model_validate(sequence)
 
 
 @router.put("/{sequence_id}", response_model=SequenceResponse)
@@ -151,7 +151,7 @@ async def update_sequence(
         await db.rollback()
         raise HTTPException(status_code=409, detail="Sequence name already exists")
 
-    return sequence
+    return SequenceResponse.model_validate(sequence)
 
 
 @router.delete("/{sequence_id}", status_code=status.HTTP_204_NO_CONTENT)

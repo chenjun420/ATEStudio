@@ -25,7 +25,7 @@ from datetime import UTC, datetime
 from enum import Enum
 from typing import Any, Literal
 
-import yaml  # type: ignore[import-untyped]
+import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
 __all__ = [
@@ -248,8 +248,8 @@ class CommunicationConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: CommunicationType = Field(..., description="通信类型")
-    address: str | None = Field(None, description="资源地址（GPIB/TCP 主机/串口路径）")
-    port: int | None = Field(None, description="TCP 端口")
+    address: str | None = Field(default=None, description="资源地址（GPIB/TCP 主机/串口路径）")
+    port: int | None = Field(default=None, description="TCP 端口")
     config: dict[str, Any] = Field(default_factory=dict, description="附加通信配置")
 
 
@@ -930,8 +930,8 @@ class TopologyValidator:
         for link in topo.links:
             if not link.routeId:
                 continue
-            route = routes.get(link.routeId)
-            if route is None:
+            declared_route = routes.get(link.routeId)
+            if declared_route is None:
                 self._add(
                     result,
                     self.CHECK_ROUTE,
@@ -939,11 +939,11 @@ class TopologyValidator:
                     f"link:{link.id}",
                 )
                 continue
-            if link.id not in route.links:
+            if link.id not in declared_route.links:
                 self._add(
                     result,
                     self.CHECK_ROUTE,
-                    f"Link {link.id} 声明的路由 {route.name} 未包含该连线",
+                    f"Link {link.id} 声明的路由 {declared_route.name} 未包含该连线",
                     f"link:{link.id}",
                 )
 

@@ -78,7 +78,7 @@ class SQLiteCache:
         self._max_queue_size = max_queue_size
         self._max_queue_age_seconds = max_queue_age_seconds
         self._total_pruned = 0
-        self._cleanup_task: asyncio.Task | None = None
+        self._cleanup_task: asyncio.Task[Any] | None = None
         self._cleanup_running = False
 
     async def connect(self) -> None:
@@ -274,7 +274,7 @@ class SQLiteCache:
                 row = await cursor.fetchone()
             current_size = row[0] if row else 0
 
-            oldest_entry_age = 0
+            oldest_entry_age: float = 0.0
             if current_size > 0:
                 async with self._db.execute(
                     "SELECT created_at FROM upload_queue ORDER BY created_at ASC LIMIT 1"

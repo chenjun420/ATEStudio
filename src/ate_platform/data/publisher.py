@@ -5,10 +5,12 @@ import logging
 from typing import TYPE_CHECKING
 
 import nats
+from nats.aio.client import Client as NATS
 from nats.errors import ConnectionClosedError, NoServersError, TimeoutError
+from nats.js.api import RetentionPolicy, StreamConfig
 
 if TYPE_CHECKING:
-    from nats import JetStreamContext
+    from nats.js import JetStreamContext
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +50,7 @@ class NATSPublisher:
         self._stream_name: str = stream_name
         self._reconnect_backoff: list[float] = reconnect_backoff or [1, 2, 5, 10, 30]
         self._max_reconnect_attempts: int = max_reconnect_attempts
-        self._nc: nats.NATS | None = None
+        self._nc: NATS | None = None
         self._js: JetStreamContext | None = None
         self._reconnect_attempt: int = 0
         self._is_reconnecting: bool = False
@@ -169,7 +171,10 @@ class NATSPublisher:
                 await self._js.add_stream(
                     name=self._stream_name,
                     subjects=["ate.>"],
-                    config={"retention": "limits", "max_age": 7 * 24 * 3600},  # 7 days
+                    config=StreamConfig(
+                        retention=RetentionPolicy.LIMITS,
+                        max_age=7 * 24 * 3600,  # 7 days（秒，nats 内部换算为纳秒）
+                    ),
                 )
                 logger.info(f"Created JetStream stream '{self._stream_name}'")
         except Exception as e:

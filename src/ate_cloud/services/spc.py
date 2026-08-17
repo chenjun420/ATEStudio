@@ -272,6 +272,8 @@ class SPCProcessor:
         """Raise a critical alert when Ppk < 1.00; index to Qdrant."""
         if usl is None or lsl is None or sigma_overall <= 0:
             return None
+        if measurement.value is None:
+            return None
         ppk_val = spc_math.ppk(usl, lsl, mu, sigma_overall)
         if ppk_val >= PPK_ALERT_THRESHOLD:
             return None

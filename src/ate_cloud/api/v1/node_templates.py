@@ -79,7 +79,7 @@ async def get_node_template(
     if not template:
         raise HTTPException(status_code=404, detail="Node template not found")
 
-    return template
+    return NodeTemplateResponse.model_validate(template)
 
 
 @router.post(
@@ -119,7 +119,7 @@ async def create_node_template(
             status_code=409, detail="Node template name already exists"
         )
 
-    return template
+    return NodeTemplateResponse.model_validate(template)
 
 
 @router.put("/{template_id}", response_model=NodeTemplateResponse)
@@ -163,7 +163,7 @@ async def update_node_template(
             status_code=409, detail="Node template name already exists"
         )
 
-    return template
+    return NodeTemplateResponse.model_validate(template)
 
 
 @router.delete("/{template_id}", status_code=status.HTTP_204_NO_CONTENT)

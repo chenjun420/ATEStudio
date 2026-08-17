@@ -3,9 +3,11 @@
 import asyncio
 import json
 import logging
+from typing import Any
 
 import nats
 from nats.aio.client import Client as NatsClient
+from nats.aio.msg import Msg
 from nats.js import JetStreamContext
 from nats.js.api import StreamConfig
 
@@ -116,7 +118,7 @@ class NATSSubscriber:
                 logger.error(f"Error in consume loop: {e}")
                 await asyncio.sleep(1.0)  # Backoff on error
 
-    async def _handle_message(self, msg) -> None:  # type: ignore[misc]
+    async def _handle_message(self, msg: Msg) -> None:
         """Handle incoming message.
 
         解析消息体 JSON
@@ -146,7 +148,7 @@ class NATSSubscriber:
             logger.error(f"Error handling message: {e}")
             await msg.nak()
 
-    async def _handle_result(self, subject: str, data: dict) -> None:
+    async def _handle_result(self, subject: str, data: dict[str, Any]) -> None:
         """Handle result message from edge.
 
         Args:

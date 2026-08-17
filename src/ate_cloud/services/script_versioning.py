@@ -11,7 +11,7 @@ import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import git
 from fastapi import HTTPException, status
@@ -227,7 +227,7 @@ class ScriptVersioningService:
                 detail=f"Script file not found at commit {commit_hash}: {script_path}",
             ) from None
 
-        return content
+        return cast(str, content)
 
     def get_head_commit_hash(self, script_path: str) -> str | None:
         """Get the latest commit hash for a script file.
@@ -295,7 +295,7 @@ class ScriptVersioningService:
             commit_hash=commit_hash,
         )
         kv = await js.key_value("ate-scripts")
-        return await kv.put(key, payload.model_dump_json().encode("utf-8"))
+        return cast(int, await kv.put(key, payload.model_dump_json().encode("utf-8")))
 
     async def check_worker_version(
         self,

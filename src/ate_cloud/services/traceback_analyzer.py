@@ -183,7 +183,7 @@ class TracebackAnalyzer:
 
         raw = await self._breaker.call(_do_llm_call)
         # CircuitBreaker.call infers T as Coroutine for async fn; runtime is str
-        return self._parse_response(raw)  # type: ignore[arg-type]
+        return self._parse_response(raw)
 
     def _build_info_text(self, context: TracebackContext) -> str:
         """Build the human-readable traceback info for the LLM prompt."""

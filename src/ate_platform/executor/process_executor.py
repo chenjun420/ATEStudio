@@ -40,7 +40,9 @@ from traceback import TracebackException
 from typing import Any
 from uuid import uuid4
 
-from ..scheduler.event_bus import EventBus, EventType
+from shared.events import EventType
+
+from ..scheduler.event_bus import EventBus
 from ..types import StepResult, StepStatus
 
 logger = logging.getLogger(__name__)
@@ -245,8 +247,9 @@ class ProcessExecutor:
         Runs _run_script_in_thread which shares memory with the main process,
         allowing VariableSpace access and simpler I/O-bound execution.
         """
-        # Submit to thread pool
-        future = self._pool.submit(
+        # Submit to thread pool. Runtime pool type is guaranteed by
+        # _use_multiprocessing (this is the ThreadPoolExecutor branch).
+        future = self._pool.submit(  # type: ignore[union-attr]
             _run_script_in_thread,
             script_path,
             params,
@@ -311,8 +314,8 @@ class ProcessExecutor:
         Runs _run_script in a subprocess for true process isolation.
         Results are returned as dicts (pickled across process boundary).
         """
-        # Submit to process pool
-        async_result = self._pool.apply_async(
+        # Submit to process pool (multiprocessing.Pool branch — see shutdown()).
+        async_result = self._pool.apply_async(  # type: ignore[union-attr]
             _run_script,
             args=(script_path, params, step_id),
         )
@@ -474,13 +477,13 @@ class ProcessExecutor:
         """
         if self._use_multiprocessing:
             if wait:
-                self._pool.close()
-                self._pool.join()
+                self._pool.close()  # type: ignore[union-attr]
+                self._pool.join()  # type: ignore[union-attr]
             else:
-                self._pool.terminate()
+                self._pool.terminate()  # type: ignore[union-attr]
         else:
             # ThreadPoolExecutor: shutdown(wait=...) handles both cases
-            self._pool.shutdown(wait=wait)
+            self._pool.shutdown(wait=wait)  # type: ignore[union-attr]
 
         logger.info("ProcessExecutor shutdown complete")
 

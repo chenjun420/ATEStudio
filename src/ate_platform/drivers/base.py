@@ -66,7 +66,7 @@ class DriverRegistry:
             cls._drivers[name] = driver_class
         elif isinstance(driver_class, type) and issubclass(driver_class, BaseAbstraction):
             # Allow registering MAL classes too for backward compat
-            cls._drivers[name] = driver_class  # type: ignore[assignment]
+            cls._drivers[name] = driver_class
         else:
             msg = f"Driver class must be a subclass of BaseDriver or BaseAbstraction, got {driver_class!r}"
             raise TypeError(msg)

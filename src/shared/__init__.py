@@ -10,7 +10,16 @@ Example:
     from shared import StepStatus, StepResult, EventType, YamlStep, YamlPlan, YamlLoop
 """
 
-from shared.dsl import ExecutionMode, LoopType, StepType, YamlLoop, YamlPlan, YamlStep
+from shared.config_schema import (
+    ConfigManifest,
+    InstrumentConfig,
+    StationConfig,
+    parse_config_manifest,
+    parse_station_config,
+    serialize_config_manifest,
+    serialize_station_config,
+)
+from shared.dsl import LoopType, YamlLoop, YamlPlan, YamlStep
 from shared.events import (
     Event,
     EventType,
@@ -67,4 +76,11 @@ __all__ = [
     "YamlLoop",
     "YamlPlan",
     "LoopType",
+    "InstrumentConfig",
+    "StationConfig",
+    "ConfigManifest",
+    "parse_station_config",
+    "serialize_station_config",
+    "parse_config_manifest",
+    "serialize_config_manifest",
 ]

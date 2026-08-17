@@ -36,7 +36,7 @@ import logging
 import operator
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from .variable_space import VariableSpace
 
@@ -524,7 +524,7 @@ class AdaptiveConditionEvaluator:
         if cmp is None:
             return False
 
-        return cmp(numeric_value, cond.value)
+        return bool(cmp(numeric_value, cond.value))
 
     def _eval_batch_quality(self, cond: BatchQualityCondition) -> bool:
         """Check SPC Cpk for a measurement stream.
@@ -567,7 +567,7 @@ class AdaptiveConditionEvaluator:
         if cmp is None:
             return False
 
-        return cmp(cpk, cond.threshold)
+        return bool(cmp(cpk, cond.threshold))
 
     def _eval_fault_probability(
         self, cond: FaultProbabilityCondition
@@ -610,7 +610,7 @@ class AdaptiveConditionEvaluator:
         if cmp is None:
             return False
 
-        return cmp(prob, cond.threshold)
+        return bool(cmp(prob, cond.threshold))
 
     # ------------------------------------------------------------------
     # Helpers
@@ -630,7 +630,7 @@ class AdaptiveConditionEvaluator:
         """
         # StepStatus enum
         if hasattr(result, "value"):
-            return result.value
+            return cast(str, result.value)
 
         # Dict with 'status' key
         if isinstance(result, dict):
@@ -638,7 +638,7 @@ class AdaptiveConditionEvaluator:
             if status_val is None:
                 return None
             if hasattr(status_val, "value"):
-                return status_val.value
+                return cast(str, status_val.value)
             if isinstance(status_val, str):
                 return status_val.upper()
             return None

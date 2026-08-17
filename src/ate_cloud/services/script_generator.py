@@ -300,7 +300,7 @@ class LLMScriptGenerator:
 
         raw = await self._breaker.call(_do_llm_call)
         # CircuitBreaker.call infers T as Coroutine for async fn; runtime is str
-        code = self._extract_code(raw)  # type: ignore[arg-type]
+        code = self._extract_code(raw)
         return self._post_process(code, spec_text)
 
     async def refine(
@@ -335,7 +335,7 @@ class LLMScriptGenerator:
             return str(response.content)
 
         raw = await self._breaker.call(_do_llm_call)
-        new_code = self._extract_code(raw)  # type: ignore[arg-type]
+        new_code = self._extract_code(raw)
         return self._post_process(new_code, feedback)
 
     # ── Prompt Building ────────────────────────────────────────────

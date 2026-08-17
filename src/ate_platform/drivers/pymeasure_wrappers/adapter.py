@@ -50,8 +50,8 @@ class PyMeasureAdapter(BaseDriver):
             不调用 ``super().__init__()``——pymeasure 路径不使用 pyvisa
             ResourceManager，避免无谓的 pyvisa 后端初始化。
         """
-        self._resource_manager: object = None
-        self._instrument: object = None  # 与 BaseDriver 字段对齐（未使用）
+        self._resource_manager = None  # pymeasure 路径不使用 pyvisa ResourceManager
+        self._instrument = None  # 与 BaseDriver 字段对齐（未使用）
         self._lock = threading.Lock()
         self._pm_kwargs: dict[str, Any] = kwargs
         self._pm: Any | None = None  # pymeasure 实例（connect 时创建）
@@ -104,35 +104,34 @@ class PyMeasureAdapter(BaseDriver):
     # ------------------------------------------------------------------
     def write(self, command: str) -> None:  # noqa: PLW0221
         """写命令（pymeasure 的 ``write``）。"""
-        self._require_connected()
-        self._pm.write(command)
+        pm = self._require_connected()
+        pm.write(command)
 
     def query(self, command: str, delay: float | None = None) -> str:  # noqa: PLW0221
         """查询（pymeasure 的 ``ask``）。"""
-        self._require_connected()
+        pm = self._require_connected()
         if delay is not None:
             import time
 
             time.sleep(delay)
-        return str(self._pm.ask(command))
+        return str(pm.ask(command))
 
     def read(self) -> str:  # noqa: PLW0221
         """读取（pymeasure 的 ``read``）。"""
-        self._require_connected()
-        return str(self._pm.read())
+        pm = self._require_connected()
+        return str(pm.read())
 
     def reset(self) -> None:  # noqa: PLW0221
         """复位（``*RST``）。"""
-        self._require_connected()
-        self._pm.write("*RST")
+        pm = self._require_connected()
+        pm.write("*RST")
 
     # ------------------------------------------------------------------
     # 语义方法透传
     # ------------------------------------------------------------------
     def unwrap(self) -> Any:
         """返回底层 pymeasure 实例（供 MAL 抽象 / 脚本直接调用语义方法）。"""
-        self._require_connected()
-        return self._pm
+        return self._require_connected()
 
     def __getattr__(self, name: str) -> Any:
         """透明转发未定义的属性到 pymeasure 实例（如 ``measure_voltage``）。
@@ -154,11 +153,12 @@ class PyMeasureAdapter(BaseDriver):
             return attr
         return attr
 
-    def _require_connected(self) -> None:
-        """确保已连接。"""
+    def _require_connected(self) -> Any:
+        """确保已连接并返回底层 pymeasure 实例。"""
         if self._pm is None:
             msg = "Not connected to any instrument. Call connect() first."
             raise RuntimeError(msg)
+        return self._pm
 
     @classmethod
     def wrap(cls, pymeasure_class: type[Any], **kwargs: Any) -> type["PyMeasureAdapter"]:
@@ -172,7 +172,9 @@ class PyMeasureAdapter(BaseDriver):
             一个新的 ``PyMeasureAdapter`` 子类。
         """
 
-        class WrappedDriver(cls):
+        # 动态子类化：基类为类方法参数 cls，静态上无法作为类型/基类表达，
+        # 只能对 class 语句本身做定点抑制（运行时行为不受影响）。
+        class WrappedDriver(cls):  # type: ignore[valid-type, misc]
             """绑定单个 pymeasure 类的适配驱动。"""
 
             def __init__(self, *args: Any, **overrides: Any) -> None:
@@ -180,7 +182,7 @@ class PyMeasureAdapter(BaseDriver):
                 super().__init__(*args, **merged)
 
         # 类体无法引用外层闭包变量，故定义后显式绑定
-        WrappedDriver.pymeasure_class = pymeasure_class  # type: ignore[attr-defined]
+        WrappedDriver.pymeasure_class = pymeasure_class
         WrappedDriver.__name__ = f"Platform_{pymeasure_class.__name__}"
         WrappedDriver.__qualname__ = WrappedDriver.__name__
         return WrappedDriver

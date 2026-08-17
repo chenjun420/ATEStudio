@@ -376,7 +376,7 @@ class LoopExecutor:
             iteration_step_results.setdefault(iter_idx, []).append(step_result)
 
         # Build iteration results
-        iteration_results: list[LoopIterationResult] = []
+        iteration_results = []
         for i in range(count):
             iter_start = time.monotonic()
             step_res_list = iteration_step_results.get(i, [])

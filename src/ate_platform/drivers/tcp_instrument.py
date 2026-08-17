@@ -121,9 +121,9 @@ class PlatformTCPInstrument(BaseDriver):
             RuntimeError: 未连接。
         """
         with self._lock:
-            self._require_connected()
+            sock = self._require_connected()
             frame = self._encode_frame(command)
-            self._sock.sendall(frame)
+            sock.sendall(frame)
             if self.READS_AFTER_WRITE:
                 # 消费写响应帧，避免残留在缓冲区导致后续 query 读到错位响应
                 self._recv_frame()
@@ -139,9 +139,9 @@ class PlatformTCPInstrument(BaseDriver):
             解码后的响应字符串（子类决定解码格式）。
         """
         with self._lock:
-            self._require_connected()
+            sock = self._require_connected()
             frame = self._encode_frame(command)
-            self._sock.sendall(frame)
+            sock.sendall(frame)
             if delay is not None:
                 import time
 
@@ -172,10 +172,10 @@ class PlatformTCPInstrument(BaseDriver):
 
     def _recv_frame(self) -> bytes:
         """接收一帧（默认读一行，直到换行或超时）。"""
-        self._require_connected()
+        sock = self._require_connected()
         chunks: list[bytes] = []
         while True:
-            chunk = self._sock.recv(1)
+            chunk = sock.recv(1)
             if not chunk:
                 msg = "Connection closed by instrument"
                 raise ConnectionError(msg)
@@ -196,18 +196,19 @@ class PlatformTCPInstrument(BaseDriver):
         Raises:
             ConnectionError: 连接在对端关闭前被截断。
         """
-        self._require_connected()
+        sock = self._require_connected()
         data = b""
         while len(data) < size:
-            chunk = self._sock.recv(size - len(data))
+            chunk = sock.recv(size - len(data))
             if not chunk:
                 msg = "Connection closed by instrument"
                 raise ConnectionError(msg)
             data += chunk
         return data
 
-    def _require_connected(self) -> None:
-        """确保已连接。"""
+    def _require_connected(self) -> socket.socket:
+        """确保已连接并返回 socket。"""
         if self._sock is None:
             msg = "Not connected to any instrument. Call connect() first."
             raise RuntimeError(msg)
+        return self._sock

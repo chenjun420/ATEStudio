@@ -14,7 +14,7 @@ import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ate_platform.types import StepResult
 
@@ -81,7 +81,7 @@ class ResumeManager:
         self._publisher = publisher
         self._pending: asyncio.Queue[PendingMessage] = asyncio.Queue()
         self._running = False
-        self._upload_task: asyncio.Task | None = None
+        self._upload_task: asyncio.Task[Any] | None = None
         self._max_retries = max_retries
         self._base_backoff = base_backoff
         self._batch_interval = batch_interval

@@ -212,7 +212,7 @@ class StepRegistry:
 
                     # Create a temporary evaluator with current state
                     evaluator = ConditionEvaluator(
-                        step_results,  # type: ignore[arg-type]
+                        step_results,
                         resource_manager=resource_manager,
                         variable_space=variable_space,
                     )

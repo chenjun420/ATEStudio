@@ -168,6 +168,15 @@ function computeStatusMock(worker: WorkerInfo): WorkerStatus {
   return 'online'
 }
 
+// Mock useAuth so the RBAC hasScope() guards grant node:write / flow:write /
+// exec:run permissions — otherwise the action buttons (配置/重启/同步) never
+// render and the action-button tests fail.
+vi.mock('@/composables/useAuth', () => ({
+  useAuth: () => ({
+    hasScope: () => true,
+  }),
+}))
+
 // Mock the composable module
 vi.mock('@/composables/useStations', () => ({
   useStations: () => ({

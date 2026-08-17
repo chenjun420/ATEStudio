@@ -20,7 +20,7 @@ import asyncio
 import enum
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
 
 logger = logging.getLogger(__name__)
@@ -190,7 +190,7 @@ class CircuitBreaker:
 
     async def call(
         self,
-        fn: Callable[..., T],
+        fn: Callable[..., Awaitable[T]],
         *args: Any,
         **kwargs: Any,
     ) -> T:

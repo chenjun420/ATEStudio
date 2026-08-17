@@ -55,7 +55,7 @@ def _get_worker_service(request: Request) -> WorkerRegistryService:
 def _get_sse_bridge(request: Request) -> SSEBridge:
     """Dependency: get the SSEBridge instance from app state."""
     bridge = getattr(request.app.state, "sse_bridge", None)
-    if bridge is None:
+    if not isinstance(bridge, SSEBridge):
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="SSE bridge not available",

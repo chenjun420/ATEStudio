@@ -14,7 +14,7 @@ are rejected rather than silently ignored, preventing configuration drift.
 
 from __future__ import annotations
 
-import yaml  # type: ignore[import-untyped]
+import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
 __all__ = [

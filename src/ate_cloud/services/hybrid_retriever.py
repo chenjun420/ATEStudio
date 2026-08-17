@@ -201,6 +201,8 @@ class HybridRetriever:
 
         # 3. Parallel retrieval — gather with return_exceptions so one
         #    branch failing doesn't kill the other.
+        qdrant_raw: list[dict[str, Any]] | Exception
+        neo4j_raw: list[dict[str, Any]] | Exception
         qdrant_raw, neo4j_raw = await asyncio.gather(
             self._search_qdrant(query_vector, top_k),
             self._search_neo4j(rewritten, top_k),
@@ -351,7 +353,7 @@ class HybridRetriever:
             response = await self._llm.ainvoke(messages)
             return str(response.content)
 
-        return await self._llm_breaker.call(_do_rewrite)  # type: ignore[arg-type]
+        return await self._llm_breaker.call(_do_rewrite)
 
     # ── Qdrant Semantic Search ──────────────────────────────────────
 
@@ -390,7 +392,7 @@ class HybridRetriever:
                 for r in results
             ]
 
-        return await self._qdrant_breaker.call(_do_search)  # type: ignore[arg-type]
+        return await self._qdrant_breaker.call(_do_search)
 
     # ── Neo4j Relationship Reasoning ────────────────────────────────
 

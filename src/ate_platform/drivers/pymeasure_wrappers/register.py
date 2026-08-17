@@ -11,7 +11,7 @@ pymeasure 未安装（或安装失败）时不阻塞平台启动：仅记录日�
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import structlog
 
@@ -33,7 +33,7 @@ def _load_pymeasure_class(module_path: str, class_name: str) -> type[Any] | None
         import importlib
 
         module = importlib.import_module(module_path)
-        return getattr(module, class_name)
+        return cast(type[Any], getattr(module, class_name))
     except Exception as e:  # noqa: BLE001 — pymeasure 缺失/版本差异均优雅降级
         logger.warning(
             "pymeasure_driver_unavailable",
@@ -67,8 +67,8 @@ def register_pymeasure_drivers() -> dict[str, bool]:
         try:
             DriverRegistry.register(
                 driver_name,
-                hal_cls=hal_cls,  # type: ignore[arg-type]
-                mal_cls=PyMeasureAbstraction,  # type: ignore[arg-type]
+                hal_cls=hal_cls,
+                mal_cls=PyMeasureAbstraction,
             )
             results[driver_name] = True
         except Exception as e:  # noqa: BLE001 — 单驱动注册失败不影响其余

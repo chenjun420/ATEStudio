@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass, field
-from typing import Any
+from typing import Any, cast
 
 from uuid import uuid4
 
@@ -213,14 +213,17 @@ class BreakpointManager:
             A JSON-serialisable dict representing the node.
         """
         if isinstance(node, dict):
-            return json.loads(json.dumps(node, default=str))
+            return cast(dict[str, Any], json.loads(json.dumps(node, default=str)))
         # X6 Node objects expose toJSON() returning a plain dict
         to_json = getattr(node, "toJSON", None)
         if callable(to_json):
             data = to_json()
-            return json.loads(json.dumps(data, default=str))
+            return cast(dict[str, Any], json.loads(json.dumps(data, default=str)))
         # Fallback: best-effort dict conversion
-        return json.loads(json.dumps(asdict(node) if hasattr(node, "__dataclass_fields__") else {}, default=str))
+        return cast(
+            dict[str, Any],
+            json.loads(json.dumps(asdict(node) if hasattr(node, "__dataclass_fields__") else {}, default=str)),
+        )
 
     @staticmethod
     def deserialize_x6_node(node_data: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -234,7 +237,7 @@ class BreakpointManager:
         """
         if node_data is None:
             return None
-        return json.loads(json.dumps(node_data, default=str))
+        return cast(dict[str, Any], json.loads(json.dumps(node_data, default=str)))
 
 
 def new_breakpoint_id() -> str:

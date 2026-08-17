@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -18,7 +19,7 @@ _nats_client: NatsClient | None = None
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Manage NATS connection lifecycle, SSE bridge, Qdrant, and services.
 
     Per AGENTS.md §7: NATS and JetStream are REQUIRED, not optional.
