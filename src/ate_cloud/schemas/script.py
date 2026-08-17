@@ -133,3 +133,50 @@ class ScriptVersionListResponse(BaseModel):
     """
 
     versions: list[ScriptVersionInfo]
+
+
+class WorkerVersionTag(BaseModel):
+    """A worker-side tag binding a script path to a Git commit hash.
+
+    Stored as JSON in the ``ate-scripts`` JetStream KV bucket under
+    ``workers.{worker_id}.{script_path}``.
+
+    Attributes:
+        worker_id: Unique worker identifier.
+        script_path: Relative script path (forward slashes).
+        commit_hash: Git commit hash the worker should run.
+        tagged_at: When the tag was written (auto-generated).
+    """
+
+    worker_id: str
+    script_path: str
+    commit_hash: str
+    tagged_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class WorkerVersionDiff(BaseModel):
+    """Difference between a script's tagged hash and its current head.
+
+    Attributes:
+        script_path: Relative script path.
+        tagged_hash: Hash recorded in the worker tag.
+        current_hash: Hash of the current Git HEAD for this path.
+        needs_update: True when the head has advanced past the tagged hash.
+    """
+
+    script_path: str
+    tagged_hash: str
+    current_hash: str
+    needs_update: bool
+
+
+class WorkerVersionCheckResponse(BaseModel):
+    """Result of checking a worker's script versions against Git HEAD.
+
+    Attributes:
+        worker_id: Unique worker identifier.
+        scripts: Per-script version diffs.
+    """
+
+    worker_id: str
+    scripts: list[WorkerVersionDiff]

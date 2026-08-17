@@ -20,12 +20,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+import time
+from collections.abc import Awaitable, Callable
 from dataclasses import asdict
 from typing import TYPE_CHECKING, Any
 
 # Sentinel for "no event loop available" in _schedule_dispatch
 _NO_LOOP = object()
+
+# 崩溃时非终态步骤的快照值 → 恢复为 PENDING（重跑）
+_TERMINAL_STATES = {"PASSED", "FAILED", "SKIPPED", "ERROR"}
 
 
 def _is_in_async_context() -> bool:
@@ -105,6 +109,8 @@ class ScannerScheduler:
         scan_interval: float = DEFAULT_SCAN_INTERVAL,
         step_executor: StepExecutor | None = None,
         adaptive_skip_evaluator: AdaptiveConditionEvaluator | None = None,
+        snapshot_dir: str | None = None,
+        instrument_reset_callback: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         """Initialize the scanner scheduler.
 
@@ -121,6 +127,12 @@ class ScannerScheduler:
                 context-aware skip conditions (SPC Cpk, fault probability,
                 product context). When None, only basic skip_if expressions
                 are evaluated.
+            snapshot_dir: 启用状态快照（§6.6 崩溃恢复）。提供后，每次步骤
+                状态变更会原子落盘；start() 检测到可恢复快照时自动恢复
+                步骤状态与变量；正常完成时清理快照。
+            instrument_reset_callback: 崩溃恢复时对所有仪器发 *RST 的回调
+                （awaitable）。崩溃时仪器可能处于未知状态，恢复必须先重置
+                到已知状态再继续（§6.6.4）。None 则跳过仪器重置。
         """
         self._event_bus: EventBus = event_bus
         self._registry: StepRegistry = registry
@@ -187,6 +199,25 @@ class ScannerScheduler:
         # WatchDog health monitor (created in start())
         self._watchdog: "WatchDog | None" = None
 
+        # F5 执行增强：暂停/强制下一步
+        self._paused: bool = False
+        self._force_next_pending: bool = False
+        # 暂停事件：pause() clear / resume() set，_dispatch_step 等待
+        self._pause_event: asyncio.Event = asyncio.Event()
+        self._pause_event.set()
+
+        # §6.6 状态快照与崩溃恢复
+        self._instrument_reset_callback: Callable[[], Awaitable[None]] | None = (
+            instrument_reset_callback
+        )
+        self._snapshot: "StateSnapshot | None" = None
+        if snapshot_dir is not None:
+            from .state_snapshot import StateSnapshot
+
+            self._snapshot = StateSnapshot(snapshot_dir)
+        # 本次运行是否从快照恢复（决定 stop() 是否清理快照）
+        self._resumed_from_snapshot: bool = False
+
         # Event handlers (stored for potential unsubscription)
         self._handlers: dict[EventType, Callable[[Event], None]] = {}
 
@@ -217,6 +248,9 @@ class ScannerScheduler:
             emergency_shutdown_callback=self._emergency_shutdown,
         )
         self._watchdog.start()
+
+        # §6.6 崩溃恢复：在订阅事件前恢复（恢复产生的状态事件无订阅者，安全）
+        await self._maybe_resume()
 
         # Subscribe to events that might change step readiness
         self._setup_event_handlers()
@@ -258,7 +292,101 @@ class ScannerScheduler:
                         pass
             self._scan_task = None
 
+        # §6.6 正常完成才清理快照：全部步骤到终态视为执行完成。
+        # 中途停止（用户中断/异常）保留快照，下次启动可断点续跑。
+        if self._snapshot is not None and self._all_steps_terminal():
+            self._snapshot.cleanup()
+            logger.info("Snapshot cleaned after graceful completion")
+
         logger.info("ScannerScheduler stopped")
+
+    # ------------------------------------------------------------------
+    # §6.6 状态快照与崩溃恢复
+    # ------------------------------------------------------------------
+    async def _maybe_resume(self) -> None:
+        """检测可恢复快照并恢复执行状态（在事件订阅前调用）。
+
+        恢复流程（§6.6）：
+        1. 恢复步骤状态到 StepRegistry（终态步骤不再重跑）；
+        2. 恢复变量（VariableSpace.restore）；
+        3. 重置仪器（*RST）——崩溃时仪器可能处于未知状态；
+        4. UUT/夹具状态恢复：本调度器无对应引用，留待上层恢复。
+
+        无快照或无恢复需要时为空操作。
+        """
+        if self._snapshot is None or not self._snapshot.can_resume():
+            return
+
+        snapshot = self._snapshot.load()
+        if not snapshot:
+            return
+
+        # 1. 恢复步骤状态
+        step_states = snapshot.get("step_states", {})
+        restored = 0
+        for step_id, raw_state in step_states.items():
+            if not isinstance(raw_state, str):
+                continue
+            # 崩溃时 RUNNING/PENDING 视为未完成，重跑（回退 PENDING）
+            target = raw_state if raw_state in _TERMINAL_STATES else "PENDING"
+            try:
+                self._registry.update_status(step_id, StepStatus(target))
+                restored += 1
+            except ValueError:
+                logger.warning(
+                    "Snapshot restore: invalid status for %s: %s", step_id, raw_state
+                )
+
+        # 2. 恢复变量
+        variables = snapshot.get("variables")
+        if isinstance(variables, dict):
+            self._variable_space.restore(variables)
+
+        # 3. 重置仪器（崩溃后强制 *RST，确保已知状态）
+        if self._instrument_reset_callback is not None:
+            try:
+                await self._instrument_reset_callback()
+                logger.info("Instruments reset after crash recovery")
+            except Exception:
+                logger.exception("Instrument reset failed during recovery")
+
+        self._resumed_from_snapshot = True
+        logger.info(
+            "Crash recovery: restored %d/%d step states",
+            restored,
+            len(step_states),
+        )
+
+    def _get_state(self) -> dict[str, Any]:
+        """构建当前执行状态快照（§6.6）。"""
+        state: dict[str, Any] = {
+            "step_states": {
+                step_id: status.value
+                for step_id, status in self._registry.get_all_steps().items()
+            },
+            "variables": self._variable_space.snapshot(),
+            "timestamp": time.time(),
+        }
+        return state
+
+    def _maybe_snapshot(self) -> None:
+        """步骤状态变更后原子保存快照（仅在启用时）。"""
+        if self._snapshot is None:
+            return
+        try:
+            self._snapshot.save(self._get_state())
+        except Exception:
+            # 快照失败不应中断执行：记录并继续（下个状态变更会重试）
+            logger.exception("State snapshot save failed")
+
+    def _all_steps_terminal(self) -> bool:
+        """全部已注册步骤是否都已到达终态（PASSED/FAILED/SKIPPED/ERROR）。"""
+        states = self._registry.get_all_steps()
+        if not states:
+            return False
+        return all(
+            s.value in _TERMINAL_STATES for s in states.values()
+        )
 
     def compile_plan(self, steps: list[tuple[str, Condition | None]]) -> None:
         """Build the dependency index from a list of (step_id, condition) pairs.
@@ -359,6 +487,8 @@ class ScannerScheduler:
                 scheduler_self._pending_dispatch.discard(step_id)
 
             logger.debug("Step status changed: %s -> %s — evaluating dependents", step_id, new_status)
+            # §6.6 状态变更后原子保存快照（崩溃恢复用）
+            scheduler_self._maybe_snapshot()
             # Trigger reactive dispatch for steps that depend on this step
             if step_id is not None:
                 scheduler_self._schedule_dispatch_for_key(step_id)
@@ -542,6 +672,9 @@ class ScannerScheduler:
         try:
             from shared.events import StepStartedData
 
+            # 暂停时阻塞直到 resume()（F5）
+            await self._pause_event.wait()
+
             # Verify step is still pending (status might have changed)
             try:
                 status = self._registry.get_status(step_id)
@@ -551,8 +684,13 @@ class ScannerScheduler:
             if status.value != "PENDING":
                 return  # No longer pending
 
-            # Check skip conditions before any other work (adaptive + basic)
-            if self._evaluate_step_skip(step_id):
+            # force_next 一次性消耗：绕过 skip 检查（F5）
+            force_next = self._force_next_pending
+            if force_next:
+                self._force_next_pending = False
+
+            # Check skip conditions before any other work (adaptive + basic + config)
+            if not force_next and self._evaluate_step_skip(step_id):
                 reason = self._get_skip_reason(step_id)
                 await self._handle_step_skipped(step_id, reason)
                 return
@@ -756,6 +894,14 @@ class ScannerScheduler:
             skip_expr, _skip_reason = skip_info
             return self._evaluate_skip_expression(skip_expr)
 
+        # Phase 3: StepExecutionConfig.skip_if（F5，注册时携带的配置）
+        try:
+            config = self._registry.get_config(step_id)
+        except KeyError:
+            config = None
+        if config is not None and config.skip_if:
+            return self._evaluate_skip_expression(config.skip_if)
+
         return False
 
     def _get_skip_reason(self, step_id: str) -> str:
@@ -782,6 +928,14 @@ class ScannerScheduler:
         if skip_info is not None:
             skip_expr, skip_reason = skip_info
             return skip_reason or f"skip_if: {skip_expr}"
+
+        # StepExecutionConfig.skip_if reason（F5）
+        try:
+            config = self._registry.get_config(step_id)
+        except KeyError:
+            config = None
+        if config is not None and config.skip_if:
+            return f"skip_if: {config.skip_if}"
 
         return "Adaptive skip condition met"
 
@@ -960,6 +1114,93 @@ class ScannerScheduler:
 
         return result
 
+    # ------------------------------------------------------------------
+    # F5 执行增强：暂停 / 强制下一步 / 重试重复
+    # ------------------------------------------------------------------
+
+    @property
+    def is_paused(self) -> bool:
+        """是否处于暂停状态。"""
+        return self._paused
+
+    def pause(self) -> None:
+        """暂停调度：_dispatch_step 将阻塞直到 resume()。
+
+        幂等：重复调用安全。已派发的步骤不受影响（只拦新派发）。
+        """
+        self._paused = True
+        self._pause_event.clear()
+
+    def resume(self) -> None:
+        """恢复调度：放行被 pause() 阻塞的派发。
+
+        幂等：重复调用安全。
+        """
+        self._paused = False
+        self._pause_event.set()
+
+    def force_next(self) -> None:
+        """强制下一步：下一次派发绕过 skip_if（一次性）。
+
+        用于人工介入后强制执行本会被跳过的步骤。
+        """
+        self._force_next_pending = True
+
+    async def handle_step_result(self, step_id: str, status: StepStatus) -> bool:
+        """根据步骤结果决策是否重试/重复（F5）。
+
+        决策矩阵（§6.4）：
+        - ERROR   -> 重试：retry_count < max_retries 时递增计数、置回 PENDING，
+                     返回 True；否则保持 ERROR 返回 False。
+        - FAILED  -> 重复：repeat_on_measurement_fail 时，force_repeat 无视
+                     repeat_limit 强制重复；否则 repeat_count < repeat_limit
+                     才重复。
+        - PASSED  -> 清零 retry/repeat 计数，返回 False。
+
+        Args:
+            step_id: 步骤标识。
+            status: 步骤结束状态。
+
+        Returns:
+            True 表示调度器应重试/重复该步骤（已置回 PENDING）。
+        """
+        try:
+            config = self._registry.get_config(step_id)
+        except KeyError:
+            return False
+
+        if status == StepStatus.ERROR:
+            retries = self._registry.get_retry_count(step_id)
+            if config.max_retries > 0 and retries < config.max_retries:
+                self._registry.increment_retry_count(step_id)
+                self._registry.update_status(step_id, StepStatus.PENDING)
+                if config.retry_delay_ms > 0:
+                    await asyncio.sleep(config.retry_delay_ms / 1000.0)
+                return True
+            # 重试耗尽：保持/置回 ERROR（可能当前是 PENDING）
+            self._registry.update_status(step_id, StepStatus.ERROR)
+            return False
+
+        if status == StepStatus.FAILED:
+            if not config.repeat_on_measurement_fail:
+                return False
+            repeats = self._registry.get_repeat_count(step_id)
+            if config.force_repeat or config.repeat_limit == 0 or repeats < config.repeat_limit:
+                self._registry.increment_repeat_count(step_id)
+                self._registry.update_status(step_id, StepStatus.PENDING)
+                return True
+            # 重复耗尽：保持/置回 FAILED
+            self._registry.update_status(step_id, StepStatus.FAILED)
+            return False
+
+        if status == StepStatus.PASSED:
+            # 通过后清零计数，避免影响下次循环执行
+            self._registry.reset_retry_count(step_id)
+            self._registry.reset_repeat_count(step_id)
+            return False
+
+        return False
+
     def get_status(self) -> dict[str, Any]:
         """Get current scheduler status for monitoring.
 
@@ -977,4 +1218,11 @@ class ScannerScheduler:
             "watchdog_running": self._watchdog is not None and self._watchdog.is_running,
             "adaptive_skip_enabled": self._adaptive_skip_evaluator is not None,
             "adaptive_skip_count": len(self._adaptive_skip_conditions),
+            "snapshot_enabled": self._snapshot is not None,
+            "snapshot_resumable": bool(
+                self._snapshot is not None and self._snapshot.can_resume()
+            ),
+            "resumed_from_snapshot": self._resumed_from_snapshot,
+            "paused": self._paused,
+            "force_next_pending": self._force_next_pending,
         }

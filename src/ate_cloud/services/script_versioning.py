@@ -7,12 +7,16 @@ pathlib.Path for cross-platform compatibility (ARM64/x86_64, Linux/Windows).
 
 from __future__ import annotations
 
+import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import git
 from fastapi import HTTPException, status
+
+from ate_cloud.schemas.script import WorkerVersionTag
 
 
 class ScriptVersioningService:
@@ -256,3 +260,122 @@ class ScriptVersioningService:
             return datetime.fromtimestamp(commit.committed_date, tz=timezone.utc)
         except StopIteration:
             return None
+
+    # ------------------------------------------------------------------
+    # Worker script version tags (JetStream KV bucket "ate-scripts")
+    # ------------------------------------------------------------------
+
+    async def tag_worker(
+        self,
+        script_path: str,
+        worker_id: str,
+        commit_hash: str,
+        js: Any,
+    ) -> int:
+        """Record a worker→script version tag in the ``ate-scripts`` KV bucket.
+
+        Writes a ``WorkerVersionTag`` JSON payload under the key
+        ``workers.{worker_id}.{script_path}`` (backslashes normalized to
+        forward slashes for cross-platform consistency).
+
+        Args:
+            script_path: Relative script path.
+            worker_id: Unique worker identifier.
+            commit_hash: Git commit hash the worker should run.
+            js: JetStream context exposing async ``key_value``/``put``.
+
+        Returns:
+            The KV revision returned by ``put()``.
+        """
+        normalized = script_path.replace("\\", "/")
+        key = f"workers.{worker_id}.{normalized}"
+        payload = WorkerVersionTag(
+            worker_id=worker_id,
+            script_path=normalized,
+            commit_hash=commit_hash,
+        )
+        kv = await js.key_value("ate-scripts")
+        return await kv.put(key, payload.model_dump_json().encode("utf-8"))
+
+    async def check_worker_version(
+        self,
+        worker_id: str,
+        js: Any,
+    ) -> list[dict[str, str | bool]]:
+        """Compare a worker's tagged script hashes against current Git HEAD.
+
+        Reads all ``workers.{worker_id}.*`` tags from the ``ate-scripts``
+        KV bucket and reports which scripts need an update.
+
+        Args:
+            worker_id: Unique worker identifier.
+            js: JetStream context exposing async ``key_value``/``keys``/``get``.
+
+        Returns:
+            List of diff dicts: ``{script_path, tagged_hash, current_hash,
+            needs_update}``. Empty when no tags exist.
+        """
+        kv = await js.key_value("ate-scripts")
+        prefix = f"workers.{worker_id}."
+        try:
+            keys = await kv.keys()
+        except Exception:
+            # No keys (NoKeysError) or KV unavailable — nothing to compare
+            return []
+
+        diffs: list[dict[str, str | bool]] = []
+        for key in keys:
+            if not key.startswith(prefix):
+                continue
+            entry = await kv.get(key)
+            tag = json.loads(entry.value.decode("utf-8"))
+            script_path = tag["script_path"]
+            tagged_hash = tag["commit_hash"]
+            head_hash = self.get_head_commit_hash(script_path)
+            needs_update = head_hash is not None and head_hash != tagged_hash
+            diffs.append({
+                "script_path": script_path,
+                "tagged_hash": tagged_hash,
+                "current_hash": head_hash or tagged_hash,
+                "needs_update": needs_update,
+            })
+        return diffs
+
+    async def sync_worker(
+        self,
+        worker_id: str,
+        js: Any,
+    ) -> list[dict[str, str]]:
+        """Re-tag every script whose Git HEAD has advanced past its tag.
+
+        Args:
+            worker_id: Unique worker identifier.
+            js: JetStream context exposing async ``key_value``/``keys``/``get``.
+
+        Returns:
+            List of ``{script_path, commit_hash}`` for scripts that were
+            re-tagged to the current HEAD. Scripts with no Git commits are
+            skipped.
+        """
+        kv = await js.key_value("ate-scripts")
+        prefix = f"workers.{worker_id}."
+        try:
+            keys = await kv.keys()
+        except Exception:
+            return []
+
+        results: list[dict[str, str]] = []
+        for key in keys:
+            if not key.startswith(prefix):
+                continue
+            entry = await kv.get(key)
+            tag = json.loads(entry.value.decode("utf-8"))
+            script_path = tag["script_path"]
+            head_hash = self.get_head_commit_hash(script_path)
+            if head_hash is None:
+                # No commits for this path — nothing to sync
+                continue
+            if head_hash != tag["commit_hash"]:
+                await self.tag_worker(script_path, worker_id, head_hash, js)
+                results.append({"script_path": script_path, "commit_hash": head_hash})
+        return results

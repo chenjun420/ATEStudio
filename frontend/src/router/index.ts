@@ -102,6 +102,12 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/NodeFlowBinding.vue'),
         meta: { title: '节点流程绑定' },
       },
+      {
+        path: 'fixture-designer',
+        name: 'FixtureDesigner',
+        component: () => import('@/views/FixtureDesigner.vue'),
+        meta: { title: '工装设计调试器' },
+      },
     ],
   },
 
@@ -139,6 +145,12 @@ const routes: RouteRecordRaw[] = [
         name: 'TracingViewer',
         component: () => import('@/views/TracingViewer.vue'),
         meta: { title: '追溯查询' },
+      },
+      {
+        path: 'simulation',
+        name: 'SimulationConsole',
+        component: () => import('@/views/SimulationConsole.vue'),
+        meta: { title: '仿真调试控制台' },
       },
     ],
   },

@@ -28,7 +28,7 @@ from ate_cloud.schemas.product_config import (
     ProductConfigUpdate,
 )
 
-router = APIRouter()
+router = APIRouter(prefix="/products", tags=["products"])
 
 # Type alias for async DB session dependency (avoids B008 ruff warning).
 DBSession = Annotated[AsyncSession, Depends(get_db)]

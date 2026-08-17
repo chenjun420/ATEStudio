@@ -23,14 +23,29 @@ from sse_starlette.sse import EventSourceResponse, ServerSentEvent
 from ate_cloud.db import get_db
 from ate_cloud.models.execution import Execution
 from ate_cloud.nats.sse_bridge import SSEBridge
+from ate_cloud.services.execution_dispatch import (
+    ExecutionDispatchError,
+    ExecutionDispatchService,
+)
+from ate_cloud.services.plan_materializer import (
+    ExecutionPlanMaterializer,
+    PlanMaterializeError,
+)
 from ate_cloud.schemas.execution import (
     ExecutionAbortResponse,
+    ExecutionControlResponse,
     ExecutionCreate,
     ExecutionListItem,
     ExecutionResponse,
     ExecutionSearchRequest,
     ExecutionSearchResponse,
+    SimulationRequest,
+    SimulationResponse,
+    SimulationResultEvent,
 )
+from ate_platform.simulation.dry_run_scheduler import DryRunScheduler
+from ate_platform.simulation.full_chain_simulator import FullChainSimulator
+from ate_platform.simulation.instrument_simulator import NoiseConfig, NoiseModel
 
 router = APIRouter(prefix="/executions", tags=["executions"])
 
@@ -157,6 +172,182 @@ async def stream_execution_events(
     return EventSourceResponse(event_generator())
 
 
+# 拓扑运行时状态流（§8.3.6）：夹具/DUT 状态 SSE 推送。
+# 静态路径，须先于 /{run_id} 等动态路径定义。
+@router.get("/{run_id}/topology-stream", response_class=EventSourceResponse)
+async def stream_topology_state(
+    run_id: str,
+    request: Request,
+    bridge: SSEBridge = Depends(get_sse_bridge),
+) -> EventSourceResponse:
+    """SSE endpoint streaming fixture/DUT topology runtime state.
+
+    事件类型（§8.3.6）：instrument / link / relay / measurement / fixture / fault。
+    使用独立的 "topology" 流队列，与 /events 主队列隔离，多客户端无竞争。
+
+    Args:
+        run_id: The execution run identifier.
+        request: The incoming HTTP request (used for disconnect detection).
+        bridge: The SSEBridge instance.
+
+    Returns:
+        EventSourceResponse streaming topology state events.
+    """
+    queue = bridge.get_stream_queue(run_id, "topology")
+
+    async def event_generator() -> AsyncGenerator[ServerSentEvent, None]:
+        heartbeat_interval = 15.0  # seconds
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    event = await asyncio.wait_for(
+                        queue.get(), timeout=heartbeat_interval
+                    )
+                    yield ServerSentEvent(
+                        data=json.dumps(event.get("data", {})),
+                        event=event.get("type", "event"),
+                        id=event.get("id"),
+                    )
+                except asyncio.TimeoutError:
+                    yield ServerSentEvent(data="", comment="keep-alive")
+        finally:
+            bridge.remove_stream_queue(run_id, "topology")
+
+    return EventSourceResponse(event_generator())
+
+
+@router.post("/{run_id}/simulate", response_model=SimulationResponse)
+async def simulate_execution(
+    run_id: str,
+    sim_data: SimulationRequest,
+    db: DBSession,
+) -> SimulationResponse:
+    """Run a simulation for the execution (设计文档 §7 三层仿真 + §8.4 仿真控制台).
+
+    云侧仿真入口：materialize 执行序列的 YamlPlan，然后按层级执行：
+    - ``driver``:  驱动级仿真（仪器 SIM 驱动器，测量生成含噪声）——使用 FullChainSimulator。
+    - ``dry_run``: 调度器空跑（DryRunScheduler），无测量。
+    - ``full``:    全链路仿真（驱动仿真 + 调度空跑 + 噪声模型）。
+
+    Args:
+        run_id: The execution run identifier.
+        sim_data: Simulation tier + noise configuration.
+        db: Database session.
+
+    Returns:
+        SimulationResponse with events (decisions + measurements) and statistics.
+
+    Raises:
+        HTTPException: 404 if the execution/sequence cannot be materialized.
+    """
+    materializer = ExecutionPlanMaterializer(db)
+    try:
+        plan = await materializer.materialize(run_id)
+    except PlanMaterializeError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from None
+
+    import time as _time
+
+    start = _time.monotonic()
+    events: list[SimulationResultEvent] = []
+    status = "passed"
+    statistics: dict[str, Any] = {}
+
+    try:
+        if sim_data.tier == "dry_run":
+            result = DryRunScheduler().dry_run(plan)
+            for decision in result.decisions:
+                events.append(
+                    SimulationResultEvent(
+                        step_id=decision.step_id,
+                        timestamp=decision.timestamp,
+                        event_type="decision",
+                        data={
+                            "decision": str(decision.decision),
+                            "reason": decision.reason,
+                            "condition_met": decision.condition_met,
+                            "resources_acquired": decision.resources_acquired,
+                        },
+                    )
+                )
+            status = "passed" if result.all_passed else "failed"
+            statistics = {
+                "passed": result.passed,
+                "failed": result.failed,
+                "skipped": result.skipped,
+                "blocked": result.blocked,
+                "errors": result.errors,
+                "not_reached": result.not_reached,
+                "total_steps": result.total_steps,
+                "deadlock_detected": result.deadlock_detected,
+            }
+        else:
+            # driver / full 共用 FullChainSimulator（driver 无噪声模型差异）
+            noise_config = NoiseConfig(
+                model=NoiseModel(sim_data.noise_model),
+                noise_sigma=sim_data.noise_sigma,
+                drift_rate=sim_data.drift_rate,
+                bias=sim_data.bias,
+                seed=sim_data.seed,
+            )
+            result = FullChainSimulator(
+                noise_config=noise_config,
+                fault_config=sim_data.fault_config,
+            ).run(plan)
+            for decision in result.dry_run_result.decisions:
+                events.append(
+                    SimulationResultEvent(
+                        step_id=decision.step_id,
+                        timestamp=decision.timestamp,
+                        event_type="decision",
+                        data={
+                            "decision": str(decision.decision),
+                            "reason": decision.reason,
+                            "condition_met": decision.condition_met,
+                        },
+                    )
+                )
+            for meas in result.measurements:
+                events.append(
+                    SimulationResultEvent(
+                        step_id=meas.step_id,
+                        timestamp=meas.timestamp,
+                        event_type="measurement",
+                        data={
+                            "instrument_type": meas.instrument_type,
+                            "true_value": meas.true_value,
+                            "simulated_value": meas.simulated_value,
+                            "noise_error": meas.noise_error,
+                            "noise_applied": meas.noise_applied,
+                        },
+                    )
+                )
+            status = "passed" if result.all_passed else "failed"
+            statistics = {
+                "dry_run_passed": result.dry_run_result.passed,
+                "dry_run_failed": result.dry_run_result.failed,
+                "dry_run_skipped": result.dry_run_result.skipped,
+                "measurements": len(result.measurements),
+                "instrument_stats": result.instrument_stats,
+                "summary": result.summary,
+            }
+    except Exception as e:  # noqa: BLE001
+        status = "error"
+        statistics["error"] = str(e)
+
+    duration = _time.monotonic() - start
+    return SimulationResponse(
+        session_id=run_id,
+        tier=sim_data.tier,
+        status=status,
+        events=events,
+        duration_seconds=duration,
+        statistics=statistics,
+    )
+
+
 @router.post("", response_model=ExecutionResponse, status_code=status.HTTP_201_CREATED)
 async def create_execution(
     execution_data: ExecutionCreate,
@@ -165,11 +356,13 @@ async def create_execution(
 ) -> ExecutionResponse:
     """Start a new execution.
 
-    Creates an Execution record with PENDING status and publishes
-    an EXECUTION_STARTED event via the SSE bridge.
+    Creates an Execution record with PENDING status, materializes the
+    sequence into a YamlPlan, dispatches it to the worker via JetStream
+    (``ate.tasks.{run_id}``), and publishes an EXECUTION_STARTED event via
+    the SSE bridge.
 
-    Note: Actual execution dispatch is NOT done here — that's Phase 3 (LoopExecutor).
-    This endpoint creates the execution record and makes it available for SSE streaming.
+    If NATS is unavailable or dispatch fails, the endpoint returns 503 and
+    the Execution record stays PENDING (retryable).
 
     Args:
         execution_data: The execution creation data (sequence_id required).
@@ -178,8 +371,35 @@ async def create_execution(
 
     Returns:
         ExecutionResponse: The created execution with generated run_id.
+
+    Raises:
+        HTTPException: 503 if the plan cannot be dispatched to NATS.
     """
     run_id = str(uuid.uuid4())
+
+    # Calibration gate: block execution when any referenced instrument has an
+    # EXPIRED calibration (HTTP 409). No Execution row is created in that case.
+    # Calibration is opt-in per instrument — instruments with no record are
+    # UNKNOWN and pass through.
+    instrument_ids = (execution_data.config or {}).get("instrument_ids") or []
+    if instrument_ids:
+        from ate_cloud.services.calibration_manager import CalibrationManager
+
+        cal_manager = CalibrationManager(db)
+        expired = [
+            str(iid)
+            for iid in instrument_ids
+            if await cal_manager.is_expired(str(iid))
+        ]
+        if expired:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Calibration expired for instrument(s): "
+                    f"{', '.join(expired)}. Blocking execution until recalibrated."
+                ),
+            )
+
     execution = Execution(
         id=run_id,
         sequence_id=execution_data.sequence_id,
@@ -190,6 +410,27 @@ async def create_execution(
     db.add(execution)
     await db.commit()
     await db.refresh(execution)
+
+    # Materialize + dispatch to the worker. A NATS outage or dispatch
+    # failure surfaces as 503; the PENDING record stays for retry.
+    try:
+        from ate_cloud.main import get_nats
+
+        nc = get_nats()
+    except RuntimeError:
+        nc = None
+
+    if nc is not None:
+        try:
+            materializer = ExecutionPlanMaterializer(db)
+            plan = await materializer.materialize(run_id)
+            dispatcher = ExecutionDispatchService(nc)
+            await dispatcher.dispatch(run_id, plan)
+        except (PlanMaterializeError, ExecutionDispatchError) as e:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"Dispatch failed: {e}",
+            ) from e
 
     # Publish EXECUTION_STARTED event via bridge
     await bridge.publish_event(
@@ -448,3 +689,145 @@ async def abort_execution(
     )
 
     return ExecutionAbortResponse(id=run_id, status="ABORTING")
+
+
+# Control action → (target status, SSE event type) mapping.
+_CONTROL_ACTIONS: dict[str, tuple[str, str]] = {
+    "pause": ("PAUSING", "EXECUTION_PAUSED"),
+    "resume": ("RESUMING", "EXECUTION_STARTED"),
+    "force_next": ("FORCE_NEXT", "EXTERNAL_CMD"),
+}
+_TERMINAL_STATES = {"COMPLETED", "FAILED", "ABORTED"}
+
+
+async def _control_execution(
+    run_id: str,
+    action: str,
+    db: AsyncSession,
+    bridge: SSEBridge,
+) -> ExecutionControlResponse:
+    """Apply a runtime control action (pause/resume/force_next).
+
+    Persists the target status, publishes a Core NATS control message to
+    ``ate.control.{run_id}`` (``{action, run_id}`` payload) so the worker
+    can act on it, and broadcasts the corresponding SSE event. A NATS
+    outage is non-fatal — the API still returns 200 (worker-independent
+    control surface).
+
+    Args:
+        run_id: The execution run identifier.
+        action: One of "pause"/"resume"/"force_next".
+        db: Database session.
+        bridge: SSEBridge instance.
+
+    Returns:
+        ExecutionControlResponse with id/action/status.
+
+    Raises:
+        HTTPException: 404 if execution not found.
+        HTTPException: 409 if execution is in a terminal state.
+    """
+    target_status, sse_type = _CONTROL_ACTIONS[action]
+
+    result = await db.execute(select(Execution).where(Execution.id == run_id))
+    execution = result.scalar_one_or_none()
+
+    if not execution:
+        raise HTTPException(status_code=404, detail="Execution not found")
+
+    if execution.status in _TERMINAL_STATES:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Execution is already in terminal state: {execution.status}",
+        )
+
+    execution.status = target_status
+    await db.commit()
+
+    # Publish Core NATS control message (non-fatal on NATS outage).
+    try:
+        from ate_cloud.main import get_nats
+
+        nc = get_nats()
+        if nc is not None:
+            payload = json.dumps({"action": action, "run_id": run_id}).encode()
+            await nc.publish(f"ate.control.{run_id}", payload)
+    except RuntimeError:
+        pass
+
+    await bridge.publish_event(
+        run_id=run_id,
+        event_type=sse_type,
+        data={"run_id": run_id, "action": action, "status": target_status},
+    )
+
+    return ExecutionControlResponse(id=run_id, action=action, status=target_status)
+
+
+@router.post("/{run_id}/pause", response_model=ExecutionControlResponse)
+async def pause_execution(
+    run_id: str,
+    db: AsyncSession = Depends(get_db),
+    bridge: SSEBridge = Depends(get_sse_bridge),
+) -> ExecutionControlResponse:
+    """Pause a running/pending execution.
+
+    Args:
+        run_id: The execution run identifier.
+        db: Database session.
+        bridge: SSEBridge instance.
+
+    Returns:
+        ExecutionControlResponse: Confirmation with PAUSING status.
+
+    Raises:
+        HTTPException: 404 if execution not found.
+        HTTPException: 409 if execution is already in a terminal state.
+    """
+    return await _control_execution(run_id, "pause", db, bridge)
+
+
+@router.post("/{run_id}/resume", response_model=ExecutionControlResponse)
+async def resume_execution(
+    run_id: str,
+    db: AsyncSession = Depends(get_db),
+    bridge: SSEBridge = Depends(get_sse_bridge),
+) -> ExecutionControlResponse:
+    """Resume a paused execution.
+
+    Args:
+        run_id: The execution run identifier.
+        db: Database session.
+        bridge: SSEBridge instance.
+
+    Returns:
+        ExecutionControlResponse: Confirmation with RESUMING status.
+
+    Raises:
+        HTTPException: 404 if execution not found.
+        HTTPException: 409 if execution is already in a terminal state.
+    """
+    return await _control_execution(run_id, "resume", db, bridge)
+
+
+@router.post("/{run_id}/force_next", response_model=ExecutionControlResponse)
+async def force_next_execution(
+    run_id: str,
+    db: AsyncSession = Depends(get_db),
+    bridge: SSEBridge = Depends(get_sse_bridge),
+) -> ExecutionControlResponse:
+    """Force the next step in a running execution.
+
+    Args:
+        run_id: The execution run identifier.
+        db: Database session.
+        bridge: SSEBridge instance.
+
+    Returns:
+        ExecutionControlResponse: Confirmation with FORCE_NEXT status.
+
+    Raises:
+        HTTPException: 404 if execution not found.
+        HTTPException: 409 if execution is already in a terminal state.
+    """
+    return await _control_execution(run_id, "force_next", db, bridge)

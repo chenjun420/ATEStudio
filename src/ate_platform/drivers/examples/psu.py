@@ -92,3 +92,15 @@ PSUDriver = PSUHALDriver
 
 # Register drivers when module is imported
 DriverRegistry.register(PSU_DRIVER_NAME, hal_cls=PSUHALDriver, mal_cls=PSUAbstraction)
+
+
+# ---------------------------------------------------------------------------
+# Mock driver — simulation mode
+# ---------------------------------------------------------------------------
+
+from ate_platform.drivers.mock_factory import MockDriverFactory
+from ate_platform.drivers.mock_factory import _MockPSUDriver as MockPSUDriver
+
+# Register the PSU mock driver so MockDriverFactory.create_mock(PSUAbstraction)
+# works, and so scripts may import MockPSUDriver directly for simulation.
+MockDriverFactory.register_mock(PSUAbstraction, MockPSUDriver)

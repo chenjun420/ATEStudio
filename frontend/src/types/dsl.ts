@@ -18,12 +18,17 @@ export const LoopType = {
 export type LoopTypeValue = "FOR" | "WHILE" | "FOREACH"
 
 export const StepType = {
-  SCRIPT: "SCRIPT",
-  LOOP: "LOOP",
-  CALL: "CALL",
+  SCRIPT: "script",
+  ACTION: "action",
+  LOOP: "loop",
+  BRANCH: "branch",
+  BARRIER: "barrier",
+  FIXTURE_CONTROL: "fixture_control",
+  CALL: "call",
+  SUBSEQUENCE: "subsequence",
 } as const
 
-export type StepTypeValue = "SCRIPT" | "LOOP" | "CALL"
+export type StepTypeValue = "script" | "action" | "loop" | "branch" | "barrier" | "fixture_control" | "call" | "subsequence"
 
 export interface YamlLoop {
   id: string
@@ -36,6 +41,8 @@ export interface YamlLoop {
   execution_mode?: ExecutionModeValue
   max_iterations?: number
   skip_if?: string | null
+  skip_reason?: string | null
+  depends_on?: Array<string>
 }
 
 export interface YamlPlan {
@@ -48,15 +55,23 @@ export interface YamlPlan {
 
 export interface YamlStep {
   id: string
-  script: string
+  type?: StepTypeValue | null
+  script?: string
   params?: Record<string, unknown>
   preconditions?: Array<string>
+  depends_on?: Array<string>
   resources?: Record<string, unknown>
   timeout?: number
   retry?: number
   on_fail?: string | null
+  on_failure?: string | null
+  uut_affinity?: string | null
+  barrier_name?: string | null
+  action?: string | null
+  fixture_id?: string | null
   export_outputs?: boolean
   skip_if?: string | null
+  skip_reason?: string | null
 }
 
 /**

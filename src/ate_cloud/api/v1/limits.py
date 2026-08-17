@@ -31,7 +31,7 @@ from ate_cloud.schemas.test_limits import (
 )
 from ate_cloud.services.limit_resolver import LimitResolver
 
-router = APIRouter()
+router = APIRouter(prefix="/limits", tags=["limits"])
 
 # Type alias for async DB session dependency (avoids B008 ruff warning).
 DBSession = Annotated[AsyncSession, Depends(get_db)]

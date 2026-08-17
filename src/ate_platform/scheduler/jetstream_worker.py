@@ -65,8 +65,9 @@ class PlanBootstrapper:
     flattened recursively (max depth 10).
     """
 
-    def __init__(self, plan: YamlPlan) -> None:
+    def __init__(self, plan: YamlPlan, snapshot_dir: str | None = None) -> None:
         self._plan = plan
+        self._snapshot_dir = snapshot_dir
         self.event_bus = EventBus()
         self.variable_space = VariableSpace(event_bus=self.event_bus)
         self.resource_manager = ResourceManager(event_bus=self.event_bus)
@@ -91,6 +92,8 @@ class PlanBootstrapper:
             variable_space=self.variable_space,
             resource_manager=self.resource_manager,
             step_executor=self._executor,
+            # §6.6 崩溃恢复：提供目录即启用状态快照
+            snapshot_dir=snapshot_dir,
         )
 
     def bootstrap(self, dut_id: str | None = None) -> ScannerScheduler:
@@ -224,6 +227,7 @@ class JetStreamWorker:
         worker_id_path: str | None = None,
         max_concurrent_tasks: int = 1,
         heartbeat_interval: float = _HEARTBEAT_INTERVAL,
+        snapshot_dir: str | None = None,
     ) -> None:
         self._nats_url = nats_url
         self._worker_id_path = worker_id_path or os.environ.get(
@@ -232,6 +236,8 @@ class JetStreamWorker:
         self._worker_id = self._load_or_create_worker_id()
         self._max_concurrent_tasks = max_concurrent_tasks
         self._heartbeat_interval = heartbeat_interval
+        # §6.6 状态快照目录（None 表示禁用崩溃恢复）
+        self._snapshot_dir = snapshot_dir or os.environ.get("ATE_PLATFORM_SNAPSHOT_DIR")
         self._nc: NatsClient | None = None
         self._js: Any = None
         self._heartbeat_task: asyncio.Task[None] | None = None
@@ -383,7 +389,7 @@ class JetStreamWorker:
             data = json.loads(msg.data.decode("utf-8"))
             plan = _dict_to_yaml_plan(data)
 
-            bootstrapper = PlanBootstrapper(plan)
+            bootstrapper = PlanBootstrapper(plan, snapshot_dir=self._snapshot_dir)
             self._current_scheduler = bootstrapper.bootstrap(dut_id=execution_id)
             self._current_event_bus = bootstrapper.event_bus
 

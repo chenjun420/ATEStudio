@@ -19,6 +19,23 @@ from ate_cloud.models import Base
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _dev_mode_enabled() -> Generator[None, None, None]:
+    """Default the cloud test environment to ATE_DEV_MODE=true.
+
+    The cloud API guards debug/breakpoint endpoints (and auth bypasses
+    with a synthetic admin user) behind ``settings.dev_mode``. Tests that
+    need the guarded behavior (auth verification, dev-mode 403 checks)
+    override this back to False with a function-scoped monkeypatch.
+    """
+    from ate_cloud.config import settings
+
+    old = settings.dev_mode
+    settings.dev_mode = True
+    yield
+    settings.dev_mode = old
+
+
 @pytest.fixture(scope="session")
 def event_loop() -> Generator[asyncio.AbstractEventLoop, None, None]:
     """Create an event loop for the test session."""
@@ -88,7 +105,14 @@ def app(db_session: AsyncSession) -> FastAPI:
 
 @pytest.fixture
 async def client(app: FastAPI) -> AsyncGenerator[AsyncClient, None]:
-    """Create an async HTTP client for testing."""
+    """Create an async HTTP client for testing.
+
+    Attaches ``client.app`` so tests can reach ``app.state`` (e.g. the
+    SSE bridge) the way the ASGI transport resolves dependencies.
+    """
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        # httpx AsyncClient supports attribute attachment; expose the app
+        # so tests can inspect app.state without a separate fixture.
+        ac.app = app  # type: ignore[attr-defined]
         yield ac

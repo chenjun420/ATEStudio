@@ -25,12 +25,7 @@ import { ref, computed, watch, type Ref, type ComputedRef } from 'vue'
 import * as yaml from 'js-yaml'
 import axios from 'axios'
 import { useExecutionStatus } from './useExecutionStatus'
-import type {
-  StepStatus,
-  ExecutionStatus,
-  ConnectionStatus,
-  ExecutionEvent,
-} from './useExecutionStatus'
+import type { StepStatus } from './useExecutionStatus'
 import type { YamlSequence, YamlStep, YamlLoop } from '@/types/dsl'
 import { getExecution } from '@/api/executions'
 
@@ -191,7 +186,7 @@ function flattenSteps(
     if (isYamlStep(node)) {
       out.push({
         id: node.id,
-        script: node.script,
+        script: node.script ?? '',
         params: node.params ?? {},
         preconditions: node.preconditions ?? [],
         resources: node.resources ? Object.keys(node.resources) : [],

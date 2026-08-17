@@ -333,3 +333,49 @@ class VariableSpace:
         """
         with self._lock:
             self._loop.clear()
+
+    # ------------------------------------------------------------------
+    # 快照 / 恢复（§6.6 崩溃恢复）
+    # ------------------------------------------------------------------
+    def snapshot(self) -> dict[str, Any]:
+        """导出可持久化变量状态（崩溃恢复用）。
+
+        global 为系统只读变量，不持久化。返回结构：
+        ``{"scope": ..., "steps": ..., "loop": ...}``
+
+        Returns:
+            可 JSON 序列化的变量字典。
+        """
+        with self._lock:
+            return {
+                "scope": dict(self._scope),
+                "steps": {sid: dict(vars_) for sid, vars_ in self._steps.items()},
+                "loop": {lid: dict(vars_) for lid, vars_ in self._loop.items()},
+            }
+
+    def restore(self, state: dict[str, Any]) -> None:
+        """从快照恢复变量状态（崩溃后断点续跑）。
+
+        覆盖恢复：先清空现有 scope/steps/loop 再写入快照内容，保证与
+        崩溃前完全一致（与快照导出结构对仗）。
+
+        Args:
+            state: :meth:`snapshot` 导出的字典；非法结构时忽略该部分。
+        """
+        with self._lock:
+            scope = state.get("scope") if isinstance(state, dict) else None
+            steps = state.get("steps") if isinstance(state, dict) else None
+            loop = state.get("loop") if isinstance(state, dict) else None
+
+            if isinstance(scope, dict):
+                self._scope = dict(scope)
+            if isinstance(steps, dict):
+                self._steps = {
+                    str(sid): dict(vars_) if isinstance(vars_, dict) else {}
+                    for sid, vars_ in steps.items()
+                }
+            if isinstance(loop, dict):
+                self._loop = {
+                    str(lid): dict(vars_) if isinstance(vars_, dict) else {}
+                    for lid, vars_ in loop.items()
+                }

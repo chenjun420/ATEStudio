@@ -22,9 +22,12 @@ import random
 import time
 from dataclasses import dataclass
 from enum import Enum
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from ate_platform.drivers.base_hal import BaseDriver
+
+if TYPE_CHECKING:
+    from ate_platform.simulation.fault_injector import FaultInjector
 
 
 class NoiseModel(Enum):
@@ -123,6 +126,7 @@ class InstrumentSimulator:
         driver: BaseDriver,
         instrument_type: str = "GENERIC",
         config: NoiseConfig | None = None,
+        injector: "FaultInjector | None" = None,
     ) -> None:
         """Initialize the instrument simulator.
 
@@ -133,6 +137,8 @@ class InstrumentSimulator:
                 models are active. Case-insensitive. One of SUPPORTED_TYPES.
             config: Noise configuration. Defaults to NoiseConfig() (Gaussian,
                 sigma=0.001, seed=42) if not provided.
+            injector: 可选四层故障注入器（§7.7）。提供后，每次 query/read
+                前检查网络/协议/仪器层故障规则；None 则保持原有纯噪声行为。
 
         Raises:
             ValueError: If instrument_type is not in SUPPORTED_TYPES.
@@ -148,6 +154,7 @@ class InstrumentSimulator:
         self._driver: BaseDriver = driver
         self._instrument_type: str = normalized_type
         self._config: NoiseConfig = config or NoiseConfig()
+        self._injector: FaultInjector | None = injector
 
         # Initialize RNG with seed for reproducibility
         rng = random.Random(self._config.seed)
@@ -175,6 +182,11 @@ class InstrumentSimulator:
     def query_count(self) -> int:
         """Number of queries processed since simulation start."""
         return self._state.query_count
+
+    @property
+    def injector(self) -> "FaultInjector | None":
+        """故障注入器（无则 None）。"""
+        return self._injector
 
     def reset(self) -> None:
         """Reset simulation state (RNG seed and start time).
@@ -214,8 +226,54 @@ class InstrumentSimulator:
         """
         self._state.query_count += 1
 
+        # §7.7 故障注入：网络层（延迟/丢包/断连/校验错误）
+        if self._injector is not None:
+            net_action = self._injector.check_network(
+                self._instrument_type, method="query",
+                context={"call_count": self._state.query_count},
+            )
+            if net_action is not None:
+                if net_action.fault_type == "delay":
+                    delay_ms = float(net_action.params.get("delay_ms", 0))
+                    time.sleep(delay_ms / 1000.0)
+                elif net_action.fault_type == "packet_loss":
+                    # 丢包：模拟读不到响应（返回空）
+                    return ""
+                else:
+                    self._injector.raise_for(net_action)
+
         # Get raw response from the SIM-mode driver
         raw_response = self._driver.query(command, delay=delay)
+
+        # §7.7 故障注入：协议层（SCPI 错误码/截断数据）
+        if self._injector is not None:
+            proto_action = self._injector.check_protocol(
+                self._instrument_type, method="query",
+                context={"call_count": self._state.query_count},
+            )
+            if proto_action is not None:
+                if proto_action.fault_type == "truncated_data":
+                    # 截断响应（模拟传输被切断）：直接返回残缺帧，
+                    # 不再走噪声/格式化（接收方会解析失败）
+                    cut = int(proto_action.params.get("bytes", len(raw_response) // 2))
+                    return raw_response[: max(cut, 0)]
+                else:
+                    self._injector.raise_for(proto_action)
+
+        # §7.7 故障注入：仪器层（测量越界/读数漂移/值覆盖）
+        if self._injector is not None:
+            inst_action = self._injector.check_instrument(
+                self._instrument_type, method="query",
+                context={"call_count": self._state.query_count},
+            )
+            if inst_action is not None:
+                if inst_action.fault_type == "value_override":
+                    # 覆盖测量值（不抛异常）
+                    override = float(inst_action.value)
+                    if "E" in raw_response.upper():
+                        return f"{override:.6E}"
+                    return str(override)
+                self._injector.raise_for(inst_action)
 
         # Non-numeric responses pass through unchanged
         try:
@@ -247,7 +305,19 @@ class InstrumentSimulator:
         self._driver.write(command)
 
     def read(self) -> str:
-        """Delegate read to the underlying driver."""
+        """Delegate read to the underlying driver.
+
+        §7.7 故障注入：网络层规则同样作用于 read（丢包/断连）。
+        """
+        if self._injector is not None:
+            net_action = self._injector.check_network(
+                self._instrument_type, method="read",
+                context={"call_count": self._state.query_count},
+            )
+            if net_action is not None:
+                if net_action.fault_type == "packet_loss":
+                    return ""
+                self._injector.raise_for(net_action)
         return self._driver.read()
 
     def connect(self, address: str) -> None:

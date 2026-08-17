@@ -7,7 +7,7 @@ from typing import Any
 
 import yaml
 
-from shared.dsl import ExecutionMode, LoopType, YamlLoop, YamlPlan, YamlStep
+from shared.dsl import ExecutionMode, LoopType, StepType, YamlLoop, YamlPlan, YamlStep
 
 
 class YamlParser:
@@ -77,8 +77,12 @@ class YamlParser:
     def _parse_step_or_loop(self, data: dict[str, Any]) -> YamlStep | YamlLoop:
         """Parse a step or loop entry from YAML data.
 
-        Detects whether the entry is a loop (has 'loop_type' key) or a
-        regular step and delegates to the appropriate parser.
+        Dispatch order (DSL v3.2, 设计文档 §6.5.4):
+        1. ``type: loop`` / ``type: branch`` / ``type: subsequence`` 容器 →
+           容器解析（递归展开内部步骤）
+        2. 旧式 ``loop_type`` 键 → 旧式循环解析（v3.0 兼容）
+        3. 其余（含 ``type: fixture_control`` / ``barrier`` / ``action`` /
+           ``call`` / 无 type 的脚本步骤）→ ``_parse_step``
 
         Args:
             data: Dictionary containing step or loop data.
@@ -86,12 +90,23 @@ class YamlParser:
         Returns:
             Parsed YamlStep or YamlLoop object.
         """
+        step_type = data.get("type")
+        if step_type == "loop":
+            return self._parse_loop_v32(data)
+        if step_type == "branch":
+            return self._parse_branch(data)
+        if step_type == "subsequence":
+            return self._parse_subsequence(data)
         if "loop_type" in data:
             return self._parse_loop(data)
         return self._parse_step(data)
 
     def _parse_step(self, data: dict[str, Any]) -> YamlStep:
-        """Parse a single step from YAML data.
+        """Parse a single step from YAML data (DSL v3.2).
+
+        v3.2 步骤类型（fixture_control/barrier/action/call/无 type 脚本步骤）
+        均在此解析。脚本步骤必须含 ``script``；barrier 步骤必须含
+        ``barrier_name``；fixture_control 步骤必须含 ``action``。
 
         Args:
             data: Dictionary containing step data.
@@ -106,20 +121,55 @@ class YamlParser:
         if not step_id:
             raise ValueError("Step missing required field: 'id'")
 
-        script = data.get("script")
-        if not script:
-            raise ValueError(f"Step '{step_id}' missing required field: 'script'")
+        type_str = data.get("type")
+        step_type: StepType | None = None
+        if type_str is not None:
+            try:
+                step_type = StepType(str(type_str).lower())
+            except ValueError:
+                valid = ", ".join(t.value for t in StepType)
+                raise ValueError(
+                    f"Step '{step_id}' has invalid type '{type_str}'. Must be one of: {valid}"
+                ) from None
+
+        is_script_step = step_type in (None, StepType.SCRIPT, StepType.ACTION, StepType.CALL)
+        if is_script_step:
+            script = data.get("script")
+            if not script:
+                raise ValueError(f"Step '{step_id}' missing required field: 'script'")
+        else:
+            script = data.get("script", "")
+
+        # on_failure（v3.2）与 on_fail（v3.0）别名归一：优先 on_failure
+        on_failure = data.get("on_failure", data.get("on_fail"))
+
+        # resources 归一：v3.2 用 list[string]（§6.5.2），v3.0 用 dict；
+        # list → {"name": {}} 保持所有消费方（DryRunScheduler/cpsat 等）兼容
+        resources = data.get("resources", {})
+        if isinstance(resources, list):
+            resources = {str(name): {} for name in resources}
+        elif not isinstance(resources, dict):
+            resources = {}
 
         return YamlStep(
             id=step_id,
+            type=step_type,
             script=script,
             params=data.get("params", {}),
             preconditions=data.get("preconditions", []),
-            resources=data.get("resources", {}),
+            depends_on=data.get("depends_on", []),
+            resources=resources,
             timeout=data.get("timeout", 60),
             retry=data.get("retry", 0),
             on_fail=data.get("on_fail"),
+            on_failure=on_failure,
+            uut_affinity=data.get("uut_affinity"),
+            barrier_name=data.get("barrier_name"),
+            action=data.get("action"),
+            fixture_id=data.get("fixture_id"),
             export_outputs=data.get("export_outputs", False),
+            skip_if=data.get("skip_if"),
+            skip_reason=data.get("skip_reason"),
         )
 
     def _parse_loop(self, data: dict[str, Any]) -> YamlLoop:
@@ -176,6 +226,141 @@ class YamlParser:
             iterator_var=data.get("iterator_var"),
             execution_mode=execution_mode,
             max_iterations=data.get("max_iterations", 1000),
+        )
+
+    def _parse_loop_v32(self, data: dict[str, Any]) -> YamlLoop:
+        """Parse a v3.2 ``type: loop`` container (设计文档 §6.5.4).
+
+        v3.2 循环使用 ``type: loop`` + ``count``/``iterator``/``steps``，
+        与 v3.0 的 ``loop_type: FOR`` 语法并存。FOR 循环映射为
+        ``LoopType.FOR``（count 必填）；带 condition 的映射为
+        ``LoopType.WHILE``；带 collection/iterator_var 的映射为
+        ``LoopType.FOREACH``。
+
+        Args:
+            data: Dictionary containing loop data.
+
+        Returns:
+            Parsed YamlLoop object.
+
+        Raises:
+            ValueError: If required fields are missing.
+        """
+        loop_id = data.get("id")
+        if not loop_id:
+            raise ValueError("Loop missing required field: 'id'")
+
+        # 推断旧式 loop_type：count 存在 → FOR；condition → WHILE；否则 FOR（默认）
+        if data.get("condition"):
+            loop_type = LoopType.WHILE
+        elif data.get("collection") or data.get("iterator_var"):
+            loop_type = LoopType.FOREACH
+        else:
+            loop_type = LoopType.FOR
+
+        nested_steps_data = data.get("steps", [])
+        nested_steps: list[YamlStep | YamlLoop] = []
+        for step_data in nested_steps_data:
+            nested_steps.append(self._parse_step_or_loop(step_data))
+
+        execution_mode_str = data.get("execution_mode", "SERIAL")
+        try:
+            execution_mode = ExecutionMode(execution_mode_str.upper())
+        except ValueError:
+            valid = ", ".join(m.value for m in ExecutionMode)
+            raise ValueError(
+                f"Loop '{loop_id}' has invalid execution_mode '{execution_mode_str}'. Must be one of: {valid}"
+            ) from None
+
+        return YamlLoop(
+            id=loop_id,
+            loop_type=loop_type,
+            steps=nested_steps,
+            count=data.get("count"),
+            condition=data.get("condition"),
+            collection=data.get("collection"),
+            iterator_var=data.get("iterator_var"),
+            execution_mode=execution_mode,
+            max_iterations=data.get("max_iterations", 1000),
+            depends_on=data.get("depends_on", []),
+        )
+
+    def _parse_branch(self, data: dict[str, Any]) -> YamlStep:
+        """Parse a v3.2 ``type: branch`` container as a branch-eval step.
+
+        分支编译为单一 YamlStep（type=BRANCH，condition + then_ids/else_ids
+        由编译器消费），``then``/``else`` 内部步骤作为参数保留。
+
+        Args:
+            data: Dictionary containing branch data.
+
+        Returns:
+            A YamlStep of type BRANCH.
+
+        Raises:
+            ValueError: If required fields are missing.
+        """
+        branch_id = data.get("id")
+        if not branch_id:
+            raise ValueError("Branch missing required field: 'id'")
+
+        params: dict[str, Any] = dict(data.get("params", {}))
+        params["condition"] = data.get("condition", "True")
+        params["then"] = data.get("then", [])
+        params["else"] = data.get("else", [])
+
+        return YamlStep(
+            id=branch_id,
+            type=StepType.BRANCH,
+            script=data.get("script", ""),
+            params=params,
+            preconditions=data.get("preconditions", []),
+            depends_on=data.get("depends_on", []),
+            resources=data.get("resources", {}),
+            timeout=data.get("timeout", 60),
+            retry=data.get("retry", 0),
+            on_failure=data.get("on_failure", data.get("on_fail")),
+            uut_affinity=data.get("uut_affinity"),
+            skip_if=data.get("skip_if"),
+            skip_reason=data.get("skip_reason"),
+        )
+
+    def _parse_subsequence(self, data: dict[str, Any]) -> YamlStep:
+        """Parse a v3.2 ``type: subsequence`` container as a call step.
+
+        子序列被编译为单一 YamlStep（type=SUBSEQUENCE），内部步骤保留在
+        params["steps"]，由编译器展开（§6.3.4 _compile_subsequence）。
+
+        Args:
+            data: Dictionary containing subsequence data.
+
+        Returns:
+            A YamlStep of type SUBSEQUENCE.
+
+        Raises:
+            ValueError: If required fields are missing.
+        """
+        sub_id = data.get("id")
+        if not sub_id:
+            raise ValueError("Subsequence missing required field: 'id'")
+
+        params: dict[str, Any] = dict(data.get("params", {}))
+        params["steps"] = data.get("steps", [])
+
+        return YamlStep(
+            id=sub_id,
+            type=StepType.SUBSEQUENCE,
+            script=data.get("script", ""),
+            params=params,
+            preconditions=data.get("preconditions", []),
+            depends_on=data.get("depends_on", []),
+            resources=data.get("resources", {}),
+            timeout=data.get("timeout", 60),
+            retry=data.get("retry", 0),
+            on_failure=data.get("on_failure", data.get("on_fail")),
+            uut_affinity=data.get("uut_affinity"),
+            skip_if=data.get("skip_if"),
+            skip_reason=data.get("skip_reason"),
         )
 
     def validate(self, plan: YamlPlan) -> list[str]:
@@ -243,8 +428,25 @@ class YamlParser:
             step: The step to validate.
             errors: List to append error messages to.
         """
-        if not step.script or not step.script.strip():
-            errors.append(f"Step '{step.id}': script cannot be empty")
+        # 脚本类步骤（无 type / script / action / call）必须提供 script
+        if step.type in (None, StepType.SCRIPT, StepType.ACTION, StepType.CALL):
+            if not step.script or not step.script.strip():
+                errors.append(f"Step '{step.id}': script cannot be empty")
+
+        # barrier 步骤必须声明 barrier_name（§6.3.7）
+        if step.type == StepType.BARRIER:
+            if not step.barrier_name:
+                errors.append(f"Step '{step.id}': barrier step requires 'barrier_name'")
+
+        # fixture_control 步骤必须声明 action 与 fixture_id（§6.7.1）
+        if step.type == StepType.FIXTURE_CONTROL:
+            if not step.action:
+                errors.append(
+                    f"Step '{step.id}': fixture_control step requires 'action' "
+                    "(clamp/release/set_route/read_sensor)"
+                )
+            if not step.fixture_id:
+                errors.append(f"Step '{step.id}': fixture_control step requires 'fixture_id'")
 
         if step.timeout < 0:
             errors.append(f"Step '{step.id}': timeout must be non-negative")

@@ -103,3 +103,15 @@ DMMDriver = DMMHALDriver
 
 # Register drivers when module is imported
 DriverRegistry.register(DMM_DRIVER_NAME, hal_cls=DMMHALDriver, mal_cls=DMMAbstraction)
+
+
+# ---------------------------------------------------------------------------
+# Mock driver — simulation mode
+# ---------------------------------------------------------------------------
+
+from ate_platform.drivers.mock_factory import MockDriverFactory
+from ate_platform.drivers.mock_factory import _MockDMMDriver as MockDMMDriver
+
+# Register the DMM mock driver so MockDriverFactory.create_mock(DMMAbstraction)
+# works, and so scripts may import MockDMMDriver directly for simulation.
+MockDriverFactory.register_mock(DMMAbstraction, MockDMMDriver)

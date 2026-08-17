@@ -22,7 +22,7 @@ import asyncio
 import json
 import logging
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
 from typing import Any
 
 from nats.aio.client import Client as NatsClient
@@ -70,6 +70,10 @@ class SSEBridge:
         self._refcounts: dict[str, int] = {}
         self._subscriptions: dict[str, Any] = {}
         self._event_counter: int = 0
+        # 独立流队列（如 topology-stream）：key = "{run_id}:{stream}"，
+        # 与主事件队列隔离，避免多 SSE 客户端竞争消费。
+        self._stream_queues: dict[str, asyncio.Queue[dict[str, Any]]] = {}
+        self._stream_refcounts: dict[str, int] = {}
 
     @property
     def nats_available(self) -> bool:
@@ -287,6 +291,116 @@ class SSEBridge:
             except Exception as e:
                 logger.warning(f"Failed to publish event to NATS for {run_id}: {e}")
 
+    async def push_to_queue_only(
+        self, run_id: str, event: dict[str, Any]
+    ) -> None:
+        """Push a raw event dict into the local SSE queue without republishing.
+
+        Used by consumers that already received the event from NATS (e.g.
+        ExecutionStatusRelay) — avoids re-publishing to JetStream, which
+        would create an infinite relay loop. The event is delivered
+        verbatim to SSE clients via events_for_run().
+
+        Args:
+            run_id: The execution run identifier.
+            event: The raw event dict to enqueue (no envelope added).
+        """
+        if run_id not in self._queues:
+            self._queues[run_id] = asyncio.Queue(maxsize=1000)
+            self._refcounts[run_id] = 0
+        queue = self._queues[run_id]
+        try:
+            queue.put_nowait(event)
+        except asyncio.QueueFull:
+            try:
+                queue.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+            queue.put_nowait(event)
+            logger.warning(f"Queue full for {run_id}, dropped oldest event")
+
+    def get_stream_queue(self, run_id: str, stream: str) -> asyncio.Queue[dict[str, Any]]:
+        """Get an isolated per-stream queue (e.g. "topology").
+
+        Independent from the main events queue so multiple SSE endpoints
+        (/events and /topology-stream) can subscribe concurrently without
+        competing for messages.
+
+        Args:
+            run_id: The execution run identifier.
+            stream: Stream name (e.g. "topology").
+
+        Returns:
+            asyncio.Queue bound to this (run_id, stream) pair.
+        """
+        key = f"{run_id}:{stream}"
+        if key not in self._stream_queues:
+            self._stream_queues[key] = asyncio.Queue(maxsize=1000)
+            self._stream_refcounts[key] = 0
+        self._stream_refcounts[key] += 1
+        return self._stream_queues[key]
+
+    async def publish_stream_event(
+        self, run_id: str, stream: str, event_type: str, data: dict[str, Any],
+    ) -> None:
+        """Publish a stream-scoped event to its isolated queue (and NATS).
+
+        The SSE `event:` line matches ``event_type`` verbatim so clients can
+        addEventListener('instrument' / 'link' / 'relay' / 'measurement' / 'fault').
+
+        Args:
+            run_id: The execution run identifier.
+            stream: Stream name (e.g. "topology").
+            event_type: SSE event type (e.g. "instrument").
+            data: The event payload.
+        """
+        self._event_counter += 1
+        event_id = f"{run_id}-{self._event_counter}"
+        event: dict[str, Any] = {
+            "id": event_id,
+            "type": event_type,
+            "category": event_type,
+            "run_id": run_id,
+            "data": data,
+            "timestamp": time.time(),
+        }
+
+        key = f"{run_id}:{stream}"
+        if key not in self._stream_queues:
+            self._stream_queues[key] = asyncio.Queue(maxsize=1000)
+            self._stream_refcounts[key] = 0
+        queue = self._stream_queues[key]
+        try:
+            queue.put_nowait(event)
+        except asyncio.QueueFull:
+            try:
+                queue.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+            queue.put_nowait(event)
+            logger.warning(f"Stream queue full for {key}, dropped oldest event")
+
+        # NATS：发布到 ate.status.{run_id}.{stream}.{event_type}
+        if self.nats_available:
+            try:
+                js = self._nc.jetstream()  # type: ignore[union-attr]
+                subject = f"ate.status.{run_id}.{stream}.{event_type}"
+                await js.publish(subject, json.dumps(event).encode())
+            except Exception as e:
+                logger.warning(f"Failed to publish stream event to NATS for {run_id}: {e}")
+
+    def remove_stream_queue(self, run_id: str, stream: str) -> None:
+        """Decrement stream queue refcount; clean up at zero."""
+        key = f"{run_id}:{stream}"
+        current = self._stream_refcounts.get(key, 0)
+        if current <= 0:
+            return
+        self._stream_refcounts[key] = current - 1
+        if self._stream_refcounts[key] <= 0:
+            self._stream_queues.pop(key, None)
+            self._stream_refcounts.pop(key, None)
+            logger.debug(f"Stream queue removed for {key}")
+
     def remove_queue(self, run_id: str) -> None:
         """Decrement queue reference count and clean up when it reaches zero.
 
@@ -331,4 +445,50 @@ class SSEBridge:
         self._queues.clear()
         self._refcounts.clear()
         self._subscriptions.clear()
+
+    async def events_for_run(
+        self, run_id: str
+    ) -> AsyncGenerator[dict[str, Any], None]:
+        """Stream events for a run to an SSE client (async generator).
+
+        Phase 1/2: synchronously drain events already queued for ``run_id``
+        via ``get_nowait()`` so buffered events arrive immediately (no
+        NATS dependency). Phase 3: block on ``queue.get()`` waiting for
+        live events pushed via ``publish_event()`` or
+        ``push_to_queue_only()``.
+
+        The generator terminates when ``run_id`` is not registered (no
+        queue exists) after the initial drain.
+
+        Args:
+            run_id: The execution run identifier.
+
+        Yields:
+            Raw event dicts in FIFO order.
+        """
+        queue = self._queues.get(run_id)
+        if queue is None:
+            return
+
+        # Phase 1/2: drain already-queued events synchronously.
+        while True:
+            try:
+                event = queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            yield event
+
+        # Phase 3: live events.
+        while True:
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=30.0)
+            except asyncio.TimeoutError:
+                continue
+            except asyncio.CancelledError:
+                return
+            yield event
+
+    async def close(self) -> None:
+        """Release all queues and subscriptions (alias for cleanup)."""
+        await self.cleanup()
 

@@ -5,6 +5,10 @@ This module provides step status management:
 - Condition-based readiness checking
 - Event publishing on status changes
 
+Execution enhancements (F5, 设计文档 §6.4):
+- StepExecutionConfig: per-step retry/repeat/skip configuration
+- Retry/repeat counters: track how many retries/repeats a step consumed
+
 Thread Safety:
     All status operations are protected by threading.Lock.
 """
@@ -12,7 +16,7 @@ Thread Safety:
 from __future__ import annotations
 
 import threading
-from dataclasses import asdict
+from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING
 
 from ..types import Condition, StepStatus
@@ -22,6 +26,30 @@ from .event_bus import EventBus, EventType
 if TYPE_CHECKING:
     from .resource_manager import ResourceManager
     from .variable_space import VariableSpace
+
+
+@dataclass(frozen=True)
+class StepExecutionConfig:
+    """Per-step execution policy (retry / repeat / skip).
+
+    Frozen so configs are immutable once registered — counters live in the
+    registry, policy lives in the config.
+
+    Attributes:
+        max_retries: 最大重试次数（ERROR 后），0 表示不重试。
+        retry_delay_ms: 重试间隔（毫秒）。
+        repeat_on_measurement_fail: 测量 FAILED 后是否重复执行。
+        repeat_limit: 重复执行上限，0 表示无限（配合 force_repeat 语义）。
+        force_repeat: 忽略 repeat_limit 强制重复（用于人工介入后重测）。
+        skip_if: 跳过表达式（条件成立则该步骤跳过），None 不跳过。
+    """
+
+    max_retries: int = 0
+    retry_delay_ms: int = 0
+    repeat_on_measurement_fail: bool = False
+    repeat_limit: int = 0
+    force_repeat: bool = False
+    skip_if: str | None = None
 
 
 class StepRegistry:
@@ -55,16 +83,25 @@ class StepRegistry:
         """
         self._steps: dict[str, StepStatus] = {}
         self._conditions: dict[str, Condition] = {}
+        self._configs: dict[str, StepExecutionConfig] = {}
+        self._retry_counts: dict[str, int] = {}
+        self._repeat_counts: dict[str, int] = {}
         self._event_bus: EventBus | None = event_bus
         self._condition_evaluator: ConditionEvaluator | None = condition_evaluator
         self._lock: threading.Lock = threading.Lock()
 
-    def register(self, step_id: str, condition: Condition | None = None) -> None:
+    def register(
+        self,
+        step_id: str,
+        condition: Condition | None = None,
+        config: StepExecutionConfig | None = None,
+    ) -> None:
         """Register a step with an optional precondition.
 
         Args:
             step_id: Unique identifier for the step
             condition: Optional precondition that must be met before execution
+            config: Optional StepExecutionConfig for retry/repeat/skip policy
 
         Raises:
             ValueError: If step_id is empty or already registered
@@ -79,6 +116,10 @@ class StepRegistry:
             self._steps[step_id] = StepStatus.PENDING
             if condition is not None:
                 self._conditions[step_id] = condition
+            if config is not None:
+                self._configs[step_id] = config
+            self._retry_counts[step_id] = 0
+            self._repeat_counts[step_id] = 0
 
     def update_status(self, step_id: str, status: StepStatus) -> None:
         """Update the status of a registered step.
@@ -196,6 +237,9 @@ class StepRegistry:
 
             del self._steps[step_id]
             _ = self._conditions.pop(step_id, None)
+            _ = self._configs.pop(step_id, None)
+            _ = self._retry_counts.pop(step_id, None)
+            _ = self._repeat_counts.pop(step_id, None)
             return True
 
     def has_step(self, step_id: str) -> bool:
@@ -237,8 +281,117 @@ class StepRegistry:
 
             return self._conditions.get(step_id)
 
+    def get_config(self, step_id: str) -> StepExecutionConfig:
+        """Get the execution config for a step.
+
+        Steps registered without a config receive the default
+        (all-features-disabled) config, preserving backward compatibility.
+
+        Args:
+            step_id: The step identifier
+
+        Returns:
+            The StepExecutionConfig for the step
+
+        Raises:
+            KeyError: If step is not registered
+        """
+        with self._lock:
+            if step_id not in self._steps:
+                raise KeyError(f"Step '{step_id}' is not registered")
+            return self._configs.get(step_id, StepExecutionConfig())
+
+    def get_retry_count(self, step_id: str) -> int:
+        """Get the current retry count for a step.
+
+        Args:
+            step_id: The step identifier
+
+        Returns:
+            Number of retries consumed so far
+
+        Raises:
+            KeyError: If step is not registered
+        """
+        with self._lock:
+            if step_id not in self._steps:
+                raise KeyError(f"Step '{step_id}' is not registered")
+            return self._retry_counts.get(step_id, 0)
+
+    def increment_retry_count(self, step_id: str) -> int:
+        """Increment the retry count for a step.
+
+        Args:
+            step_id: The step identifier
+
+        Returns:
+            The new retry count
+        """
+        with self._lock:
+            if step_id not in self._steps:
+                raise KeyError(f"Step '{step_id}' is not registered")
+            self._retry_counts[step_id] = self._retry_counts.get(step_id, 0) + 1
+            return self._retry_counts[step_id]
+
+    def reset_retry_count(self, step_id: str) -> None:
+        """Reset the retry count for a step to zero.
+
+        Args:
+            step_id: The step identifier
+        """
+        with self._lock:
+            if step_id not in self._steps:
+                raise KeyError(f"Step '{step_id}' is not registered")
+            self._retry_counts[step_id] = 0
+
+    def get_repeat_count(self, step_id: str) -> int:
+        """Get the current repeat count for a step.
+
+        Args:
+            step_id: The step identifier
+
+        Returns:
+            Number of repeats consumed so far
+
+        Raises:
+            KeyError: If step is not registered
+        """
+        with self._lock:
+            if step_id not in self._steps:
+                raise KeyError(f"Step '{step_id}' is not registered")
+            return self._repeat_counts.get(step_id, 0)
+
+    def increment_repeat_count(self, step_id: str) -> int:
+        """Increment the repeat count for a step.
+
+        Args:
+            step_id: The step identifier
+
+        Returns:
+            The new repeat count
+        """
+        with self._lock:
+            if step_id not in self._steps:
+                raise KeyError(f"Step '{step_id}' is not registered")
+            self._repeat_counts[step_id] = self._repeat_counts.get(step_id, 0) + 1
+            return self._repeat_counts[step_id]
+
+    def reset_repeat_count(self, step_id: str) -> None:
+        """Reset the repeat count for a step to zero.
+
+        Args:
+            step_id: The step identifier
+        """
+        with self._lock:
+            if step_id not in self._steps:
+                raise KeyError(f"Step '{step_id}' is not registered")
+            self._repeat_counts[step_id] = 0
+
     def clear(self) -> None:
-        """Clear all registered steps."""
+        """Clear all registered steps, configs and counters."""
         with self._lock:
             self._steps.clear()
             self._conditions.clear()
+            self._configs.clear()
+            self._retry_counts.clear()
+            self._repeat_counts.clear()

@@ -15,8 +15,10 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ate_cloud.auth.dependencies import require_scopes
 from ate_cloud.db import get_db
 from ate_cloud.models.sequence import Sequence
+from ate_cloud.models.user import User
 from ate_cloud.schemas.sequence import SequenceCreate, SequenceResponse, SequenceUpdate
 
 router = APIRouter(prefix="/sequences", tags=["sequences"])
@@ -27,6 +29,7 @@ async def list_sequences(
     skip: int = 0,
     limit: int = 100,
     db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_scopes("read")),
 ) -> dict[str, object]:
     """List all sequences with pagination.
 

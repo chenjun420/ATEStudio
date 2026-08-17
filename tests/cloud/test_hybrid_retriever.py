@@ -979,7 +979,7 @@ class TestEndToEndSearch:
         """search() respects top_k limit on final results."""
         retriever._api_key = ""  # type: ignore[attr-defined]
         mock_qdrant_client.search.return_value = [
-            mock_qdrant_client._make_point(f"q{i}", 0.9 - i * 0.1, {"symptom": f"fault {i}"}),  # type: ignore[attr-defined]
+            mock_qdrant_client._make_point(f"q{i}", 0.9 - i * 0.1, {"symptom": f"fault {i}"})  # type: ignore[attr-defined]
             for i in range(5)
         ]
         mock_neo4j_service.query.return_value = [
@@ -1134,7 +1134,7 @@ class TestDomainDictionary:
         result = await retriever._rewrite_query("PCB trace damage")
         assert "Printed Circuit Board" in result
 
-    def test_dictionary_has_30_plus_entries() -> None:
+    def test_dictionary_has_30_plus_entries(self) -> None:
         """Domain dictionary has at least 30 entries for electronics testing."""
         from ate_cloud.services.hybrid_retriever import _DOMAIN_DICTIONARY
 

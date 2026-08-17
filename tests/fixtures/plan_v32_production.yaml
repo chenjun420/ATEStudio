@@ -1,0 +1,66 @@
+# ATE Studio DSL v3.2 生产序列示例（设计文档 §6.5.4）
+#
+# 用途：无头仿真（headless）CI 场景 —— 覆盖 fixture_control / barrier /
+#       action / loop 四类 v3.2 步骤类型，供 AC-12 流水线验证。
+#
+# 运行：
+#   python -m ate_platform.simulation.headless_runner \
+#       tests/fixtures/plan_v32_production.yaml --tier full --junit sim.xml
+name: "12V/5A电源产测序列"
+version: "3.2"
+fixture_id: "fixture_ps_12v5a_v1"
+uut_count: 2
+driver_backend: "auto"
+
+scope:
+  variables: { vout_nominal: 12.0, iout_max: 5.0 }
+max_concurrency: 4
+
+steps:
+  # 夹具控制步骤：上料夹持
+  - id: fixture_clamp
+    type: fixture_control
+    action: clamp
+    fixture_id: "fixture_ps_12v5a_v1"
+    on_failure: abort
+
+  # 上电（双 UUT 并行语义由 max_concurrency 表达）
+  - id: power_on
+    type: action
+    script: dmm_measure.py
+    params: { expected_value: 12.0 }
+    resources: ["PSU_1"]
+    depends_on: [fixture_clamp]
+    uut_affinity: any
+
+  # 同步屏障：等待上电完成
+  - id: sync_power_on
+    type: barrier
+    barrier_name: "all_powered_on"
+    depends_on: [power_on]
+
+  # 循环测试：5 轮负载-测量
+  - id: load_test
+    type: loop
+    count: 5
+    iterator: load_step
+    depends_on: [sync_power_on]
+    steps:
+      - id: set_load
+        type: action
+        script: dmm_measure.py
+        params: { expected_value: 12.0 }
+      - id: measure
+        type: action
+        script: dmm_measure.py
+        params: { expected_value: 12.0 }
+        timeout: 10
+        retry: 2
+        on_failure: continue
+
+  # 夹具释放
+  - id: fixture_release
+    type: fixture_control
+    action: release
+    fixture_id: "fixture_ps_12v5a_v1"
+    depends_on: [load_test]

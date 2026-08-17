@@ -319,6 +319,7 @@ async def seed_apps(db: AsyncSession = Depends(get_db)) -> dict:
                 {"code": "flow-templates", "name": "流程节点模板", "route_path": "/flow/templates", "route_name": "NodeTemplates", "icon": "CopyDocument", "sort_order": 3, "required_permissions": ["flow:read"]},
                 {"code": "scripts", "name": "脚本管理", "route_path": "/flow/scripts", "route_name": "ScriptManagement", "icon": "Document", "sort_order": 4, "required_permissions": ["flow:read"]},
                 {"code": "node-binding", "name": "节点流程绑定", "route_path": "/flow/binding", "route_name": "NodeFlowBinding", "icon": "Link", "sort_order": 5, "required_permissions": ["flow:read", "node:read"]},
+                {"code": "fixture-designer", "name": "工装设计调试器", "route_path": "/flow/fixture-designer", "route_name": "FixtureDesigner", "icon": "SetUp", "sort_order": 6, "required_permissions": ["flow:read"]},
             ],
         },
         {
@@ -333,6 +334,7 @@ async def seed_apps(db: AsyncSession = Depends(get_db)) -> dict:
                 {"code": "measurements", "name": "测量数据", "route_path": "/monitor/measurements", "route_name": "MeasurementExplorer", "icon": "TrendCharts", "sort_order": 3, "required_permissions": ["exec:read"]},
                 {"code": "reports", "name": "测试报告", "route_path": "/monitor/reports", "route_name": "Reports", "icon": "Tickets", "sort_order": 4, "required_permissions": ["exec:read"]},
                 {"code": "tracing", "name": "追溯查询", "route_path": "/monitor/tracing", "route_name": "TracingViewer", "icon": "Search", "sort_order": 5, "required_permissions": ["exec:read"]},
+                {"code": "simulation-console", "name": "仿真调试控制台", "route_path": "/monitor/simulation", "route_name": "SimulationConsole", "icon": "VideoPlay", "sort_order": 6, "required_permissions": ["exec:read"]},
             ],
         },
         {

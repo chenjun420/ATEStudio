@@ -5,6 +5,10 @@ Three-tier simulation verification system:
 - Tier 2: DryRunScheduler - full scheduling graph traversal without real executors
 - Tier 3: FullChainSimulator - end-to-end noise injection combining both tiers
 
+Fault injection (design doc §7.7): FaultInjector provides four-layer fault
+rules (network/protocol/instrument/scheduler) that InstrumentSimulator applies
+on each query/read when configured.
+
 Design principles:
 - No silent fallback or degradation - errors surface directly
 - No threads for user script execution (multiprocessing isolation preserved)
@@ -13,16 +17,34 @@ Design principles:
 """
 
 from .dry_run_scheduler import DryRunResult, DryRunScheduler, StepDecision
+from .fault_injector import (
+    FaultAction,
+    FaultInjector,
+    FaultInjectionError,
+    FaultRule,
+    InstrumentFaultError,
+    NetworkFaultError,
+    ProtocolFaultError,
+    SchedulerFaultError,
+)
 from .full_chain_simulator import FullChainResult, FullChainSimulator
 from .instrument_simulator import InstrumentSimulator, NoiseConfig, NoiseModel
 
 __all__ = [
     "DryRunResult",
     "DryRunScheduler",
+    "FaultAction",
+    "FaultInjector",
+    "FaultInjectionError",
+    "FaultRule",
     "FullChainResult",
     "FullChainSimulator",
+    "InstrumentFaultError",
     "InstrumentSimulator",
+    "NetworkFaultError",
     "NoiseConfig",
     "NoiseModel",
+    "ProtocolFaultError",
+    "SchedulerFaultError",
     "StepDecision",
 ]

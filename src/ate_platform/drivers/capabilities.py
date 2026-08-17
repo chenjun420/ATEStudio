@@ -53,3 +53,23 @@ class PSUCapabilities(BaseModel):
     max_voltage: float = Field(default=30.0, gt=0)
     max_current: float = Field(default=3.0, gt=0)
     has_remote_sense: bool = False
+
+
+class ELoadCapabilities(BaseModel):
+    """Capabilities model for Electronic Load instruments.
+
+    Attributes:
+        channels: Number of load channels.
+        max_power: Maximum dissipation power in watts.
+        max_current: Maximum load current in amperes.
+        max_voltage: Maximum input voltage in volts.
+        modes: Supported operating modes (CC/CV/CR/CP).
+    """
+
+    model_config = {"frozen": True}
+
+    channels: int = Field(default=1, ge=1)
+    max_power: float = Field(default=350.0, gt=0)
+    max_current: float = Field(default=60.0, gt=0)
+    max_voltage: float = Field(default=80.0, gt=0)
+    modes: tuple[str, ...] = ("CC", "CV", "CR", "CP")

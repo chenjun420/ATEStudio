@@ -28,8 +28,9 @@ class _TestSimDriver(BaseDriver):
     """Minimal SIM-mode driver for testing. Returns a fixed value."""
 
     def __init__(self, value: float = 1.0) -> None:
-        super().__init__(mode="SIM", noise_sigma=0.0)
+        super().__init__()  # V3.2 双基类：BaseDriver 仅接受 resource_manager
         self._value: float = value
+        self._connected: bool = False
 
     def query(self, command: str, delay: float | None = None) -> str:  # noqa: PLW0221
         if command.strip().upper() == "*IDN?":
@@ -39,13 +40,29 @@ class _TestSimDriver(BaseDriver):
     def read(self) -> str:  # noqa: PLW0221
         return str(self._value)
 
+    def write(self, command: str) -> None:
+        pass
+
+    def connect(self, address: str) -> None:
+        # SIM 模式：跳过真实 pyvisa open_resource
+        self._address = address
+        self._connected = True
+
+    def disconnect(self) -> None:
+        self._connected = False
+
+    @property
+    def is_connected(self) -> bool:
+        return self._connected
+
 
 class _TestSciSimDriver(BaseDriver):
     """SIM driver that returns scientific notation."""
 
     def __init__(self, value: float = 3.3) -> None:
-        super().__init__(mode="SIM", noise_sigma=0.0)
+        super().__init__()  # V3.2 双基类：BaseDriver 仅接受 resource_manager
         self._value: float = value
+        self._connected: bool = False
 
     def query(self, command: str, delay: float | None = None) -> str:  # noqa: PLW0221
         if command.strip().upper() == "*IDN?":
@@ -54,6 +71,21 @@ class _TestSciSimDriver(BaseDriver):
 
     def read(self) -> str:  # noqa: PLW0221
         return f"{self._value:.6E}"
+
+    def write(self, command: str) -> None:
+        pass
+
+    def connect(self, address: str) -> None:
+        # SIM 模式：跳过真实 pyvisa open_resource
+        self._address = address
+        self._connected = True
+
+    def disconnect(self) -> None:
+        self._connected = False
+
+    @property
+    def is_connected(self) -> bool:
+        return self._connected
 
 
 # ---------------------------------------------------------------------------

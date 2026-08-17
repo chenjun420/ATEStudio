@@ -73,6 +73,47 @@ jobs:
       - name: Vitest run
         run: npx vitest run
 
+  # AC-12: 无头仿真输出 JUnit 报告并接入流水线（§7.11）
+  # 在 ATE_SIMULATION_MODE=true 下以纯仿真方式运行 v3.2 生产序列，
+  # 生成 JUnit XML 上传 artifact 供 Jenkins/GitLab 消费。
+  headless-sim:
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+      - name: Install dependencies
+        run: uv sync --group dev
+      - name: Headless simulation tests (JUnit)
+        run: |
+          ATE_SIMULATION_MODE=true uv run pytest \
+            tests/integration/test_headless_simulation.py \
+            tests/unit/dsl/ -v --junitxml=reports/sim-unit-junit.xml
+      - name: Run v3.2 production sequence headless (full tier)
+        run: |
+          ATE_SIMULATION_MODE=true uv run python -m \
+            ate_platform.simulation.headless_runner \
+            tests/fixtures/plan_v32_production.yaml \
+            --tier full --junit reports/sim-v32-full.xml
+      - name: Run v3.2 production sequence headless (dry_run tier)
+        run: |
+          ATE_SIMULATION_MODE=true uv run python -m \
+            ate_platform.simulation.headless_runner \
+            tests/fixtures/plan_v32_production.yaml \
+            --tier dry_run --junit reports/sim-v32-dryrun.xml
+      - name: Upload headless simulation JUnit reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: headless-sim-reports
+          path: reports/
+          if-no-files-found: error
+
   security:
     runs-on: ubuntu-latest
     continue-on-error: true

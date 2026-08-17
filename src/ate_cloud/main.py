@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -8,6 +9,7 @@ from nats.aio.client import Client as NatsClient
 from ate_cloud.api.v1.router import api_router
 from ate_cloud.config import settings
 from ate_cloud.nats.sse_bridge import SSEBridge
+from ate_cloud.services.execution_status_relay import ExecutionStatusRelay
 from ate_cloud.services.failure_indexer import FailureIndexer
 from ate_cloud.services.script_versioning import ScriptVersioningService
 
@@ -19,14 +21,13 @@ _nats_client: NatsClient | None = None
 async def lifespan(app: FastAPI):
     """Manage NATS connection lifecycle, SSE bridge, Qdrant, and services.
 
-    NATS connection is optional and will not block startup on failure.
-    SSE bridge is always initialized (works with or without NATS).
-    Qdrant is initialized for failure indexing (optional — graceful degradation).
-    Script versioning service is initialized with SCRIPTS_ROOT_DIR env var.
+    Per AGENTS.md §7: NATS and JetStream are REQUIRED, not optional.
+    Startup crashes fatally if NATS is unreachable or JetStream is disabled —
+    no silent degradation. Qdrant and script versioning degrade gracefully.
     """
     # Startup - connect to NATS (needed for worker registry, config distribution,
-    # and SSE bridge). Connection failure is non-fatal — services that depend on
-    # NATS will return 503, but the app still starts.
+    # and SSE bridge). Per AGENTS.md §7, a connection failure is FATAL: the
+    # app must not start in a half-degraded state.
     global _nats_client
     try:
         _nats_client = await nats.connect(settings.nats_url, max_reconnect_attempts=-1)
@@ -34,7 +35,20 @@ async def lifespan(app: FastAPI):
         print(f"NATS connected to {settings.nats_url}")  # noqa: T201
     except Exception as e:
         _nats_client = None
-        print(f"NATS connection failed ({type(e).__name__}: {e}); NATS-dependent services disabled")  # noqa: T201
+        raise RuntimeError(
+            f"Failed to connect to NATS at {settings.nats_url}: {type(e).__name__}: {e}"
+        ) from e
+
+    # Verify JetStream is enabled on the server (AGENTS.md §7 — required).
+    # The worker registry KV bucket, config distribution, and status relay all
+    # depend on JetStream; fail fast rather than limping along.
+    try:
+        js = _nats_client.jetstream()
+        await js.account_info()
+    except Exception as e:
+        raise RuntimeError(
+            f"JetStream not available on {settings.nats_url}: {type(e).__name__}: {e}"
+        ) from e
 
     # Initialize SSE bridge (works with or without NATS)
     bridge = SSEBridge(nc=_nats_client)
@@ -108,9 +122,31 @@ async def lifespan(app: FastAPI):
     app.state.script_versioning = versioning_service
     print(f"Script versioning initialized at: {scripts_root}")  # noqa: T201
 
+    # Wire ExecutionStatusRelay as a background task (NATS only) — it
+    # bridges ATE_STATUS JetStream messages to DB updates + SSE queue.
+    if _nats_client is not None:
+        from ate_cloud.db import async_session_factory
+
+        status_relay = ExecutionStatusRelay(
+            nats_client=_nats_client,
+            sse_bridge=bridge,
+            async_session_factory=async_session_factory,
+        )
+        app.state.status_relay = status_relay
+        app.state.status_relay_task = asyncio.create_task(status_relay.start())
+        print("ExecutionStatusRelay started")  # noqa: T201
+
     yield
 
     # Shutdown
+    relay_task = getattr(app.state, "status_relay_task", None)
+    if relay_task is not None:
+        relay_task.cancel()
+        try:
+            await relay_task
+        except asyncio.CancelledError:
+            pass
+
     await bridge.cleanup()
 
     if _nats_client is not None:
@@ -137,9 +173,16 @@ def create_app() -> FastAPI:
 app = create_app()
 
 
-def get_nats() -> NatsClient | None:
+def get_nats() -> NatsClient:
     """Get the global NATS client instance.
 
-    Returns None if NATS is not connected.
+    Per AGENTS.md §7, NATS is required: if the client is not connected this
+    raises instead of returning None, so callers fail loudly rather than
+    silently degrading.
+
+    Raises:
+        RuntimeError: If NATS is not connected.
     """
+    if _nats_client is None:
+        raise RuntimeError("NATS client not connected")
     return _nats_client

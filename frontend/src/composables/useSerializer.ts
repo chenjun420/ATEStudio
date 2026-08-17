@@ -200,7 +200,7 @@ export function yamlToGraphData(yamlStr: string, opts: { autoLayout?: boolean } 
     if (isYamlStep(step)) {
         const nodeData: ScriptStepData = {
           stepId: step.id,
-          scriptName: step.script,
+          scriptName: step.script ?? '',
           scriptVersion: '',
           params: step.params || {},
           preconditions: step.preconditions || [],
@@ -394,7 +394,7 @@ function createChildNodesFromLoopSteps(
   for (const step of sortedChildSteps) {
     const nodeData: ScriptStepData = {
       stepId: step.id,
-      scriptName: step.script,
+      scriptName: step.script ?? '',
       scriptVersion: '',
       params: step.params || {},
       preconditions: step.preconditions || [],

@@ -137,6 +137,7 @@ class FullChainSimulator:
         self,
         noise_config: NoiseConfig | None = None,
         dry_run_scheduler: DryRunScheduler | None = None,
+        fault_config: list[dict] | None = None,
     ) -> None:
         """Initialize the full-chain simulator.
 
@@ -147,12 +148,15 @@ class FullChainSimulator:
                 can be reset independently.
             dry_run_scheduler: Optional pre-configured DryRunScheduler.
                 Defaults to a fresh instance.
+            fault_config: 故障注入规则列表（§7.7.2 fault_injection 段）。
+                None/空则不启用故障注入。
         """
         self._noise_config: NoiseConfig = noise_config or NoiseConfig()
         self._dry_run_scheduler: DryRunScheduler = (
             dry_run_scheduler or DryRunScheduler()
         )
         self._instrument_simulators: dict[str, InstrumentSimulator] = {}
+        self._fault_config: list[dict] | None = fault_config
 
     @property
     def dry_run_scheduler(self) -> DryRunScheduler:
@@ -276,6 +280,7 @@ class FullChainSimulator:
                 self._mode = "SIM"
                 self._noise_sigma: float = 0.0
                 self._instrument = None
+                self._resource_manager = None  # 避免 property 引用缺失
                 self._address: str = ""
                 self._lock = __import__("threading").Lock()
                 self._connected: bool = False
@@ -287,13 +292,34 @@ class FullChainSimulator:
                 # Return a nominal value; InstrumentSimulator applies noise
                 return "1.0"
 
+            def connect(self, address: str) -> None:
+                # SIM 模式：跳过真实 pyvisa open_resource
+                self._address = address
+                self._connected = True
+
+            def disconnect(self) -> None:
+                self._connected = False
+
+            @property
+            def is_connected(self) -> bool:
+                return self._connected
+
         driver = _SimDriver()
         driver.connect("SIM")
+
+        # §7.7 故障注入：为每个模拟器构建独立注入器（多轮重置互不干扰）
+        injector = None
+        if self._fault_config:
+            from ate_platform.simulation.fault_injector import FaultInjector
+
+            injector = FaultInjector()
+            injector.load(self._fault_config)
 
         return InstrumentSimulator(
             driver=driver,
             instrument_type=instrument_type,
             config=self._noise_config,
+            injector=injector,
         )
 
     @classmethod

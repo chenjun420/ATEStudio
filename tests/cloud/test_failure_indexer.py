@@ -489,14 +489,16 @@ class TestSubscribeToEvents:
 class TestEmbeddingFailureHandling:
     """Tests for graceful degradation on embedding failures."""
 
-    def test_embed_returns_zero_vector_on_failure(self, indexer: FailureIndexer) -> None:
+    @pytest.mark.asyncio
+    async def test_embed_returns_zero_vector_on_failure(self, indexer: FailureIndexer) -> None:
         """Embedding failure returns zero vector instead of raising."""
         indexer._embedding_model.side_effect = RuntimeError("model not loaded")
-        result = indexer._embed("some text")
+        result = await indexer._embed("some text")
         assert result == [0.0, 0.0, 0.0]
 
-    def test_embed_empty_text_returns_zeros(self, indexer: FailureIndexer, mock_embedding: MagicMock) -> None:
+    @pytest.mark.asyncio
+    async def test_embed_empty_text_returns_zeros(self, indexer: FailureIndexer, mock_embedding: MagicMock) -> None:
         """Empty text skips embedding model entirely."""
-        result = indexer._embed("")
+        result = await indexer._embed("")
         assert result == [0.0, 0.0, 0.0]
         mock_embedding.assert_not_called()

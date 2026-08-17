@@ -8,7 +8,7 @@ Defines request/response models for execution CRUD and SSE streaming:
 """
 
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -93,6 +93,20 @@ class ExecutionAbortResponse(BaseModel):
     status: str = "ABORTING"
 
 
+class ExecutionControlResponse(BaseModel):
+    """Schema for execution control (pause/resume/force_next) response.
+
+    Attributes:
+        id: The execution run_id.
+        action: The control action performed (pause/resume/force_next).
+        status: Confirmation status (PAUSING/RESUMING/FORCE_NEXT).
+    """
+
+    id: str
+    action: str
+    status: str
+
+
 class ExecutionSearchRequest(BaseModel):
     """Schema for searching executions with advanced filters.
 
@@ -160,3 +174,62 @@ class ExecutionSearchResponse(BaseModel):
     total: int
     skip: int
     limit: int
+
+
+class SimulationRequest(BaseModel):
+    """Request body for POST /api/v1/executions/{run_id}/simulate.
+
+    Attributes:
+        tier: 仿真层级（driver/dry_run/full，§7 三层仿真）。
+        noise_model: 噪声模型（仅 full 层级有意义，§7.3）。
+        noise_sigma: 高斯噪声 sigma。
+        drift_rate: 漂移速率（单位/秒）。
+        bias: 恒定偏差。
+        seed: 随机种子（可复现）。
+        fault_config: 故障注入规则列表（§7.7.2 fault_injection 段，传给
+            FullChainSimulator.fault_config）。
+    """
+
+    tier: Literal["driver", "dry_run", "full"] = "driver"
+    noise_model: Literal["GAUSSIAN", "GAUSSIAN_DRIFT", "GAUSSIAN_BIAS", "FULL"] = "GAUSSIAN"
+    noise_sigma: float = 0.001
+    drift_rate: float = 0.0
+    bias: float = 0.0
+    seed: int | None = 42
+    fault_config: list[dict[str, Any]] | None = None
+
+
+class SimulationResultEvent(BaseModel):
+    """A single simulated measurement/decision event.
+
+    Attributes:
+        step_id: 步骤 ID。
+        timestamp: 事件时间戳（monotonic）。
+        event_type: 事件类型（measurement/decision/fault）。
+        data: 事件数据。
+    """
+
+    step_id: str
+    timestamp: float
+    event_type: str
+    data: dict[str, Any]
+
+
+class SimulationResponse(BaseModel):
+    """Response from POST /api/v1/executions/{run_id}/simulate.
+
+    Attributes:
+        session_id: 仿真会话 ID（= run_id）。
+        tier: 执行的仿真层级。
+        status: 仿真结果状态（passed/failed）。
+        events: 仿真事件列表（决策 + 测量）。
+        duration_seconds: 仿真总耗时。
+        statistics: 汇总统计（通过/失败/跳过/仪器统计）。
+    """
+
+    session_id: str
+    tier: str
+    status: str
+    events: list[SimulationResultEvent]
+    duration_seconds: float
+    statistics: dict[str, Any]

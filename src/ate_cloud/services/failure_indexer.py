@@ -48,20 +48,28 @@ class FailureIndexer:
     def __init__(
         self,
         qdrant_client: Any,
-        embedding_model: Callable[[str], list[float]],
+        embedding_model: Callable[[str], list[float]] | None = None,
         collection_name: str | None = None,
         embedding_dim: int | None = None,
+        embedding_service: Any | None = None,
     ) -> None:
         """Initialize the failure indexer.
+
+        Accepts either a sync ``embedding_model`` callable (legacy) or an
+        ``embedding_service`` exposing an async ``embed(text)`` (preferred).
+        When both are provided, ``embedding_service`` takes precedence.
 
         Args:
             qdrant_client: Qdrant client instance.
             embedding_model: Callable text → embedding vector (e.g., DeepAgents embed).
             collection_name: Qdrant collection name (defaults to settings).
             embedding_dim: Vector dimensions (defaults to settings).
+            embedding_service: Async embedding service (EmbeddingService) with
+                an ``embed`` coroutine — used over ``embedding_model`` when set.
         """
         self._qdrant_client = qdrant_client
         self._embedding_model = embedding_model
+        self._embedding_service = embedding_service
         self._collection_name = collection_name or settings.qdrant_collection_failures
         self._embedding_dim = embedding_dim or settings.embedding_dimensions
 
@@ -128,7 +136,7 @@ class FailureIndexer:
         try:
             metadata = self._extract_metadata(event)
             text = self._build_embed_text(metadata)
-            vector = self._embed(text)
+            vector = await self._embed(text)
 
             payload = {k: v for k, v in metadata.items() if v is not None}
             point_id = str(uuid.uuid4())
@@ -190,15 +198,21 @@ class FailureIndexer:
             parts.append(str(var_snapshot))
         return " ".join(parts)
 
-    def _embed(self, text: str) -> list[float]:
-        """Compute embedding for text via the configured embedding model.
+    async def _embed(self, text: str) -> list[float]:
+        """Compute embedding for text via the configured embedding backend.
 
-        Falls back to a zero-vector on failure (never raise).
+        Uses ``embedding_service.embed`` when available (async), otherwise
+        falls back to the sync ``embedding_model`` callable. Returns a
+        zero-vector on failure (never raises).
         """
         if not text.strip():
             return [0.0] * self._embedding_dim
         try:
-            return self._embedding_model(text)
+            if self._embedding_service is not None:
+                return await self._embedding_service.embed(text)
+            if self._embedding_model is not None:
+                return self._embedding_model(text)
+            return [0.0] * self._embedding_dim
         except Exception as e:
             logger.error("Embedding failed: %s", e)
             return [0.0] * self._embedding_dim
@@ -218,7 +232,7 @@ class FailureIndexer:
             List of dicts with 'score', 'id', and payload metadata fields.
         """
         try:
-            vector = self._embed(query)
+            vector = await self._embed(query)
             results = self._qdrant_client.search(
                 collection_name=self._collection_name,
                 query_vector=vector,

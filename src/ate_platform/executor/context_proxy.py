@@ -106,6 +106,8 @@ class ContextProxy:
     _step_id: str
     _outputs: dict[str, Any] = field(default_factory=dict)
     _declared_outputs: set[str] = field(default_factory=set)
+    # 仪器代理进程管理器（可选；设置后脚本可通过 instrument() 访问代理仪器）
+    _proxy_manager: Any | None = None
 
     # Whitelist of writable variable prefixes for step outputs
     WRITABLE_PREFIXES = frozenset(["steps"])
@@ -202,6 +204,35 @@ class ContextProxy:
             owner_id=self._step_id,
             resource_manager=self._resource_manager,
         )
+
+    def instrument(self, resource_id: str, timeout: float = 30.0) -> Any:
+        """Get an InstrumentClient for proxy-managed instrument access.
+
+        All instrument operations are forwarded through the instrument proxy
+        process (single entry point), which serializes access per instrument
+        and records every call — solving cross-process lock invalidation (A2).
+
+        Args:
+            resource_id: The instrument resource identifier.
+            timeout: Per-call timeout in seconds.
+
+        Returns:
+            InstrumentClient proxy for the instrument.
+
+        Raises:
+            RuntimeError: If no proxy manager is configured.
+
+        Example:
+            >>> dmm = context.instrument('DMM_CH1')
+            >>> voltage = dmm.query('MEAS:VOLT?')
+        """
+        if self._proxy_manager is None:
+            msg = (
+                "No instrument proxy manager configured. "
+                "Set context._proxy_manager to enable proxy instrument access."
+            )
+            raise RuntimeError(msg)
+        return self._proxy_manager.client(resource_id, timeout=timeout)
 
     def log(self, level: str, message: str) -> None:
         """Log a message with structured context.

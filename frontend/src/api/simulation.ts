@@ -43,6 +43,8 @@ export interface SimulationRequest {
   bias?: number
   /** RNG seed for reproducibility. Defaults to 42. */
   seed?: number
+  /** 故障注入规则列表（§7.7.2 fault_injection 段）。 */
+  fault_config?: Array<Record<string, unknown>>
 }
 
 /**

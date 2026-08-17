@@ -60,7 +60,7 @@ export function useAuth() {
       setMode(prefs.theme_mode as ThemeMode)
     }
     if (prefs.language) {
-      i18n.global.locale.value = prefs.language
+      i18n.global.locale.value = prefs.language as 'en' | 'zh-CN'
     }
   }
 

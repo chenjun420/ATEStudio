@@ -340,7 +340,7 @@ export function useExecutionStatus(runId: Ref<string>) {
    * Handle MEASUREMENT-category events (instrument readings / variable recordings).
    */
   function handleMeasurementCategory(event: ExecutionEvent) {
-    const varName = event.name || event.step_id || 'unknown'
+    const varName = (event.name as string | undefined) ?? event.step_id ?? 'unknown'
     latestMeasurements[varName] = event
   }
 
