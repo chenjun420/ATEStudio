@@ -18,8 +18,8 @@ import json
 import logging
 import os
 import socket
-from datetime import datetime
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +31,7 @@ from shared.dsl import ExecutionMode, LoopType, YamlLoop, YamlPlan, YamlStep
 from shared.events import Event, EventType
 from shared.types import Condition
 
+from ..simulation.fault_injector import FaultInjector
 from .condition_evaluator import ConditionEvaluator
 from .event_bus import EventBus
 from .resource_manager import ResourceManager
@@ -85,6 +86,7 @@ class PlanBootstrapper:
             event_bus=self.event_bus,
             use_multiprocessing=True,
         )
+        self.fault_injector = FaultInjector()
         self.scheduler = ScannerScheduler(
             event_bus=self.event_bus,
             registry=self.step_registry,
@@ -92,6 +94,7 @@ class PlanBootstrapper:
             variable_space=self.variable_space,
             resource_manager=self.resource_manager,
             step_executor=self._executor,
+            fault_injector=self.fault_injector,
             # §6.6 崩溃恢复：提供目录即启用状态快照
             snapshot_dir=snapshot_dir,
         )
@@ -246,6 +249,8 @@ class JetStreamWorker:
         self._current_scheduler: ScannerScheduler | None = None
         self._current_execution_id: str | None = None
         self._current_event_bus: EventBus | None = None
+        # T5：当前执行的故障注入器（inject_fault 控制命令的注册目标）
+        self._current_injector: FaultInjector | None = None
 
     @property
     def worker_id(self) -> str:
@@ -303,8 +308,6 @@ class JetStreamWorker:
     async def _on_control_message(self, msg: Any) -> None:
         run_id = msg.subject.rsplit(".", 1)[-1] if "." in msg.subject else ""
         logger.info("Received control signal for run %s", run_id)
-        if self._current_execution_id != run_id:
-            return
 
         # Parse the control message payload
         try:
@@ -314,6 +317,14 @@ class JetStreamWorker:
 
         action = payload.get("action", "abort")
         logger.info("Control action '%s' for run %s", action, run_id)
+
+        # T5：inject_fault 需要对未知/空闲执行也回复结构化错误
+        if action == "inject_fault":
+            await self._handle_inject_fault(run_id, msg, payload)
+            return
+
+        if self._current_execution_id != run_id:
+            return
 
         if action == "abort":
             await self._abort_current()
@@ -328,6 +339,68 @@ class JetStreamWorker:
                 self._current_scheduler.force_next()
         else:
             logger.warning("Unknown control action '%s' for run %s", action, run_id)
+
+    async def _handle_inject_fault(
+        self, run_id: str, msg: Any, payload: dict[str, Any],
+    ) -> None:
+        """T5：把故障规则注册到正在执行的 FaultInjector（§7.7 运行时注入）。
+
+        复用既有 cmd 控制主题（§5），经 ``FaultInjector.load`` 走与 YAML DSL
+        相同的解析/校验路径；调度层规则注册即递增 ``_scheduler_rule_count``，
+        自动使 check_scheduler_raise 的 O(1) 空门失效。成功或失败均通过
+        NATS request-reply 回送结构化 JSON。
+        """
+
+        async def _reply(body: dict[str, Any]) -> None:
+            respond = getattr(msg, "respond", None)
+            if respond is None:
+                return
+            try:
+                await respond(json.dumps(body).encode("utf-8"))
+            except Exception as e:  # 回复失败不影响执行主流程
+                logger.warning("inject_fault reply failed for run %s: %s", run_id, e)
+
+        if self._current_execution_id != run_id or self._current_scheduler is None:
+            await _reply({"status": "error", "error": "no_active_execution",
+                          "run_id": run_id})
+            return
+
+        injector = self._current_injector
+        if injector is None:
+            await _reply({"status": "error", "error": "no_fault_injector",
+                          "run_id": run_id})
+            return
+
+        rule_cfg = payload.get("rule")
+        if (
+            not isinstance(rule_cfg, dict)
+            or not (rule_cfg.get("fault_id") or rule_cfg.get("id"))
+        ):
+            await _reply({
+                "status": "error",
+                "error": "malformed_rule",
+                "detail": "'rule' object with fault_id/id is required",
+            })
+            return
+
+        try:
+            injector.load([rule_cfg])
+        except (ValueError, TypeError, KeyError) as e:
+            await _reply({"status": "error", "error": "invalid_rule",
+                          "detail": str(e)})
+            return
+
+        rule = injector.rules[-1]
+        logger.info(
+            "Fault rule '%s' registered on execution %s (layer=%s)",
+            rule.fault_id, run_id, rule.layer,
+        )
+        await _reply({
+            "status": "ok",
+            "action": "inject_fault",
+            "fault_id": rule.fault_id,
+            "layer": rule.layer,
+        })
 
     async def _abort_current(self) -> None:
         if self._current_scheduler is None:
@@ -344,6 +417,7 @@ class JetStreamWorker:
         await self._current_scheduler.stop()
         self._current_scheduler = None
         self._current_execution_id = None
+        self._current_injector = None
 
     def _setup_status_forwarding(
         self, event_bus: EventBus, execution_id: str,
@@ -392,6 +466,7 @@ class JetStreamWorker:
             bootstrapper = PlanBootstrapper(plan, snapshot_dir=self._snapshot_dir)
             self._current_scheduler = bootstrapper.bootstrap(dut_id=execution_id)
             self._current_event_bus = bootstrapper.event_bus
+            self._current_injector = bootstrapper.fault_injector
 
             self._setup_status_forwarding(bootstrapper.event_bus, execution_id)
 
@@ -406,6 +481,7 @@ class JetStreamWorker:
             await msg.nak()
             self._current_scheduler = None
             self._current_execution_id = None
+            self._current_injector = None
             return False
 
     async def stop(self) -> None:
@@ -415,6 +491,7 @@ class JetStreamWorker:
         if self._current_scheduler is not None:
             await self._current_scheduler.stop()
             self._current_scheduler = None
+        self._current_injector = None
 
         if self._current_event_bus is not None:
             await self._current_event_bus.stop()
