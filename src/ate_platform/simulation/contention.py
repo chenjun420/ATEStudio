@@ -75,6 +75,7 @@ from __future__ import annotations
 import math
 from bisect import bisect_right
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field
 from typing import Any
 
 __all__ = ["ResourceContentionAnalyzer"]
@@ -100,6 +101,24 @@ def _bucket_label(lo: float, hi: float) -> str:
     lo_s = f"{lo:g}" if lo != 0.0 else "0"
     hi_s = "∞" if math.isinf(hi) else f"{hi:g}"
     return f"[{lo_s}, {hi_s})"
+
+
+@dataclass
+class _ReplayState:
+    """Mutable scratch state threaded through the :meth:`analyze` replay."""
+
+    holders: dict[str, str] = field(default_factory=dict)
+    open_holds: dict[str, tuple[str, float]] = field(default_factory=dict)
+    open_waits: dict[tuple[str, str], float] = field(default_factory=dict)
+    concurrent_waiters: dict[str, int] = field(default_factory=dict)
+    wait_samples: dict[str, list[float]] = field(default_factory=dict)
+    hold_samples: dict[str, list[float]] = field(default_factory=dict)
+    acquire_count: dict[str, int] = field(default_factory=dict)
+    release_count: dict[str, int] = field(default_factory=dict)
+    peak_waiters: dict[str, int] = field(default_factory=dict)
+    gantt: list[dict[str, Any]] = field(default_factory=list)
+    deadlocks: list[dict[str, Any]] = field(default_factory=list)
+    seen_cycles: set[frozenset[str]] = field(default_factory=set)
 
 
 class ResourceContentionAnalyzer:
@@ -180,21 +199,7 @@ class ResourceContentionAnalyzer:
         each call replays from scratch over the accumulated events.
         """
         events = [self._normalize(i, e) for i, e in enumerate(self._raw_events)]
-
-        holders: dict[str, str] = {}
-        open_holds: dict[str, tuple[str, float]] = {}  # resource -> (owner, since)
-        open_waits: dict[tuple[str, str], float] = {}  # (resource, owner) -> since
-        concurrent_waiters: dict[str, int] = {}
-
-        wait_samples: dict[str, list[float]] = {}
-        hold_samples: dict[str, list[float]] = {}
-        acquire_count: dict[str, int] = {}
-        release_count: dict[str, int] = {}
-        peak_waiters: dict[str, int] = {}
-
-        gantt: list[dict[str, Any]] = []
-        deadlocks: list[dict[str, Any]] = []
-        seen_cycles: set[frozenset[str]] = set()
+        state = _ReplayState()
 
         prev_ts = -math.inf
         for idx, (ts, kind, resource, owner) in enumerate(events):
@@ -206,86 +211,16 @@ class ResourceContentionAnalyzer:
             prev_ts = ts
 
             if kind == "wait":
-                if (resource, owner) in open_waits:
-                    raise ValueError(
-                        f"event #{idx}: owner '{owner}' is already waiting for"
-                        f" '{resource}' - resolve the previous wait first"
-                    )
-                open_waits[(resource, owner)] = ts
-                concurrent_waiters[resource] = concurrent_waiters.get(resource, 0) + 1
-                peak_waiters[resource] = max(
-                    peak_waiters.get(resource, 0), concurrent_waiters[resource]
-                )
+                self._apply_wait(state, idx, ts, resource, owner)
             elif kind == "acquire":
-                current = holders.get(resource)
-                if current == owner:
-                    raise ValueError(
-                        f"event #{idx}: owner '{owner}' already holds '{resource}'"
-                    )
-                if current is not None:
-                    raise ValueError(
-                        f"event #{idx}: '{resource}' is held by '{current}' but owner"
-                        f" '{owner}' acquired it - mutual exclusion violated"
-                    )
-                since = open_waits.pop((resource, owner), None)
-                if since is not None:
-                    concurrent_waiters[resource] -= 1
-                    wait_samples.setdefault(resource, []).append(ts - since)
-                    gantt.append({
-                        "resource": resource, "owner": owner,
-                        "start": since, "end": ts, "kind": "wait",
-                    })
-                holders[resource] = owner
-                open_holds[resource] = (owner, ts)
-                acquire_count[resource] = acquire_count.get(resource, 0) + 1
+                self._apply_acquire(state, idx, ts, resource, owner)
             else:  # release
-                holder_info = open_holds.pop(resource, None)
-                if holder_info is None or holder_info[0] != owner:
-                    actual = holders.get(resource)
-                    raise ValueError(
-                        f"event #{idx}: cannot release '{resource}' as '{owner}'"
-                        f" (holder: '{actual}') - release without matching acquire"
-                    )
-                del holders[resource]
-                hold_samples.setdefault(resource, []).append(ts - holder_info[1])
-                gantt.append({
-                    "resource": resource, "owner": owner,
-                    "start": holder_info[1], "end": ts, "kind": "hold",
-                })
-                release_count[resource] = release_count.get(resource, 0) + 1
+                self._apply_release(state, idx, ts, resource, owner)
 
-            self._detect_deadlocks(holders, open_waits, ts, deadlocks, seen_cycles)
+            self._detect_deadlocks(state.holders, state.open_waits, ts, state.deadlocks, state.seen_cycles)
 
-        # Open intervals at stream end → unresolved waits + open gantt rows.
-        unresolved = [
-            {"owner": owner, "resource": resource, "since_ts": since}
-            for (resource, owner), since in open_waits.items()
-        ]
-        unresolved.sort(key=lambda item: (item["since_ts"], item["owner"]))
-        for item in unresolved:
-            gantt.append({
-                "resource": item["resource"], "owner": item["owner"],
-                "start": item["since_ts"], "end": None, "kind": "wait",
-            })
-        for resource, (owner, start) in open_holds.items():
-            gantt.append({
-                "resource": resource, "owner": owner,
-                "start": start, "end": None, "kind": "hold",
-            })
-        gantt.sort(key=lambda row: row["start"])
-
-        resources: dict[str, Any] = {}
-        all_resources = set(acquire_count) | set(release_count) | set(peak_waiters)
-        for resource in all_resources:
-            resources[resource] = {
-                "acquire_count": acquire_count.get(resource, 0),
-                "release_count": release_count.get(resource, 0),
-                "contention_count": len(wait_samples.get(resource, [])),
-                "max_concurrent_waiters": peak_waiters.get(resource, 0),
-                "wait": self._interval_stats(wait_samples.get(resource, [])),
-                "hold": self._interval_stats(hold_samples.get(resource, [])),
-            }
-
+        unresolved = self._close_open_intervals(state)
+        resources = self._compute_resource_stats(state)
         owners = {owner for _, _, _, owner in events}
         return {
             "generated_from": {
@@ -294,10 +229,105 @@ class ResourceContentionAnalyzer:
                 "owners": len(owners),
             },
             "resources": resources,
-            "gantt": gantt,
-            "deadlocks": deadlocks,
+            "gantt": state.gantt,
+            "deadlocks": state.deadlocks,
             "unresolved_waits": unresolved,
         }
+
+    def _apply_wait(
+        self, state: _ReplayState, idx: int, ts: float, resource: str, owner: str
+    ) -> None:
+        """Record that *owner* began waiting for *resource* at *ts*."""
+        if (resource, owner) in state.open_waits:
+            raise ValueError(
+                f"event #{idx}: owner '{owner}' is already waiting for"
+                f" '{resource}' - resolve the previous wait first"
+            )
+        state.open_waits[(resource, owner)] = ts
+        state.concurrent_waiters[resource] = state.concurrent_waiters.get(resource, 0) + 1
+        state.peak_waiters[resource] = max(
+            state.peak_waiters.get(resource, 0), state.concurrent_waiters[resource]
+        )
+
+    def _apply_acquire(
+        self, state: _ReplayState, idx: int, ts: float, resource: str, owner: str
+    ) -> None:
+        """Grant *resource* to *owner*; close any matching wait interval."""
+        current = state.holders.get(resource)
+        if current == owner:
+            raise ValueError(f"event #{idx}: owner '{owner}' already holds '{resource}'")
+        if current is not None:
+            raise ValueError(
+                f"event #{idx}: '{resource}' is held by '{current}' but owner"
+                f" '{owner}' acquired it - mutual exclusion violated"
+            )
+        since = state.open_waits.pop((resource, owner), None)
+        if since is not None:
+            state.concurrent_waiters[resource] -= 1
+            state.wait_samples.setdefault(resource, []).append(ts - since)
+            state.gantt.append({
+                "resource": resource, "owner": owner,
+                "start": since, "end": ts, "kind": "wait",
+            })
+        state.holders[resource] = owner
+        state.open_holds[resource] = (owner, ts)
+        state.acquire_count[resource] = state.acquire_count.get(resource, 0) + 1
+
+    def _apply_release(
+        self, state: _ReplayState, idx: int, ts: float, resource: str, owner: str
+    ) -> None:
+        """Release *resource* from *owner*; close the hold interval."""
+        holder_info = state.open_holds.pop(resource, None)
+        if holder_info is None or holder_info[0] != owner:
+            actual = state.holders.get(resource)
+            raise ValueError(
+                f"event #{idx}: cannot release '{resource}' as '{owner}'"
+                f" (holder: '{actual}') - release without matching acquire"
+            )
+        del state.holders[resource]
+        state.hold_samples.setdefault(resource, []).append(ts - holder_info[1])
+        state.gantt.append({
+            "resource": resource, "owner": owner,
+            "start": holder_info[1], "end": ts, "kind": "hold",
+        })
+        state.release_count[resource] = state.release_count.get(resource, 0) + 1
+
+    def _close_open_intervals(self, state: _ReplayState) -> list[dict[str, Any]]:
+        """Finalize the gantt timeline and return still-open waits at stream end."""
+        unresolved = [
+            {"owner": owner, "resource": resource, "since_ts": since}
+            for (resource, owner), since in state.open_waits.items()
+        ]
+        unresolved.sort(key=lambda item: (item["since_ts"], item["owner"]))
+        for item in unresolved:
+            state.gantt.append({
+                "resource": item["resource"], "owner": item["owner"],
+                "start": item["since_ts"], "end": None, "kind": "wait",
+            })
+        for resource, (owner, start) in state.open_holds.items():
+            state.gantt.append({
+                "resource": resource, "owner": owner,
+                "start": start, "end": None, "kind": "hold",
+            })
+        state.gantt.sort(key=lambda row: row["start"])
+        return unresolved
+
+    def _compute_resource_stats(self, state: _ReplayState) -> dict[str, Any]:
+        """Aggregate per-resource counts, contention peaks, and interval stats."""
+        resources: dict[str, Any] = {}
+        all_resources = (
+            set(state.acquire_count) | set(state.release_count) | set(state.peak_waiters)
+        )
+        for resource in all_resources:
+            resources[resource] = {
+                "acquire_count": state.acquire_count.get(resource, 0),
+                "release_count": state.release_count.get(resource, 0),
+                "contention_count": len(state.wait_samples.get(resource, [])),
+                "max_concurrent_waiters": state.peak_waiters.get(resource, 0),
+                "wait": self._interval_stats(state.wait_samples.get(resource, [])),
+                "hold": self._interval_stats(state.hold_samples.get(resource, [])),
+            }
+        return resources
 
     # ------------------------------------------------------------------
     # internals
