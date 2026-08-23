@@ -176,6 +176,41 @@ class ExecutionSearchResponse(BaseModel):
     limit: int
 
 
+class FaultInjectionRequest(BaseModel):
+    """Request body for POST /api/v1/executions/{run_id}/fault-injection.
+
+    链路故障注入（T44，设计文档 §8.3）：FixtureDesigner 右键菜单把操作员
+    选择的故障类型转发给云端虚拟驱动（§8.3 禁止纯客户端模拟）。
+
+    Attributes:
+        link_id: 目标链路 ID（拓扑画布 Link.id）。
+        fault_type: 故障类型（§8.3 规定集合，不得扩展）。
+        params: 可选附加参数（如 contact_resistance 的阻值、noise 的幅度）。
+    """
+
+    link_id: str = Field(..., min_length=1)
+    fault_type: Literal["open_circuit", "short_circuit", "contact_resistance", "noise"]
+    params: dict[str, Any] | None = None
+
+
+class FaultInjectionResponse(BaseModel):
+    """Response for POST /api/v1/executions/{run_id}/fault-injection.
+
+    Attributes:
+        ok: 注入受理成功标志。
+        run_id: The execution run identifier.
+        link_id: 目标链路 ID。
+        fault_type: 故障类型。
+        fault_id: 生成的故障规则 ID（转发给 worker FaultInjector 的规则）。
+    """
+
+    ok: bool = True
+    run_id: str
+    link_id: str
+    fault_type: str
+    fault_id: str
+
+
 class SimulationRequest(BaseModel):
     """Request body for POST /api/v1/executions/{run_id}/simulate.
 

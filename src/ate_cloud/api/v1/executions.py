@@ -39,6 +39,8 @@ from ate_cloud.schemas.execution import (
     ExecutionResponse,
     ExecutionSearchRequest,
     ExecutionSearchResponse,
+    FaultInjectionRequest,
+    FaultInjectionResponse,
     SimulationRequest,
     SimulationResponse,
     SimulationResultEvent,
@@ -69,6 +71,11 @@ def get_sse_bridge(request: Request) -> SSEBridge:
             detail="SSE bridge not available",
         )
     return bridge
+
+
+# Type alias for SSEBridge dependency (avoids B008 ruff warning).
+# Defined after get_sse_bridge so the Annotated alias can reference it.
+BridgeDep = Annotated[SSEBridge, Depends(get_sse_bridge)]
 
 
 @router.get("/{run_id}/events", response_class=EventSourceResponse)
@@ -837,3 +844,102 @@ async def force_next_execution(
         HTTPException: 409 if execution is already in a terminal state.
     """
     return await _control_execution(run_id, "force_next", db, bridge)
+
+
+@router.post("/{run_id}/fault-injection", response_model=FaultInjectionResponse)
+async def inject_link_fault(
+    run_id: str,
+    fault_data: FaultInjectionRequest,
+    db: DBSession,
+    bridge: BridgeDep,
+) -> FaultInjectionResponse:
+    """Inject a link fault into a running execution (T44，设计文档 §8.3).
+
+    Accepts ``{link_id, fault_type}`` from the FixtureDesigner right-click
+    menu and forwards a T5-style ``inject_fault`` control message to the
+    worker (``ate.control.{run_id}``, ``{action, run_id, rule}``). The rule
+    is a §7.7.2 DSL dict targeting the link at the network layer, so the
+    worker's ``FaultInjector.load([rule_cfg])`` validates it through the
+    same path as YAML-declared rules. Also publishes a topology-stream SSE
+    ``fault`` event so the frontend paints the link fault-red (§8.3.7).
+
+    A NATS outage is non-fatal — the API still returns 200 (consistent with
+    pause/resume/force_next control surface).
+
+    Args:
+        run_id: The execution run identifier.
+        fault_data: Link id + fault type (+ optional params).
+        db: Database session.
+        bridge: SSEBridge instance.
+
+    Returns:
+        FaultInjectionResponse with ok=true and the generated fault_id.
+
+    Raises:
+        HTTPException: 404 if execution not found.
+        HTTPException: 409 if execution has no active (non-terminal) run.
+    """
+    result = await db.execute(select(Execution).where(Execution.id == run_id))
+    execution = result.scalar_one_or_none()
+
+    if not execution:
+        raise HTTPException(status_code=404, detail="Execution not found")
+
+    if execution.status in _TERMINAL_STATES:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Execution has no active execution to inject into "
+                f"(status: {execution.status})"
+            ),
+        )
+
+    # §7.7.2 DSL 规则：网络层、target=link_id、首次调用即命中、一次性。
+    # fault_id 确定性生成，便于前端/日志与规则对账。
+    fault_id = f"link-{fault_data.link_id}-{fault_data.fault_type}"
+    action: dict[str, Any] = {"type": fault_data.fault_type}
+    if fault_data.params:
+        action.update(fault_data.params)
+    rule_cfg: dict[str, Any] = {
+        "fault_id": fault_id,
+        "layer": "network",
+        "target": fault_data.link_id,
+        "trigger": {"type": "count", "value": 1},
+        "action": action,
+        "once": True,
+    }
+
+    # Forward via the T5 control subject (non-fatal on NATS outage).
+    try:
+        from ate_cloud.main import get_nats
+
+        nc = get_nats()
+        if nc is not None:
+            payload = json.dumps(
+                {"action": "inject_fault", "run_id": run_id, "rule": rule_cfg}
+            ).encode()
+            await nc.publish(f"ate.control.{run_id}", payload)
+    except RuntimeError:
+        pass
+
+    # Topology SSE fault event — FixtureDesigner paints the link red (§8.3.7).
+    await bridge.publish_stream_event(
+        run_id=run_id,
+        stream="topology",
+        event_type="fault",
+        data={
+            "run_id": run_id,
+            "link_id": fault_data.link_id,
+            "fault_type": fault_data.fault_type,
+            "fault_id": fault_id,
+            "status": "active",
+        },
+    )
+
+    return FaultInjectionResponse(
+        ok=True,
+        run_id=run_id,
+        link_id=fault_data.link_id,
+        fault_type=fault_data.fault_type,
+        fault_id=fault_id,
+    )
