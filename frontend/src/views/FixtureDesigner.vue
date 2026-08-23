@@ -58,6 +58,7 @@ import {
 } from '@/api/fixtures'
 import { listExecutions, type ExecutionListItem } from '@/api/executions'
 import { applyFixtureTierLayout } from '@/utils/fixtureLayoutAdapter'
+import { LINK_STYLES, clearRouteHighlight, syncRouteHighlight } from '@/utils/routeHighlightAdapter'
 
 const topologyStore = useTopologyRuntimeStore()
 const { graph } = useGraph('fixture-canvas')
@@ -136,41 +137,26 @@ function onRoutesChange(routes: Route[]) {
   nextTick(() => highlightActiveRoutes())
 }
 
-/** 高亮所有激活路由的组成链路（§8.3 路由激活可视化），其余链路恢复基础样式。 */
+/**
+ * T32：路由高亮——唯一激活路由的路径（links+relays）强调描边，其余链路/继电器
+ * 压暗；故障样式优先（fault 链路不参与高亮/压暗）。纯计算见 utils/routeHighlight.ts。
+ */
 function highlightActiveRoutes() {
   const g = graph.value
   const data = currentData.value
   if (!g || !data) return
-  const activeLinkIds = new Set(
-    data.routes.filter((r) => r.active).flatMap((r) => r.links ?? []),
-  )
-  for (const link of data.links) {
-    const edge = g.getCellById(link.id)
-    if (!edge || !edge.isEdge()) continue
-    const d = (edge.getData() ?? {}) as { signalType?: string }
-    const base = LINK_STYLES[d.signalType ?? 'signal'] ?? LINK_STYLES.signal
-    if (activeLinkIds.has(link.id)) {
-      edge.attr('line/stroke', '#67C23A')
-      edge.attr('line/strokeWidth', base.strokeWidth + 2)
-      edge.attr('line/strokeDasharray', '')
-    } else {
-      edge.attr('line/stroke', base.stroke)
-      edge.attr('line/strokeWidth', base.strokeWidth)
-      edge.attr('line/strokeDasharray', base.dash ?? '')
-    }
-  }
+  syncRouteHighlight(g, { routes: data.routes, links: data.links, relays: allRelays.value })
+}
+
+/** 运行开始即清除路由高亮（§8.3 clear on run start：运行时状态样式接管）。 */
+function clearRouteHighlightOnRunStart() {
+  const g = graph.value
+  const data = currentData.value
+  if (!g || !data) return
+  clearRouteHighlight(g, [...data.links.map((l) => l.id), ...allRelays.value.map((r) => r.id)])
 }
 
 // ─── X6 画布 ──────────────────────────────────────────────────────────────
-
-const LINK_STYLES: Record<string, { stroke: string; strokeWidth: number; dash?: string }> = {
-  power: { stroke: '#E6A23C', strokeWidth: 3 },
-  signal: { stroke: '#409EFF', strokeWidth: 2 },
-  ground: { stroke: '#606266', strokeWidth: 2 },
-  rf: { stroke: '#9B59B6', strokeWidth: 2, dash: '4 2' },
-  thermal: { stroke: '#F56C6C', strokeWidth: 2 },
-  air: { stroke: '#67C23A', strokeWidth: 2, dash: '6 3' },
-}
 
 const NODE_KIND_STYLES: Record<string, { fill: string; stroke: string; labelColor: string }> = {
   instrument: { fill: '#ECF5FF', stroke: '#409EFF', labelColor: '#174EA6' },
@@ -633,6 +619,7 @@ function connectRuntime() {
     return
   }
   topologyStore.clearRuntime()
+  clearRouteHighlightOnRunStart()
   validation.value = null
   topologyStore.connect(selectedRunId.value)
   runtimeConnected.value = true
