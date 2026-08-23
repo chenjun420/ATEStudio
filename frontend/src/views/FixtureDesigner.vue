@@ -35,6 +35,7 @@ import type { Graph } from '@antv/x6'
 import { useGraph } from '@/composables/useGraph'
 import { useTopologyRuntimeStore } from '@/stores/topologyRuntime'
 import RelayMatrixEditor from '@/components/RelayMatrixEditor.vue'
+import RouteManagementPanel from '@/components/RouteManagementPanel.vue'
 import {
   createFixtureTopology,
   downloadFixtureExport,
@@ -50,6 +51,7 @@ import {
   type FixtureTopologyData,
   type FixtureTopologyResponse,
   type Relay,
+  type Route,
   type ValidationResult,
 } from '@/api/fixtures'
 import { listExecutions, type ExecutionListItem } from '@/api/executions'
@@ -114,6 +116,46 @@ function onRelaysChange(relays: Relay[]) {
   const fixture = selectedFixture.value
   if (!fixture) return
   fixture.relays = relays
+}
+
+// 信号路由管理（T28）：编辑 currentData.routes，激活路由高亮其组成链路
+const allRelays = computed<Relay[]>(() =>
+  (currentData.value?.fixtures ?? []).flatMap((f) => f.relays ?? []),
+)
+
+function onRoutesChange(routes: Route[]) {
+  const data = currentData.value
+  if (!data) {
+    ElMessage.warning('请先新建或打开一个工装配置')
+    return
+  }
+  data.routes = routes
+  nextTick(() => highlightActiveRoutes())
+}
+
+/** 高亮所有激活路由的组成链路（§8.3 路由激活可视化），其余链路恢复基础样式。 */
+function highlightActiveRoutes() {
+  const g = graph.value
+  const data = currentData.value
+  if (!g || !data) return
+  const activeLinkIds = new Set(
+    data.routes.filter((r) => r.active).flatMap((r) => r.links ?? []),
+  )
+  for (const link of data.links) {
+    const edge = g.getCellById(link.id)
+    if (!edge || !edge.isEdge()) continue
+    const d = (edge.getData() ?? {}) as { signalType?: string }
+    const base = LINK_STYLES[d.signalType ?? 'signal'] ?? LINK_STYLES.signal
+    if (activeLinkIds.has(link.id)) {
+      edge.attr('line/stroke', '#67C23A')
+      edge.attr('line/strokeWidth', base.strokeWidth + 2)
+      edge.attr('line/strokeDasharray', '')
+    } else {
+      edge.attr('line/stroke', base.stroke)
+      edge.attr('line/strokeWidth', base.strokeWidth)
+      edge.attr('line/strokeDasharray', base.dash ?? '')
+    }
+  }
 }
 
 // ─── X6 画布 ──────────────────────────────────────────────────────────────
@@ -711,6 +753,14 @@ watch(
 
         <h4>继电器矩阵</h4>
         <RelayMatrixEditor :fixture="selectedFixture" @relays-change="onRelaysChange" />
+
+        <h4>信号路由</h4>
+        <RouteManagementPanel
+          :routes="currentData?.routes ?? []"
+          :links="currentData?.links ?? []"
+          :relays="allRelays"
+          @routes-change="onRoutesChange"
+        />
 
         <h4>校验结果</h4>
         <el-empty v-if="!validation" description="尚未校验" :image-size="50" />
