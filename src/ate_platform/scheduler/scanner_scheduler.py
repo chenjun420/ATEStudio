@@ -40,6 +40,9 @@ def _is_in_async_context() -> bool:
     except RuntimeError:
         return False
 
+# 直接导入子模块（绕过 simulation/__init__ 的重导出链）——fault_injector
+# 仅依赖 stdlib+simpleeval，与 scheduler 包无环（§7.7 调度层注入）
+from ..simulation.fault_injector import SchedulerFaultError
 from ..types import Condition, LoopResult, StepStatus
 from .adaptive_skip import AdaptiveConditionEvaluator, SkipConditions
 from .condition_evaluator import ConditionEvaluator
@@ -50,6 +53,7 @@ from .variable_space import VariableSpace
 
 if TYPE_CHECKING:
     from ..executor.step_executor import StepExecutor
+    from ..simulation.fault_injector import FaultInjector
 
     from .watchdog import WatchDog
 
@@ -111,6 +115,7 @@ class ScannerScheduler:
         adaptive_skip_evaluator: AdaptiveConditionEvaluator | None = None,
         snapshot_dir: str | None = None,
         instrument_reset_callback: Callable[[], Awaitable[None]] | None = None,
+        fault_injector: FaultInjector | None = None,
     ) -> None:
         """Initialize the scanner scheduler.
 
@@ -133,6 +138,10 @@ class ScannerScheduler:
             instrument_reset_callback: 崩溃恢复时对所有仪器发 *RST 的回调
                 （awaitable）。崩溃时仪器可能处于未知状态，恢复必须先重置
                 到已知状态再继续（§6.6.4）。None 则跳过仪器重置。
+            fault_injector: 可选 FaultInjector（§7.7 调度层故障注入）。
+                提供后，每个步骤派发前经 check_scheduler_raise 检查，
+                命中规则则按失败处理而非派发。None 表示未接注入器，
+                钩子为单次属性判空直通。
         """
         self._event_bus: EventBus = event_bus
         self._registry: StepRegistry = registry
@@ -140,6 +149,7 @@ class ScannerScheduler:
         self._variable_space: VariableSpace = variable_space
         self._resource_manager: ResourceManager = resource_manager
         self._scan_interval: float = scan_interval
+        self._fault_injector: FaultInjector | None = fault_injector
         self._adaptive_skip_evaluator: AdaptiveConditionEvaluator | None = (
             adaptive_skip_evaluator
         )
@@ -596,6 +606,10 @@ class ScannerScheduler:
             if condition is not None and not self._check_condition(condition):
                 continue
 
+            # §7.7 调度层故障注入：命中则按失败处理，跳过本次派发
+            if await self._check_scheduler_fault(step_id):
+                continue
+
             # Mark as pending to prevent double-dispatch
             self._pending_dispatch.add(step_id)
 
@@ -708,6 +722,11 @@ class ScannerScheduler:
             )
             if step_id not in ready_steps:
                 return  # Condition not met yet
+
+            # §7.7 调度层故障注入：派发前最后检查（命中则按失败处理，
+            # 不标记 notified —— 重试路径可再次派发）
+            if await self._check_scheduler_fault(step_id):
+                return
 
             # Mark as notified
             self._notified_ready.add(step_id)
@@ -938,6 +957,46 @@ class ScannerScheduler:
             return f"skip_if: {config.skip_if}"
 
         return "Adaptive skip condition met"
+
+    async def _check_scheduler_fault(self, step_id: str) -> bool:
+        """调度层故障注入派发前检查（§7.7）。
+
+        命中注入规则时把步骤置为 FAILED、发布 STEP_FAILED（错误文本携带
+        ``layer=scheduler`` 归因与步骤/规则上下文），并走
+        :meth:`handle_step_result` 的既有重试/重复决策矩阵 —— 不中断
+        调度循环。
+
+        只捕获 SchedulerFaultError；其他异常（如中止类）原样向上传播。
+
+        Args:
+            step_id: 即将派发的步骤。
+
+        Returns:
+            True 表示已按注入失败处理，调用方应停止本次派发。
+        """
+        injector = self._fault_injector
+        if injector is None:
+            return False
+        try:
+            injector.check_scheduler_raise(step_id)
+        except SchedulerFaultError as exc:
+            logger.warning(
+                "Scheduler fault injected before dispatch of %s: %s", step_id, exc
+            )
+            try:
+                self._registry.update_status(step_id, StepStatus.FAILED)
+            except KeyError:
+                self._registry.register(step_id)
+                self._registry.update_status(step_id, StepStatus.FAILED)
+            from shared.events import StepFailedData
+
+            await self._event_bus.publish(
+                EventType.STEP_FAILED,
+                asdict(StepFailedData(step_id=step_id, error=str(exc))),
+            )
+            _ = await self.handle_step_result(step_id, StepStatus.FAILED)
+            return True
+        return False
 
     async def _handle_step_skipped(self, step_id: str, reason: str) -> None:
         """Mark a step as SKIPPED and publish the STEP_SKIPPED event.

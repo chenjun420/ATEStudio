@@ -96,7 +96,22 @@ class InstrumentFaultError(FaultInjectionError):
 
 
 class SchedulerFaultError(FaultInjectionError):
-    """调度层故障：步骤异常退出、资源死锁等。"""
+    """调度层故障：步骤异常退出、资源死锁等。
+
+    Attributes:
+        uut_id: 关联 UUT 标识（调度层派发检查时提供；单 UUT 为 None）。
+    """
+
+    def __init__(
+        self,
+        message: str,
+        fault_id: str | None = None,
+        layer: str | None = None,
+        target: str | None = None,
+        uut_id: str | None = None,
+    ) -> None:
+        super().__init__(message, fault_id=fault_id, layer=layer, target=target)
+        self.uut_id = uut_id
 
 
 @dataclass
@@ -259,6 +274,10 @@ class FaultInjector:
             seed: 概率触发用的随机种子（None 用系统随机）。
         """
         self._rules: list[FaultRule] = []
+        # 调度层规则计数与派发计数：check_scheduler_raise 的 O(1) 热路径
+        # 空检查 + count 触发的“第 n 次派发”语义（§7.7 调度层）
+        self._scheduler_rule_count = 0
+        self._dispatch_counts: dict[str, int] = {}
         self._rng = random.Random(seed)
         self._start_time = time.monotonic()
 
@@ -298,6 +317,8 @@ class FaultInjector:
     def add_rule(self, rule: FaultRule) -> None:
         """注册一条规则。"""
         self._rules.append(rule)
+        if rule.layer == LAYER_SCHEDULER:
+            self._scheduler_rule_count += 1
 
     @property
     def rules(self) -> list[FaultRule]:
@@ -307,6 +328,8 @@ class FaultInjector:
     def clear(self) -> None:
         """清空全部规则（多轮仿真间复用）。"""
         self._rules.clear()
+        self._scheduler_rule_count = 0
+        self._dispatch_counts.clear()
         self._start_time = time.monotonic()
 
     # ------------------------------------------------------------------
@@ -389,6 +412,51 @@ class FaultInjector:
     ) -> FaultAction | None:
         """调度层检查（步骤异常/变量污染/资源死锁）。"""
         return self.intercept(LAYER_SCHEDULER, step_id, method, context)
+
+    def check_scheduler_raise(
+        self,
+        step_id: str,
+        uut_id: str | None = None,
+        *,
+        context: dict[str, Any] | None = None,
+    ) -> None:
+        """调度层派发前检查（§7.7）：命中规则即抛 SchedulerFaultError。
+
+        与 :meth:`check_scheduler`（返回 FaultAction 供调用方决策）不同，
+        本入口面向调度热路径：无调度层规则时为单次 O(1) 空检查 —— 不分配
+        上下文、不取时间戳。命中时按调度层语义强制步骤失败（§7.7 步骤
+        异常退出），由调用方路由到既有失败处理。
+
+        Args:
+            step_id: 即将派发的步骤 ID。
+            uut_id: 关联 UUT 标识（多 UUT 场景；单 UUT 调度器传 None）。
+            context: 额外匹配上下文（condition/state 表达式变量）。
+
+        Raises:
+            SchedulerFaultError: 任一调度层规则命中。
+        """
+        if self._scheduler_rule_count == 0:
+            return
+        ctx = dict(context or {})
+        if uut_id is not None:
+            ctx["uut_id"] = uut_id
+        # 派发计数：count 触发按“第 n 次派发”语义命中
+        count = self._dispatch_counts.get(step_id, 0) + 1
+        self._dispatch_counts[step_id] = count
+        ctx["call_count"] = count
+        action = self.intercept(LAYER_SCHEDULER, step_id, "*", ctx)
+        if action is None:
+            return
+        raise SchedulerFaultError(
+            (
+                f"Fault '{action.fault_id}' injected at layer=scheduler "
+                f"(step={step_id}, uut={uut_id})"
+            ),
+            fault_id=action.fault_id,
+            layer=LAYER_SCHEDULER,
+            target=step_id,
+            uut_id=uut_id,
+        )
 
     # ------------------------------------------------------------------
     # 动作执行
