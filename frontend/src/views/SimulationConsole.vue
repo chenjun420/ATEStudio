@@ -45,6 +45,7 @@ import {
   type DebugBreakpoint,
 } from '@/api/debug'
 import { useTopologySimulation } from '@/composables/useTopologySimulation'
+import InstrumentGantt from '@/components/InstrumentGantt.vue'
 
 // ─── 仿真层级/噪声选项（与 useSimulation 对齐）──────────────────────────────
 
@@ -80,6 +81,7 @@ const result = ref<SimulationResponse | null>(null)
 const error = ref<string | null>(null)
 
 const eventFilter = ref<'all' | 'decision' | 'measurement'>('all')
+const ganttVisible = ref(false) // T36 仪器甘特时间线折叠开关
 
 // 故障注入规则
 const faultRules = ref<Array<{ type: string; count?: number; probability?: number; condition?: string; action?: string }>>([])
@@ -368,6 +370,13 @@ onMounted(() => {
             </template>
           </el-table-column>
         </el-table>
+        <!-- T36 仪器甘特时间线：折叠区，展开后由 result.events 派生 -->
+        <div class="gantt-section">
+          <el-button size="small" link type="primary" @click="ganttVisible = !ganttVisible">
+            {{ ganttVisible ? '收起仪器时间线 ▲' : '展开仪器时间线 ▼' }}
+          </el-button>
+          <InstrumentGantt v-if="ganttVisible && result" :events="result.events" />
+        </div>
       </main>
 
       <!-- 右侧：仿真报告 -->
@@ -500,6 +509,11 @@ onMounted(() => {
   flex-direction: column;
   min-width: 0;
   padding: 8px 12px;
+}
+.gantt-section {
+  border-top: 1px solid var(--el-border-color-lighter);
+  margin-top: 8px;
+  padding-top: 4px;
 }
 .log-toolbar {
   display: flex;
