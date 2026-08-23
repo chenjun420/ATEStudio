@@ -60,6 +60,8 @@ import {
 import { listExecutions, type ExecutionListItem } from '@/api/executions'
 import { applyFixtureTierLayout } from '@/utils/fixtureLayoutAdapter'
 import { LINK_STYLES, clearRouteHighlight, syncRouteHighlight } from '@/utils/routeHighlightAdapter'
+import { paintFaultLink, syncFaultVisuals } from '@/utils/faultVisualsAdapter'
+import { suspectLinksOf, type FaultVisualInput } from '@/utils/faultVisuals'
 
 const topologyStore = useTopologyRuntimeStore()
 const { graph } = useGraph('fixture-canvas')
@@ -399,26 +401,12 @@ watch(
   { deep: true },
 )
 
-// 故障定位高亮（§8.3.7）
-function highlightFaultLocation(suspectLinks: string[] | undefined) {
-  const g = graph.value
-  if (!g) return
-  for (const linkId of suspectLinks ?? []) {
-    const edge = g.getCellById(linkId)
-    if (edge && edge.isEdge()) {
-      edge.attr('line/stroke', '#F56C6C')
-      edge.attr('line/strokeWidth', 4)
-    }
-  }
-}
-
+// 故障视觉（T34，§8.3.7）：SSE fault 集 → 按类型分派视觉词汇；清除即还原基础样式
 watch(
   () => topologyStore.faults,
   (faults) => {
-    for (const f of faults) {
-      const loc = (f as unknown as { location?: { suspect_links?: string[] } }).location
-      if (loc) highlightFaultLocation(loc.suspect_links)
-    }
+    const g = graph.value
+    if (g) syncFaultVisuals(g, faults as FaultVisualInput[])
   },
   { deep: true },
 )
@@ -650,21 +638,19 @@ async function onFaultSelect(faultType: LinkFaultType) {
   }
   const ok = await injectFault(runId, linkId, faultType)
   if (ok) {
-    // 即时视觉确认（§8.3.7 fault-red）；随后以 SSE runtime 事件为准
-    applyLinkRuntimeState(linkId, 'fault', false)
+    // 即时视觉确认（§8.3.7 按类型分派词汇）；随后以 SSE runtime 事件为准
+    if (graph.value) paintFaultLink(graph.value, linkId, faultType)
   }
 }
 
-// 疑似故障卡片（T33）：点击卡片 → 画布上强调该链路（故障红加粗描边，§8.3.7）
+// 疑似故障卡片（T33/T34）：点击卡片 → 按该故障类型的视觉词汇强调链路
 function onSelectSuspectLink(linkId: string) {
   const g = graph.value
   if (!g || !linkId) return
-  const cell = g.getCellById(linkId)
-  if (!cell || !cell.isEdge()) return
-  cell.attr('line/stroke', '#F56C6C')
-  cell.attr('line/strokeWidth', 4)
-  cell.attr('line/strokeDasharray', '')
-  cell.attr('line/opacity', 1)
+  const hit = (topologyStore.faults as FaultVisualInput[]).find((f) =>
+    suspectLinksOf(f).includes(linkId),
+  )
+  paintFaultLink(g, linkId, hit?.type ?? '')
 }
 
 // 新建空拓扑
@@ -1012,4 +998,7 @@ watch(
 .issue.warn span {
   color: var(--el-color-warning);
 }
+/* T34 故障动效（subtle <2fps 成本；jsdom 只断言 class attr，不依赖动画真正运行） */
+#fixture-canvas :deep(.fault-anim-flicker), #fixture-canvas :deep(.fault-anim-pulse), #fixture-canvas :deep(.fault-anim-flash) { animation: t34-blink 1.4s ease-in-out infinite; }
+@keyframes t34-blink { 50% { opacity: 0.45; } }
 </style>
