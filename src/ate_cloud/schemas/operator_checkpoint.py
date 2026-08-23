@@ -24,6 +24,8 @@ from shared.operator_checkpoint import OperatorCheckpoint, OperatorInteractionTy
 __all__ = [
     "OperatorCheckpointRequest",
     "OperatorCheckpointResponse",
+    "OperatorCheckpointAckRequest",
+    "OperatorCheckpointAckResponse",
     "OperatorInteractionEvent",
     "OperatorInteractionType",
 ]
@@ -101,3 +103,51 @@ class OperatorCheckpointRequest(BaseModel):
     response: str = Field(..., min_length=1, description="Operator response payload")
     reason: str | None = Field(default=None, description="Optional reason (e.g. fail reason)")
     extra: dict[str, Any] = Field(default_factory=dict, description="Optional metadata bag")
+
+
+class OperatorCheckpointAckRequest(BaseModel):
+    """Request body for the operator-console acknowledgement endpoint.
+
+    Submitted via ``POST /api/v1/executions/{run_id}/checkpoint/ack``
+    (T42 operator checkpoint flow). Unlike the raw
+    :class:`OperatorCheckpointRequest`, this records *who* acknowledged
+    and an optional free-form note; the underlying checkpoint always
+    receives ``response="ok"``.
+
+    Attributes:
+        step_id: The step identifier whose checkpoint is being acked.
+        operator: Operator name/ID performing the acknowledgement.
+        note: Optional free-form note recorded with the acknowledgement.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    step_id: str = Field(..., min_length=1, description="Step identifier being acked")
+    operator: str = Field(
+        ...,
+        min_length=1,
+        description="操作员姓名/工号（必须记录签署人）",
+    )
+    note: str | None = Field(default=None, description="Optional acknowledgement note")
+
+
+class OperatorCheckpointAckResponse(BaseModel):
+    """Response describing a completed operator acknowledgement.
+
+    Returned by ``POST /api/v1/executions/{run_id}/checkpoint/ack``.
+
+    Attributes:
+        run_id: Execution run identifier.
+        step_id: Step identifier that was acknowledged.
+        operator: Operator name/ID echoed back for UI confirmation.
+        note: Optional note echoed back.
+        acknowledged_at: UTC timestamp of the acknowledgement.
+        pending: Always ``False`` — the checkpoint is resolved.
+    """
+
+    run_id: str
+    step_id: str
+    operator: str
+    note: str | None = None
+    acknowledged_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    pending: bool = False

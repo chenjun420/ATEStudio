@@ -2,6 +2,7 @@ import http from './interceptor'
 import type { DiffSummary } from '@/utils/diffView'
 import type { StepControlPayload, StepMode } from '@/utils/stepModes'
 import type { SimulationReportResponse } from '@/utils/simulationReportView'
+import type { AckPayload, PendingCheckpointResponse } from '@/utils/checkpointFlow'
 
 const api = http
 
@@ -307,5 +308,43 @@ export type { SimulationReportResponse }
  */
 export async function fetchSimulationReport(runId: string): Promise<SimulationReportResponse> {
   const response = await api.get<SimulationReportResponse>(`/executions/${runId}/simulation-report`)
+  return response.data
+}
+
+export type { PendingCheckpointResponse }
+
+/**
+ * GET /api/v1/executions/{runId}/checkpoint/pending - 待处理操作员检查点（T42）。
+ * pending=false 表示当前无待确认检查点（合法空态，非错误）。
+ */
+export async function fetchPendingCheckpoint(runId: string): Promise<PendingCheckpointResponse> {
+  const response = await api.get<PendingCheckpointResponse>(
+    `/executions/${runId}/checkpoint/pending`,
+  )
+  return response.data
+}
+
+/** POST /executions/{runId}/checkpoint/ack 响应（T42，与后端 OperatorCheckpointAckResponse 对齐）。 */
+export interface CheckpointAckResponse {
+  run_id: string
+  step_id: string
+  operator: string
+  note: string | null
+  acknowledged_at: string
+  pending: boolean
+}
+
+/**
+ * POST /api/v1/executions/{runId}/checkpoint/ack - 操作员确认检查点（T42）。
+ * 记录签署人（operator 必填）+ 可选备注；服务端强制门控（409 无待确认/步骤不匹配）。
+ */
+export async function acknowledgeRunCheckpoint(
+  runId: string,
+  payload: AckPayload,
+): Promise<CheckpointAckResponse> {
+  const response = await api.post<CheckpointAckResponse>(
+    `/executions/${runId}/checkpoint/ack`,
+    payload,
+  )
   return response.data
 }

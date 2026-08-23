@@ -401,5 +401,212 @@ class TestSchemaValidation:
             )
 
 
+class TestAckCheckpoint:
+    """POST /api/v1/executions/{run_id}/checkpoint/ack (T42 operator flow).
+
+    The ack endpoint is the operator-console flavoured submission: it
+    records *who* acknowledged (operator name) plus an optional note,
+    submits ``response="ok"`` to the pending checkpoint, and publishes
+    the SSE resolved event carrying the operator identity.
+    """
+
+    async def _make_pending(
+        self,
+        handler: CheckpointHandler,
+        run_id: str,
+        step_id: str = "step-ack-1",
+    ) -> asyncio.Task[object]:
+        """Register a pending confirm checkpoint and return the wait task."""
+        checkpoint = _make_checkpoint(
+            type_=OperatorInteractionType.CONFIRM,
+            prompt="确认工装就绪",
+        )
+        wait_task = asyncio.create_task(
+            handler.wait_for_response(run_id, step_id, checkpoint)
+        )
+        await asyncio.sleep(0.05)
+        return wait_task
+
+    async def test_ack_resolves_pending_checkpoint(
+        self, client: AsyncClient, execution: Execution,
+        checkpoint_handler: CheckpointHandler,
+    ) -> None:
+        """Given a pending checkpoint, when POST ack, then 200 + executor resumed."""
+        wait_task = await self._make_pending(checkpoint_handler, execution.id)
+        try:
+            resp = await client.post(
+                f"/api/v1/executions/{execution.id}/checkpoint/ack",
+                json={"step_id": "step-ack-1", "operator": "张三", "note": None},
+            )
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["pending"] is False
+            assert body["run_id"] == execution.id
+            assert body["step_id"] == "step-ack-1"
+            assert body["operator"] == "张三"
+            assert body["acknowledged_at"] is not None
+
+            # The blocked executor wait resolves with response="ok" and
+            # the operator identity carried in extra.
+            response = await asyncio.wait_for(wait_task, timeout=2.0)
+            assert response.response == "ok"
+            assert response.extra["operator"] == "张三"
+        finally:
+            if not wait_task.done():
+                checkpoint_handler.cancel(execution.id)
+                try:
+                    await asyncio.wait_for(wait_task, timeout=2.0)
+                except RuntimeError:
+                    pass
+
+    async def test_ack_carries_optional_note(
+        self, client: AsyncClient, execution: Execution,
+        checkpoint_handler: CheckpointHandler,
+    ) -> None:
+        """Given an ack with note, when POST, then note echoed + stored in extra."""
+        wait_task = await self._make_pending(
+            checkpoint_handler, execution.id, "step-ack-note",
+        )
+        try:
+            resp = await client.post(
+                f"/api/v1/executions/{execution.id}/checkpoint/ack",
+                json={"step_id": "step-ack-note", "operator": "李四",
+                      "note": "更换 DUT 后重试"},
+            )
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["note"] == "更换 DUT 后重试"
+            response = await asyncio.wait_for(wait_task, timeout=2.0)
+            assert response.extra["note"] == "更换 DUT 后重试"
+        finally:
+            if not wait_task.done():
+                checkpoint_handler.cancel(execution.id)
+                try:
+                    await asyncio.wait_for(wait_task, timeout=2.0)
+                except RuntimeError:
+                    pass
+
+    async def test_ack_publishes_resolved_event_with_operator(
+        self, client: AsyncClient, execution: Execution,
+        checkpoint_handler: CheckpointHandler, app: Any,
+    ) -> None:
+        """Ack publishes OPERATOR_CHECKPOINT_RESOLVED carrying operator+note."""
+        wait_task = await self._make_pending(checkpoint_handler, execution.id)
+        bridge = app.state.sse_bridge
+        queue = bridge.get_or_create_queue(execution.id)
+        try:
+            resp = await client.post(
+                f"/api/v1/executions/{execution.id}/checkpoint/ack",
+                json={"step_id": "step-ack-1", "operator": "王五"},
+            )
+            assert resp.status_code == 200
+            await asyncio.wait_for(wait_task, timeout=2.0)
+
+            events: list[dict[str, Any]] = []
+            try:
+                while True:
+                    events.append(queue.get_nowait())
+            except asyncio.QueueEmpty:
+                pass
+            resolved = [
+                e for e in events if e.get("type") == "OPERATOR_CHECKPOINT_RESOLVED"
+            ]
+            assert len(resolved) == 1
+            assert resolved[0]["data"]["operator"] == "王五"
+        finally:
+            bridge.remove_queue(execution.id)
+            if not wait_task.done():
+                checkpoint_handler.cancel(execution.id)
+                try:
+                    await asyncio.wait_for(wait_task, timeout=2.0)
+                except RuntimeError:
+                    pass
+
+    async def test_ack_404_when_execution_not_found(
+        self, client: AsyncClient,
+    ) -> None:
+        """Unknown run returns 404."""
+        resp = await client.post(
+            "/api/v1/executions/run-nonexistent/checkpoint/ack",
+            json={"step_id": "s", "operator": "op"},
+        )
+        assert resp.status_code == 404
+
+    async def test_ack_404_when_no_handler_registered(
+        self, client: AsyncClient, execution: Execution,
+    ) -> None:
+        """No handler for the run returns 404."""
+        resp = await client.post(
+            f"/api/v1/executions/{execution.id}/checkpoint/ack",
+            json={"step_id": "s", "operator": "op"},
+        )
+        assert resp.status_code == 404
+        assert "No active checkpoint handler" in resp.json()["detail"]
+
+    async def test_ack_409_when_no_checkpoint_pending(
+        self, client: AsyncClient, execution: Execution,
+        checkpoint_handler: CheckpointHandler,
+    ) -> None:
+        """Handler registered but nothing pending returns 409."""
+        resp = await client.post(
+            f"/api/v1/executions/{execution.id}/checkpoint/ack",
+            json={"step_id": "step-none", "operator": "op"},
+        )
+        assert resp.status_code == 409
+        assert "No pending checkpoint" in resp.json()["detail"]
+
+    async def test_ack_409_on_step_id_mismatch(
+        self, client: AsyncClient, execution: Execution,
+        checkpoint_handler: CheckpointHandler,
+    ) -> None:
+        """Wrong step_id returns 409 (gating cannot be bypassed)."""
+        wait_task = await self._make_pending(checkpoint_handler, execution.id)
+        try:
+            resp = await client.post(
+                f"/api/v1/executions/{execution.id}/checkpoint/ack",
+                json={"step_id": "step-wrong", "operator": "op"},
+            )
+            assert resp.status_code == 409
+            assert "does not match" in resp.json()["detail"]
+        finally:
+            checkpoint_handler.cancel(execution.id)
+            try:
+                await asyncio.wait_for(wait_task, timeout=2.0)
+            except RuntimeError:
+                pass
+
+    async def test_ack_rejects_empty_operator_422(
+        self, client: AsyncClient, execution: Execution,
+        checkpoint_handler: CheckpointHandler,
+    ) -> None:
+        """Empty operator name is rejected (who signed must be recorded)."""
+        wait_task = await self._make_pending(checkpoint_handler, execution.id)
+        try:
+            resp = await client.post(
+                f"/api/v1/executions/{execution.id}/checkpoint/ack",
+                json={"step_id": "step-ack-1", "operator": ""},
+            )
+            assert resp.status_code == 422
+        finally:
+            checkpoint_handler.cancel(execution.id)
+            try:
+                await asyncio.wait_for(wait_task, timeout=2.0)
+            except RuntimeError:
+                pass
+
+    async def test_ack_anonymous_401(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Anonymous request (dev_mode off) must be rejected with 401."""
+        from ate_cloud.config import settings
+
+        monkeypatch.setattr(settings, "dev_mode", False)
+        resp = await client.post(
+            "/api/v1/executions/some-run/checkpoint/ack",
+            json={"step_id": "s", "operator": "op"},
+        )
+        assert resp.status_code == 401
+
+
 # Quiet unused-import linters for fixtures only used via parameter names.
 _ = AsyncGenerator

@@ -33,6 +33,8 @@ from ate_cloud.db import get_db
 from ate_cloud.models.execution import Execution
 from ate_cloud.nats.sse_bridge import SSEBridge
 from ate_cloud.schemas.operator_checkpoint import (
+    OperatorCheckpointAckRequest,
+    OperatorCheckpointAckResponse,
     OperatorCheckpointRequest,
     OperatorCheckpointResponse,
 )
@@ -263,4 +265,101 @@ async def submit_checkpoint_response(
         pending=False,
         step_id=body.step_id,
         checkpoint=pending.checkpoint,
+    )
+
+
+@router.post(
+    "/{run_id}/checkpoint/ack",
+    response_model=OperatorCheckpointAckResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def acknowledge_checkpoint(
+    run_id: str,
+    body: OperatorCheckpointAckRequest,
+    request: Request,
+    db: DBSession,
+    bridge: SSEBridgeDep,
+) -> OperatorCheckpointAckResponse:
+    """POST /api/v1/executions/{run_id}/checkpoint/ack - Operator acknowledgement.
+
+    T42 operator-console flavoured submission: records *who* acknowledged
+    (``operator``) plus an optional ``note``, submits ``response="ok"``
+    to the pending checkpoint, and resumes the executor. The operator
+    identity and note are carried in the response ``extra`` bag and in
+    the published ``OPERATOR_CHECKPOINT_RESOLVED`` SSE event so other
+    UI clients can display the signature.
+
+    Gating is enforced server-side: acking requires an actually-pending
+    checkpoint whose ``step_id`` matches (409 otherwise), so the flow
+    cannot be bypassed by the UI.
+
+    Args:
+        run_id: The execution run identifier.
+        body: The acknowledgement body (step_id, operator, note).
+        request: The HTTP request (for app state access).
+        db: Database session.
+        bridge: SSEBridge instance.
+
+    Returns:
+        OperatorCheckpointAckResponse with the acknowledgement metadata.
+
+    Raises:
+        HTTPException: 404 if execution or handler not found.
+        HTTPException: 409 if no checkpoint is pending for the step.
+        HTTPException: 422 if operator name is empty (schema-level).
+    """
+    await _verify_execution_exists(run_id, db)
+    handler = _get_handler(request, run_id)
+
+    # Validate that a checkpoint is pending for this step.
+    pending = handler.get_pending(run_id)
+    if pending is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"No pending checkpoint for execution '{run_id}'",
+        )
+    if pending.step_id != body.step_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Pending checkpoint step_id '{pending.step_id}' does not "
+                f"match submitted step_id '{body.step_id}'"
+            ),
+        )
+
+    submitted = handler.submit_response(
+        run_id=run_id,
+        step_id=body.step_id,
+        response="ok",
+        reason=body.note,
+        extra={"operator": body.operator, "note": body.note},
+    )
+    if not submitted:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Checkpoint for step '{body.step_id}' was already resolved "
+                f"or cancelled"
+            ),
+        )
+
+    # Notify other UI clients (dashboard) that the checkpoint is resolved.
+    await bridge.publish_event(
+        run_id=run_id,
+        event_type="OPERATOR_CHECKPOINT_RESOLVED",
+        data={
+            "run_id": run_id,
+            "step_id": body.step_id,
+            "response": "ok",
+            "reason": body.note,
+            "operator": body.operator,
+            "note": body.note,
+        },
+    )
+
+    return OperatorCheckpointAckResponse(
+        run_id=run_id,
+        step_id=body.step_id,
+        operator=body.operator,
+        note=body.note,
     )
