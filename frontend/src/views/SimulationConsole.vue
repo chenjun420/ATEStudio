@@ -34,9 +34,12 @@ import {
   createExecution,
   fetchExecutionDiff,
   listExecutions,
+  stepControlExecution,
   type ExecutionListItem,
 } from '@/api/executions'
 import type { DiffSummary } from '@/utils/diffView'
+// T40 步进工具栏元数据（§8.4 StepMode）
+import { STEP_MODE_TOOLBAR, buildStepControlPayload, validateStepControl, type StepMode } from '@/utils/stepModes'
 import {
   runSimulation,
   type NoiseModel,
@@ -118,6 +121,19 @@ const {
 )
 const bpDialogVisible = ref(false)
 const bpForm = ref<BreakpointForm>({ kind: 'step', target: '', condition: '' })
+
+// T40 调试步进（§8.4）：断点暂停后 over/into/out/run_to_cursor 单步放行
+const stepTarget = ref('')
+const stepBusy = ref(false)
+async function sendStepControl(mode: StepMode) {
+  const v = validateStepControl({ mode, target: stepTarget.value })
+  if (!v.valid) { ElMessage.warning(v.error ?? '无效的步进指令'); return }
+  try {
+    stepBusy.value = true
+    await stepControlExecution(runId.value, buildStepControlPayload({ mode, target: stepTarget.value }))
+    ElMessage.success(`已发送步进指令：${mode}`)
+  } catch (e) { ElMessage.error(`步进失败: ${e instanceof Error ? e.message : String(e)}`) } finally { stepBusy.value = false }
+}
 
 // 拓扑驱动仿真初始化（T31，§8.3.8）：启动前校验链路并派生 GPIB/TCP 初始化段
 const { validateBeforeStart, buildInitSection } = useTopologySimulation()
@@ -303,6 +319,14 @@ onMounted(() => {
       <el-tag v-if="runId" type="info" size="default">run_id: {{ runId.slice(0, 8) }}</el-tag>
       <el-tag v-if="bpPaused" type="warning" size="default">⏸ 断点暂停{{ lastHit ? `：${lastHit.target}` : '' }}</el-tag>
       <el-button v-if="bpPaused" type="warning" @click="resumeRun(runId)">继续执行</el-button>
+      <!-- T40 调试步进工具栏：仅断点暂停时可用 -->
+      <template v-if="bpPaused">
+        <el-input v-model="stepTarget" placeholder="目标步骤ID（运行至光标）" size="small" style="width: 170px" clearable />
+        <el-button-group>
+          <el-button v-for="sm in STEP_MODE_TOOLBAR" :key="sm.mode" size="small" type="warning" plain :title="sm.tooltip"
+            :disabled="stepBusy || (sm.requiresTarget && !stepTarget.trim())" @click="sendStepControl(sm.mode)">{{ sm.label }}</el-button>
+        </el-button-group>
+      </template>
     </div>
 
     <div class="workspace">

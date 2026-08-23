@@ -58,6 +58,8 @@ from ate_cloud.schemas.execution import (
     SimulationRequest,
     SimulationResponse,
     SimulationResultEvent,
+    StepControlRequest,
+    StepControlResponse,
 )
 from ate_platform.simulation.diff import ExecutionDiff
 from ate_platform.simulation.dry_run_scheduler import DryRunScheduler
@@ -880,6 +882,73 @@ async def force_next_execution(
         HTTPException: 409 if execution is already in a terminal state.
     """
     return await _control_execution(run_id, "force_next", db, bridge)
+
+
+@router.post("/{run_id}/step-control", response_model=StepControlResponse)
+async def step_control_execution(
+    run_id: str,
+    body: StepControlRequest,
+    db: DBSession,
+) -> StepControlResponse:
+    """Send a debugger step-mode command to a paused execution (T40，§8.4).
+
+    断点暂停（T39）后，SimulationConsole 工具栏把 over/into/out/
+    run_to_cursor 指令转发给边端调度器的单步状态机：复用既有控制主题
+    ``ate.control.{run_id}``（``{action: "step_control", mode, ...}``），
+    worker 经 request-reply 校验模式/目标后武装 ``arm_step_mode``。
+    执行级状态不变（仍是暂停态），故不写 DB、不发执行 SSE。
+
+    A NATS outage is non-fatal — the API still returns 200 (consistent
+    with pause/resume/force_next control surface).
+
+    Args:
+        run_id: The execution run identifier.
+        body: Step mode (+ target step for run_to_cursor).
+        db: Database session.
+
+    Returns:
+        StepControlResponse with ok=true and the accepted mode.
+
+    Raises:
+        HTTPException: 404 if execution not found.
+        HTTPException: 409 if execution has no active (non-terminal) run.
+    """
+    result = await db.execute(select(Execution).where(Execution.id == run_id))
+    execution = result.scalar_one_or_none()
+
+    if not execution:
+        raise HTTPException(status_code=404, detail="Execution not found")
+
+    if execution.status in _TERMINAL_STATES:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Execution has no active execution to step through "
+                f"(status: {execution.status})"
+            ),
+        )
+
+    # Forward via the control subject (non-fatal on NATS outage).
+    try:
+        from ate_cloud.main import get_nats
+
+        nc = get_nats()
+        if nc is not None:
+            payload = json.dumps({
+                "action": "step_control",
+                "run_id": run_id,
+                "mode": body.mode,
+                "target_step_id": body.target_step_id,
+            }).encode()
+            await nc.publish(f"ate.control.{run_id}", payload)
+    except RuntimeError:
+        pass
+
+    return StepControlResponse(
+        run_id=run_id,
+        mode=body.mode,
+        target_step_id=body.target_step_id,
+    )
 
 
 @router.get("/{run_id}/diff")

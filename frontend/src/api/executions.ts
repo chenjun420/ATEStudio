@@ -1,7 +1,16 @@
 import http from './interceptor'
 import type { DiffSummary } from '@/utils/diffView'
+import type { StepControlPayload, StepMode } from '@/utils/stepModes'
 
 const api = http
+
+/** Response shape from POST /executions/{runId}/step-control (T40). */
+export interface StepControlResponse {
+  ok: boolean
+  run_id: string
+  mode: StepMode | string
+  target_step_id: string | null
+}
 
 /**
  * Execution entity returned from the backend
@@ -272,5 +281,17 @@ export async function deleteTypedBreakpoint(runId: string, bpId: string): Promis
  */
 export async function resumeExecution(runId: string): Promise<{ id: string; status: string }> {
   const response = await api.post(`/executions/${runId}/resume`)
+  return response.data
+}
+
+/**
+ * POST /api/v1/executions/{runId}/step-control - 调试步进指令（T40，§8.4）。
+ * 断点暂停后发送 over/into/out/run_to_cursor，边端调度器单步放行。
+ */
+export async function stepControlExecution(
+  runId: string,
+  payload: StepControlPayload,
+): Promise<StepControlResponse> {
+  const response = await api.post<StepControlResponse>(`/executions/${runId}/step-control`, payload)
   return response.data
 }

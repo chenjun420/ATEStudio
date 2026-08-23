@@ -10,7 +10,7 @@ Defines request/response models for execution CRUD and SSE streaming:
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class ExecutionCreate(BaseModel):
@@ -209,6 +209,45 @@ class FaultInjectionResponse(BaseModel):
     link_id: str
     fault_type: str
     fault_id: str
+
+
+class StepControlRequest(BaseModel):
+    """Request body for POST /api/v1/executions/{run_id}/step-control.
+
+    调试步进指令（T40，设计文档 §8.4 StepMode）：断点暂停后由
+    SimulationConsole 工具栏发出，经 ``ate.control.{run_id}`` 转发给
+    边端调度器的单步状态机。
+
+    Attributes:
+        mode: 步进模式（over=步过兄弟 / into=步入容器 / out=步出容器 /
+            run_to_cursor=运行至指定步骤）。
+        target_step_id: run_to_cursor 必填的目标步骤 id；其余模式忽略。
+    """
+
+    mode: Literal["over", "into", "out", "run_to_cursor"]
+    target_step_id: str | None = None
+
+    @model_validator(mode="after")
+    def _require_target_for_run_to_cursor(self) -> "StepControlRequest":
+        if self.mode == "run_to_cursor" and not (self.target_step_id or "").strip():
+            raise ValueError("target_step_id is required when mode is run_to_cursor")
+        return self
+
+
+class StepControlResponse(BaseModel):
+    """Response for POST /api/v1/executions/{run_id}/step-control.
+
+    Attributes:
+        ok: 指令受理成功标志（NATS 中断时仍为 true，与控制面约定一致）。
+        run_id: The execution run identifier.
+        mode: 受理的步进模式。
+        target_step_id: run_to_cursor 的目标步骤 id（其余模式为 null）。
+    """
+
+    ok: bool = True
+    run_id: str
+    mode: str
+    target_step_id: str | None = None
 
 
 class ManualFaultRequest(BaseModel):

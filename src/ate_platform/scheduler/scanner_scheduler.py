@@ -22,7 +22,7 @@ import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Any
 
 # 直接导入子模块（绕过 simulation/__init__ 的重导出链）——fault_injector
@@ -69,6 +69,28 @@ class DeadlockDetectedError(Exception):
     without any progress (no steps becoming ready and no steps executing).
     """
     pass
+
+
+@dataclass(frozen=True)
+class StepPosition:
+    """Plan-tree position of a step (T40 debugger step modes).
+
+    Flattened view of the YAML plan hierarchy so the scheduler can reason
+    about siblings/containers without importing DSL types:
+
+    Attributes:
+        parent: Parent container step id (None for top-level steps).
+        order: 0-based position among siblings in the plan body.
+        depth: Nesting depth (0 = top level).
+    """
+
+    parent: str | None
+    order: int
+    depth: int
+
+
+# T40 调试步进模式集合（§8.4 StepMode）
+_STEP_MODES = ("over", "into", "out", "run_to_cursor")
 
 
 class ScannerScheduler:
@@ -234,6 +256,18 @@ class ScannerScheduler:
         self._pause_event: asyncio.Event = asyncio.Event()
         self._pause_event.set()
 
+        # T40 调试步进状态（§8.4 StepMode）：
+        # - _step_mode: 当前武装的步进模式（over/into/out/run_to_cursor），None 未武装
+        # - _step_mode_target: run_to_cursor 的目标步骤 id
+        # - _step_mode_origin: 武装时最后派发的步骤（sibling/depth 判定基准）
+        # - _last_dispatched_step: 最近一次实际派发的步骤 id（origin 缺省值）
+        # - _step_positions: register_step_hierarchy 注入的扁平计划树位置表
+        self._step_mode: str | None = None
+        self._step_mode_target: str | None = None
+        self._step_mode_origin: str | None = None
+        self._last_dispatched_step: str | None = None
+        self._step_positions: dict[str, StepPosition] = {}
+
         # §6.6 状态快照与崩溃恢复
         self._instrument_reset_callback: Callable[[], Awaitable[None]] | None = (
             instrument_reset_callback
@@ -299,6 +333,7 @@ class ScannerScheduler:
 
         self._running = False
         self._stop_event.set()
+        self._consume_step_mode()  # T40：停止即丢弃未消费的步进模式
 
         # Stop WatchDog first — it's independent of the scan task
         if self._watchdog is not None:
@@ -831,6 +866,14 @@ class ScannerScheduler:
             # 暂停时阻塞直到 resume()（F5）
             await self._pause_event.wait()
 
+            # T40 步进模式门：武装了步进模式时，先判定本步骤是否是
+            # 该模式的停靠点 —— 是则消费模式并重新暂停（不派发）。
+            if self._step_mode is not None and self._should_pause_for_step_mode(step_id):
+                self._consume_step_mode()
+                self.pause()
+                logger.debug("Step mode stop before %s — re-paused", step_id)
+                return
+
             # Verify step is still pending (status might have changed)
             try:
                 status = self._registry.get_status(step_id)
@@ -897,6 +940,7 @@ class ScannerScheduler:
                 EventType.STEP_STARTED,
                 event_data,
             )
+            self._last_dispatched_step = step_id  # T40：步进 origin 基准
 
             # T3：BARRIER 步骤派发即驱动全池同步（复用 UUTManager.wait_barrier）
             if step_id in self._barrier_steps:
@@ -1429,10 +1473,12 @@ class ScannerScheduler:
     def resume(self) -> None:
         """恢复调度：放行被 pause() 阻塞的派发。
 
-        幂等：重复调用安全。
+        幂等：重复调用安全。普通恢复会取消已武装的步进模式（T40）——
+        操作员显式“继续执行”优先于待决的单步指令。
         """
         self._paused = False
         self._pause_event.set()
+        self._consume_step_mode()
 
     def force_next(self) -> None:
         """强制下一步：下一次派发绕过 skip_if（一次性）。
@@ -1440,6 +1486,85 @@ class ScannerScheduler:
         用于人工介入后强制执行本会被跳过的步骤。
         """
         self._force_next_pending = True
+
+    # ------------------------------------------------------------------
+    # T40 调试步进模式（§8.4 StepMode）：over / into / out / run_to_cursor
+    # ------------------------------------------------------------------
+
+    def register_step_hierarchy(self, positions: dict[str, StepPosition]) -> None:
+        """注入扁平计划树位置表（T40）。
+
+        PlanBootstrapper 在展开 YamlPlan 时构建 step_id → StepPosition
+        （parent/order/depth），供步进模式判定兄弟/容器关系。未注册时
+        步进退化为“下一个可派发步骤即停靠”（保守但绝不死锁）。
+        """
+        self._step_positions = dict(positions)
+
+    def arm_step_mode(self, mode: str, target_step_id: str | None = None) -> None:
+        """武装单步步进模式并放行调度，直到停靠条件命中再暂停（T40）。
+
+        语义（origin = 武装时最后派发的步骤）：
+        - over: 下一个同级兄弟派发前暂停；
+        - into: 更深层步骤或后续兄弟（顶层无子时 == over，§8.4 不死锁）；
+        - out: 深度小于 origin 的步骤（已在顶层则跑完计划，不死锁）；
+        - run_to_cursor: 目标步骤派发前暂停（目标不出现则正常跑完）。
+
+        Args:
+            mode: over | into | out | run_to_cursor。
+            target_step_id: run_to_cursor 必填，其余模式忽略。
+
+        Raises:
+            ValueError: mode 不在支持集合内。
+        """
+        if mode not in _STEP_MODES:
+            raise ValueError(
+                f"unknown step mode {mode!r} — expected one of {_STEP_MODES}"
+            )
+        self._step_mode_origin = self._last_dispatched_step
+        self._step_mode_target = target_step_id
+        self._step_mode = mode
+        # 放行派发门（不经 resume() —— 那会立刻消费掉刚武装的模式）
+        self._paused = False
+        self._pause_event.set()
+
+    def _consume_step_mode(self) -> None:
+        """一次性消费当前武装的步进模式。"""
+        self._step_mode = None
+        self._step_mode_target = None
+        self._step_mode_origin = None
+
+    def _should_pause_for_step_mode(self, step_id: str) -> bool:
+        """判定 step_id 是否是当前步进模式的停靠点（T40）。
+
+        所有未知位置/无法判定的情况都返回 True（立即停靠）——宁可多停
+        一次也绝不让调试器静默跑飞；唯一例外是 run_to_cursor 的目标
+        永不出现：此时计划自然完成（QA 场景要求的不死锁语义）。
+        """
+        mode = self._step_mode
+        if mode is None:
+            return False
+        if mode == "run_to_cursor":
+            return step_id == self._step_mode_target
+
+        origin = (
+            self._step_positions.get(self._step_mode_origin)
+            if self._step_mode_origin is not None
+            else None
+        )
+        candidate = self._step_positions.get(step_id)
+        if origin is None or candidate is None:
+            return True  # 无层级信息 → 保守停靠
+
+        if mode == "over":
+            return candidate.parent == origin.parent and candidate.order > origin.order
+        if mode == "into":
+            # 进入更深层，或（顶层无容器可入时）退化为 over 语义
+            if candidate.depth > origin.depth:
+                return True
+            return candidate.parent == origin.parent and candidate.order > origin.order
+        if mode == "out":
+            return candidate.depth < origin.depth
+        return False
 
     async def handle_step_result(self, step_id: str, status: StepStatus) -> bool:
         """根据步骤结果决策是否重试/重复（F5，§6.4 决策矩阵）。

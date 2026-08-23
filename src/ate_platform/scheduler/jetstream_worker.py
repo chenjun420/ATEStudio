@@ -35,7 +35,7 @@ from ..simulation.fault_injector import FaultInjector
 from .condition_evaluator import ConditionEvaluator
 from .event_bus import EventBus
 from .resource_manager import ResourceManager
-from .scanner_scheduler import ScannerScheduler
+from .scanner_scheduler import ScannerScheduler, StepPosition
 from .step_registry import StepRegistry
 from .variable_space import VariableSpace
 
@@ -69,6 +69,8 @@ class PlanBootstrapper:
     def __init__(self, plan: YamlPlan, snapshot_dir: str | None = None) -> None:
         self._plan = plan
         self._snapshot_dir = snapshot_dir
+        # T40：flatten 时顺带构建的 step_id → StepPosition 位置表
+        self._positions: dict[str, StepPosition] = {}
         self.event_bus = EventBus()
         self.variable_space = VariableSpace(event_bus=self.event_bus)
         self.resource_manager = ResourceManager(event_bus=self.event_bus)
@@ -107,6 +109,11 @@ class PlanBootstrapper:
                 self.step_registry.register(step_id, condition)
         self.scheduler.compile_plan(steps)
 
+        # T40 调试步进：注入扁平计划树位置表（parent/order/depth），
+        # 供 over/into/out/run_to_cursor 的停靠判定。
+        if self._positions:
+            self.scheduler.register_step_hierarchy(self._positions)
+
         # Register skip_if conditions so the scheduler can evaluate them
         # before dispatching steps. Without this, _skip_conditions stays
         # empty and skip_if expressions are never checked.
@@ -134,7 +141,8 @@ class PlanBootstrapper:
 
     def _flatten(self) -> list[tuple[str, Condition | None]]:
         result: list[tuple[str, Condition | None]] = []
-        self._flatten_items(self._plan.steps, result, 0)
+        self._positions.clear()
+        self._flatten_items(self._plan.steps, result, 0, None)
         return result
 
     def _flatten_items(
@@ -142,17 +150,24 @@ class PlanBootstrapper:
         items: list[YamlStep | YamlLoop],
         result: list[tuple[str, Condition | None]],
         depth: int,
+        parent_id: str | None = None,
     ) -> None:
         if depth > _MAX_RECURSION_DEPTH:
             raise RecursionError(
                 f"YamlLoop nesting exceeds max depth {_MAX_RECURSION_DEPTH}"
             )
-        for item in items:
+        for order, item in enumerate(items):
             if isinstance(item, YamlStep):
                 result.append((item.id, self._step_condition(item)))
+                self._positions[item.id] = StepPosition(
+                    parent=parent_id, order=order, depth=depth
+                )
             else:
                 result.append((item.id, self._loop_condition(item)))
-                self._flatten_items(item.steps, result, depth + 1)
+                self._positions[item.id] = StepPosition(
+                    parent=parent_id, order=order, depth=depth
+                )
+                self._flatten_items(item.steps, result, depth + 1, item.id)
 
     @staticmethod
     def _step_condition(step: YamlStep) -> Condition | None:
@@ -323,6 +338,11 @@ class JetStreamWorker:
             await self._handle_inject_fault(run_id, msg, payload)
             return
 
+        # T40：调试步进模式同样需要结构化回复（未知执行/非法模式/未知目标）
+        if action == "step_control":
+            await self._handle_step_control(run_id, msg, payload)
+            return
+
         if self._current_execution_id != run_id:
             return
 
@@ -400,6 +420,81 @@ class JetStreamWorker:
             "action": "inject_fault",
             "fault_id": rule.fault_id,
             "layer": rule.layer,
+        })
+
+    async def _handle_step_control(
+        self, run_id: str, msg: Any, payload: dict[str, Any],
+    ) -> None:
+        """T40：把调试步进模式（§8.4 StepMode）武装到正在执行的调度器。
+
+        复用既有 cmd 控制主题（与 pause/resume 同一 ``ate.control.{run_id}``），
+        经 ``ScannerScheduler.arm_step_mode`` 设置单步状态后放行派发门；
+        调度器在停靠点重新自行暂停。成功或失败均通过 NATS request-reply
+        回送结构化 JSON（与 inject_fault 相同的回复约定）。
+        """
+
+        async def _reply(body: dict[str, Any]) -> None:
+            respond = getattr(msg, "respond", None)
+            if respond is None:
+                return
+            try:
+                await respond(json.dumps(body).encode("utf-8"))
+            except Exception as e:  # 回复失败不影响执行主流程
+                logger.warning("step_control reply failed for run %s: %s", run_id, e)
+
+        if self._current_execution_id != run_id or self._current_scheduler is None:
+            await _reply({"status": "error", "error": "no_active_execution",
+                          "run_id": run_id})
+            return
+
+        scheduler = self._current_scheduler
+        mode = payload.get("mode")
+        target = payload.get("target_step_id")
+
+        if not isinstance(mode, str) or mode not in (
+            "over", "into", "out", "run_to_cursor",
+        ):
+            await _reply({
+                "status": "error",
+                "error": "invalid_mode",
+                "detail": f"mode must be one of over|into|out|run_to_cursor, got {mode!r}",
+            })
+            return
+
+        if mode == "run_to_cursor":
+            if not isinstance(target, str) or not target:
+                await _reply({
+                    "status": "error",
+                    "error": "malformed_target",
+                    "detail": "run_to_cursor requires a non-empty target_step_id",
+                })
+                return
+            registry = scheduler._registry
+            if not registry.has_step(target):
+                await _reply({
+                    "status": "error",
+                    "error": "unknown_target",
+                    "detail": f"target step {target!r} is not part of this plan",
+                    "run_id": run_id,
+                })
+                return
+
+        try:
+            scheduler.arm_step_mode(mode, target_step_id=target)
+        except ValueError as e:
+            await _reply({"status": "error", "error": "invalid_mode",
+                          "detail": str(e)})
+            return
+
+        logger.info(
+            "Step mode '%s' armed on execution %s (target=%s)",
+            mode, run_id, target,
+        )
+        await _reply({
+            "status": "ok",
+            "action": "step_control",
+            "mode": mode,
+            "target_step_id": target if mode == "run_to_cursor" else None,
         })
 
     async def _abort_current(self) -> None:
