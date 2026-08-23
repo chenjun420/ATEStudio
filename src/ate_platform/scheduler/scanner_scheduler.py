@@ -34,7 +34,7 @@ from .condition_evaluator import ConditionEvaluator
 from .event_bus import Event, EventBus, EventType
 from .resource_manager import ResourceManager
 from .step_registry import StepRegistry
-from .uut_sync import UUTManager
+from .uut_sync import UUTManager, UUTState
 from .variable_space import VariableSpace
 
 # Sentinel for "no event loop available" in _schedule_dispatch
@@ -164,6 +164,11 @@ class ScannerScheduler:
         # - _affinity_claims: uut_id → 已派发未终态的 step_id（同 UUT 串行化）
         self._uut_affinities: dict[str, str] = {}
         self._affinity_claims: dict[str, str] = {}
+
+        # T3 DSL BARRIER 步骤注册表：step_id → barrier_name
+        # （register_barrier_steps；派发后由 _run_barrier_step 驱动同步）
+        self._barrier_steps: dict[str, str] = {}
+        self._barrier_default_timeout: float = 60.0
 
         # Step executor — defaults to ProcessStepExecutor
         if step_executor is not None:
@@ -516,6 +521,34 @@ class ScannerScheduler:
                     raise ValueError(msg)
         self._uut_affinities.update(affinities)
 
+    def register_barrier_steps(
+        self,
+        barriers: dict[str, str],
+        *,
+        default_timeout: float = 60.0,
+    ) -> None:
+        """Register DSL BARRIER steps（T3）。
+
+        Each entry maps step_id → barrier_name（SyncBarrier 分组名）。当
+        这样的步骤被派发（响应式或看门狗路径）时，调度器在 STEP_STARTED
+        之后调用 :meth:`UUTManager.wait_barrier` 驱动全池同步 —— 屏障
+        参与者始终是管理器内的全部 UUT，满员放行、超时缺员按失败处理。
+
+        Args:
+            barriers: Mapping of step_id to barrier name.
+            default_timeout: 每次屏障等待的默认超时秒数。
+
+        Raises:
+            ValueError: If a barrier name is empty/whitespace — plan
+                validation fails fast before start() (T2 fail-fast style).
+        """
+        for step_id, name in barriers.items():
+            if not name or not name.strip():
+                msg = f"Step '{step_id}' declares an empty barrier_name"
+                raise ValueError(msg)
+        self._barrier_steps = dict(barriers)
+        self._barrier_default_timeout = default_timeout
+
     def _can_schedule(self, step_id: str) -> bool:
         """UUT-affinity readiness gate（T2，_scan_ready/_can_schedule 语义）。
 
@@ -727,6 +760,13 @@ class ScannerScheduler:
             self._notified_ready.add(step_id)
             self._last_dispatch_time = __import__("time").time()
 
+            # T3：BARRIER 步骤派发即驱动全池同步（复用 UUTManager.wait_barrier）。
+            # 必须在 notified_ready 登记之后：屏障结果经状态事件内联路由，
+            # 终态分支要从 notified_ready/pending_dispatch 摘除本步骤，
+            # repeat 策略置回的 PENDING 才能被下一次扫描重新派发。
+            if step_id in self._barrier_steps:
+                await self._run_barrier_step(step_id)
+
             logger.debug("Emergency scan dispatched: %s", step_id)
 
     def _schedule_dispatch_for_key(self, source_key: str) -> None:
@@ -855,6 +895,10 @@ class ScannerScheduler:
                 EventType.STEP_STARTED,
                 event_data,
             )
+
+            # T3：BARRIER 步骤派发即驱动全池同步（复用 UUTManager.wait_barrier）
+            if step_id in self._barrier_steps:
+                await self._run_barrier_step(step_id)
 
             logger.debug("Reactive dispatch: %s", step_id)
         except Exception as e:
@@ -1105,6 +1149,87 @@ class ScannerScheduler:
             _ = await self.handle_step_result(step_id, StepStatus.FAILED)
             return True
         return False
+
+    async def _run_barrier_step(self, step_id: str) -> None:
+        """驱动已派发的 BARRIER 步骤完成多 UUT 同步（T3，§6.3.7）。
+
+        复用 :meth:`UUTManager.wait_barrier` / ``SyncBarrier`` —— 调度器
+        只负责**驱动到达**，绝不重新实现屏障逻辑：
+
+        - 屏障参与者始终是管理器内的全部 UUT（wait_barrier 内部以
+          全池 id 集合构造 SyncBarrier）；
+        - 空闲 UUT 各自一线程并发到达（``threading.Condition`` 的阻塞
+          等待放在工作线程，不卡事件循环）；
+        - 忙态 UUT 正在别处执行、无法到达 —— 是天然的缺员；
+        - 超时强制解除：已到达者放行继续；缺员 UUT 标记 FAILED
+          （wait_barrier 内部标非忙缺员，忙态缺员在此补标）；
+        - 满员/超时后屏障被消费清理，同名屏障可在后续同步点复用。
+
+        结果路由与既有失败路径一致：成功置 PASSED；超时缺员发布
+        STEP_FAILED 并经 :meth:`handle_step_result` 决策矩阵处理
+        （repeat/retry 策略照常生效）。
+
+        Args:
+            step_id: 已派发的 BARRIER 步骤标识。
+        """
+        barrier_name = self._barrier_steps.get(step_id)
+        manager = self._uut_manager
+        if manager is None or not barrier_name:
+            # 未接管理器：无同步对象，直通通过（与 T2 未接直通语义一致）
+            logger.debug("Barrier step %s has no UUT pool — pass-through", step_id)
+            self._registry.update_status(step_id, StepStatus.PASSED)
+            _ = await self.handle_step_result(step_id, StepStatus.PASSED)
+            return
+
+        timeout = self._barrier_default_timeout
+        idle_ids: list[str] = []
+        for uid in manager.uut_ids:
+            uut = manager.get(uid)
+            if uut is None or not uut.busy:
+                idle_ids.append(uid)
+
+        if not idle_ids:
+            # 全池皆忙：无人能到达，立即按缺员失败处理（不空等超时窗口）
+            missing = set(manager.uut_ids)
+        else:
+            results = await asyncio.gather(
+                *(
+                    asyncio.to_thread(manager.wait_barrier, barrier_name, uid, timeout)
+                    for uid in idle_ids
+                )
+            )
+            missing: set[str] = set()
+            for result in results:
+                missing |= result.missing
+
+        if not missing:
+            # 全员到达 → 步骤通过（状态事件同步触发依赖派发与占用释放）
+            self._registry.update_status(step_id, StepStatus.PASSED)
+            _ = await self.handle_step_result(step_id, StepStatus.PASSED)
+            return
+
+        # 缺员兜底标记：wait_barrier 内部只标非忙缺员；忙态缺员在此补标
+        for uid in sorted(missing):
+            uut = manager.get(uid)
+            if uut is not None and uut.state != UUTState.FAILED:
+                uut.finish(passed=False)
+                uut.last_error = f"Barrier '{barrier_name}' timeout"
+
+        error = f"Barrier '{barrier_name}' timeout: missing {sorted(missing)}"
+        logger.warning("Barrier step %s failed: %s", step_id, error)
+        try:
+            self._registry.update_status(step_id, StepStatus.FAILED)
+        except KeyError:
+            self._registry.register(step_id)
+            self._registry.update_status(step_id, StepStatus.FAILED)
+
+        from shared.events import StepFailedData
+
+        await self._event_bus.publish(
+            EventType.STEP_FAILED,
+            asdict(StepFailedData(step_id=step_id, error=error)),
+        )
+        _ = await self.handle_step_result(step_id, StepStatus.FAILED)
 
     async def _handle_step_skipped(self, step_id: str, reason: str) -> None:
         """Mark a step as SKIPPED and publish the STEP_SKIPPED event.
