@@ -1,5 +1,7 @@
 import http from './interceptor'
 
+import type { TopologySimulateInit } from '@/utils/topologySimulation'
+
 const api = http
 
 // ─── Simulation tiers (D7 - 3-tier simulation) ──────────────────────────────
@@ -45,6 +47,9 @@ export interface SimulationRequest {
   seed?: number
   /** 故障注入规则列表（§7.7.2 fault_injection 段）。 */
   fault_config?: Array<Record<string, unknown>>
+  /** 拓扑驱动仿真初始化段（§8.3.8 TopologyDrivenSimulation，T31）。
+   *  由前端从当前拓扑派生 GPIB 网关/TCP 设备；后端接线中（T44）。 */
+  topology_init?: TopologySimulateInit
 }
 
 /**

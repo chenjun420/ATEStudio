@@ -44,6 +44,7 @@ import {
   listBreakpoints,
   type DebugBreakpoint,
 } from '@/api/debug'
+import { useTopologySimulation } from '@/composables/useTopologySimulation'
 
 // ─── 仿真层级/噪声选项（与 useSimulation 对齐）──────────────────────────────
 
@@ -90,6 +91,9 @@ const breakpoints = ref<DebugBreakpoint[]>([])
 const bpDialogVisible = ref(false)
 const bpForm = ref({ step_id: '', condition: '', enabled: true })
 const bpLoading = ref(false)
+
+// 拓扑驱动仿真初始化（T31，§8.3.8）：启动前校验链路并派生 GPIB/TCP 初始化段
+const { validateBeforeStart, buildInitSection } = useTopologySimulation()
 
 // ─── 计算 ──────────────────────────────────────────────────────────────────
 
@@ -145,6 +149,7 @@ async function startSimulation() {
     ElMessage.warning('请先创建执行（选择序列 → 创建执行）')
     return
   }
+  if (!(await validateBeforeStart())) return
   running.value = true
   error.value = null
   result.value = null
@@ -157,6 +162,7 @@ async function startSimulation() {
       bias: bias.value,
       seed: seed.value ?? undefined,
       fault_config: faultRules.value.length ? faultRules.value : undefined,
+      topology_init: buildInitSection(),
     }
     const res = await runSimulation(runId.value, request)
     result.value = res
