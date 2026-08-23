@@ -11,6 +11,8 @@ JetStreamWorker instances via the ``ate-workers`` JetStream KV bucket:
 - ``PUT /api/v1/workers/{worker_id}/config/{key}`` — update a config key.
 - ``POST /api/v1/workers/{worker_id}/sync`` — trigger version sync.
 - ``POST /api/v1/workers/{worker_id}/restart`` — trigger worker restart.
+- ``GET /api/v1/workers/{worker_id}/version-check`` — compare tagged
+  script versions against Git HEAD.
 """
 
 import json
@@ -24,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ate_cloud.db import get_db
 from ate_cloud.models.worker_heartbeat import WorkerHeartbeat
+from ate_cloud.schemas.script import WorkerVersionCheckResponse, WorkerVersionDiff
 from ate_cloud.schemas.worker import (
     WorkerHealthResponse,
     WorkerHeartbeatResponse,
@@ -440,3 +443,40 @@ async def restart_worker(
         ) from e
 
     return {"status": "restart signal sent", "worker_id": worker_id}
+
+
+@router.get("/{worker_id}/version-check", response_model=WorkerVersionCheckResponse)
+async def check_worker_version(
+    worker_id: str,
+    request: Request,
+    versioning: Annotated[ScriptVersioningService, Depends(_get_versioning_service)],
+) -> WorkerVersionCheckResponse:
+    """GET /api/v1/workers/{worker_id}/version-check — compare tags to HEAD.
+
+    Reads the worker's script version tags from the ``ate-scripts``
+    JetStream KV bucket and compares each tagged commit hash against the
+    current Git HEAD of the scripts repository.
+
+    Unlike ``sync``/``restart`` this is a read-only diagnostic and does
+    not require the worker to be currently registered — an offline
+    node's staleness is exactly what an operator wants to inspect.
+    """
+    nc = getattr(request.app.state, "nc", None)
+    if nc is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="NATS client not available",
+        )
+
+    try:
+        diffs = await versioning.check_worker_version(worker_id, nc.jetstream())
+    except RuntimeError as e:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(e),
+        ) from e
+
+    return WorkerVersionCheckResponse(
+        worker_id=worker_id,
+        scripts=[WorkerVersionDiff.model_validate(d) for d in diffs],
+    )
