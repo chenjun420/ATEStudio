@@ -5,6 +5,7 @@ import { useI18n } from 'vue-i18n'
 import { useApps } from '@/composables/useApps'
 import { useAuth } from '@/composables/useAuth'
 import PasswordChange from '@/views/PasswordChange.vue'
+import OfflineStatusIndicator from '@/components/OfflineStatusIndicator.vue'
 import {
   Monitor,
   Connection,
@@ -169,6 +170,9 @@ function handleCommand(command: string): void {
       </nav>
 
       <div class="header-right">
+        <!-- T43: 全局离线状态（badge / 待上传 / 缓存健康 / 手动同步） -->
+        <OfflineStatusIndicator />
+
         <el-button text class="home-btn" @click="goHome">
           <el-icon><ArrowLeft /></el-icon>
           <span>{{ t('common.home') }}</span>
