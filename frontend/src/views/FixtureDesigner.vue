@@ -37,6 +37,7 @@ import { useTopologyRuntimeStore } from '@/stores/topologyRuntime'
 import RelayMatrixEditor from '@/components/RelayMatrixEditor.vue'
 import RouteManagementPanel from '@/components/RouteManagementPanel.vue'
 import LinkFaultContextMenu from '@/components/LinkFaultContextMenu.vue'
+import FaultSuspectPanel from '@/components/FaultSuspectPanel.vue'
 import { useFaultInjection, type LinkFaultType } from '@/composables/useFaultInjection'
 import {
   createFixtureTopology,
@@ -654,6 +655,18 @@ async function onFaultSelect(faultType: LinkFaultType) {
   }
 }
 
+// 疑似故障卡片（T33）：点击卡片 → 画布上强调该链路（故障红加粗描边，§8.3.7）
+function onSelectSuspectLink(linkId: string) {
+  const g = graph.value
+  if (!g || !linkId) return
+  const cell = g.getCellById(linkId)
+  if (!cell || !cell.isEdge()) return
+  cell.attr('line/stroke', '#F56C6C')
+  cell.attr('line/strokeWidth', 4)
+  cell.attr('line/strokeDasharray', '')
+  cell.attr('line/opacity', 1)
+}
+
 // 新建空拓扑
 function openCreateDialog() {
   createForm.value = { name: '', version: '1.0', product_model: '', description: '' }
@@ -823,14 +836,8 @@ watch(
           </div>
         </template>
 
-        <h4>故障</h4>
-        <el-empty v-if="topologyStore.faults.length === 0" description="无故障" :image-size="50" />
-        <div v-for="(f, i) in topologyStore.faults" :key="i" class="issue error">
-          <el-tag size="small" :type="f.severity === 'critical' ? 'danger' : f.severity === 'warning' ? 'warning' : 'danger'">
-            {{ f.type }}
-          </el-tag>
-          <span>{{ f.message }}</span>
-        </div>
+        <h4>故障定位建议</h4>
+        <FaultSuspectPanel :faults="topologyStore.faults" @select-link="onSelectSuspectLink" />
       </aside>
     </div>
 
