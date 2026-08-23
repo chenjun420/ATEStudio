@@ -255,6 +255,56 @@ class ManualFaultResponse(BaseModel):
     fault_id: str
 
 
+class BreakpointCreateRequest(BaseModel):
+    """Request body for POST /api/v1/executions/{run_id}/breakpoints (T39).
+
+    §8.4 typed breakpoint: kind selects the match semantics, target is the
+    match key and condition is a simpleeval-subset expression evaluated
+    SERVER-SIDE only (never client-side). ``condition`` is non-empty ONLY
+    for the ``condition`` kind — enforced in BreakpointRegistry validation.
+
+    Attributes:
+        kind: 断点类型（step / instrument_call / variable_change / condition）。
+        target: 匹配目标（步骤 ID / resource.method / scope.key / "*"）。
+        condition: 条件表达式（仅 condition 类型允许，创建时做语法校验）。
+    """
+
+    kind: Literal["step", "instrument_call", "variable_change", "condition"]
+    target: str = Field(..., min_length=1)
+    condition: str | None = None
+
+
+class BreakpointResponse(BaseModel):
+    """Response for a single typed breakpoint (T39)."""
+
+    ok: bool = True
+    id: str
+    run_id: str
+    kind: str
+    target: str
+    condition: str | None = None
+    enabled: bool = True
+
+
+class BreakpointListResponse(BaseModel):
+    """Response for GET /api/v1/executions/{run_id}/breakpoints (T39)."""
+
+    items: list[BreakpointResponse] = Field(default_factory=list)
+    total: int = 0
+
+
+class BreakpointDeleteResponse(BaseModel):
+    """Idempotent DELETE response for typed breakpoints (T39).
+
+    Attributes:
+        ok: 请求受理成功标志（幂等，重复删除仍为 true）。
+        removed: 是否实际移除了断点（首次 true，重复 false）。
+    """
+
+    ok: bool = True
+    removed: bool
+
+
 class SimulationRequest(BaseModel):
     """Request body for POST /api/v1/executions/{run_id}/simulate.
 

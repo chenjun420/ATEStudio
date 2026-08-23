@@ -127,11 +127,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # bridges ATE_STATUS JetStream messages to DB updates + SSE queue.
     if _nats_client is not None:
         from ate_cloud.db import async_session_factory
+        from ate_cloud.services.breakpoint_registry import BreakpointRegistry
 
+        app.state.breakpoint_registry = BreakpointRegistry()
         status_relay = ExecutionStatusRelay(
             nats_client=_nats_client,
             sse_bridge=bridge,
             async_session_factory=async_session_factory,
+            breakpoint_registry=app.state.breakpoint_registry,
         )
         app.state.status_relay = status_relay
         app.state.status_relay_task = asyncio.create_task(status_relay.start())

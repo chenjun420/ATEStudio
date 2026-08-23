@@ -25,6 +25,12 @@ from ate_cloud.config import settings
 from ate_cloud.db import get_db
 from ate_cloud.models.execution import Execution
 from ate_cloud.nats.sse_bridge import SSEBridge
+from ate_cloud.services.breakpoint_registry import (
+    BreakpointRegistry,
+    TypedBreakpoint,
+    new_breakpoint_id,
+    validate_breakpoint,
+)
 from ate_cloud.services.execution_dispatch import (
     ExecutionDispatchError,
     ExecutionDispatchService,
@@ -34,6 +40,10 @@ from ate_cloud.services.plan_materializer import (
     PlanMaterializeError,
 )
 from ate_cloud.schemas.execution import (
+    BreakpointCreateRequest,
+    BreakpointDeleteResponse,
+    BreakpointListResponse,
+    BreakpointResponse,
     ExecutionAbortResponse,
     ExecutionControlResponse,
     ExecutionCreate,
@@ -82,6 +92,26 @@ def get_sse_bridge(request: Request) -> SSEBridge:
 # Type alias for SSEBridge dependency (avoids B008 ruff warning).
 # Defined after get_sse_bridge so the Annotated alias can reference it.
 BridgeDep = Annotated[SSEBridge, Depends(get_sse_bridge)]
+
+
+def get_breakpoint_registry(request: Request) -> BreakpointRegistry:
+    """Get (lazily creating) the typed breakpoint registry from app state (T39).
+
+    Args:
+        request: The incoming FastAPI request.
+
+    Returns:
+        BreakpointRegistry instance attached to app.state.
+    """
+    registry = getattr(request.app.state, "breakpoint_registry", None)
+    if not isinstance(registry, BreakpointRegistry):
+        registry = BreakpointRegistry()
+        request.app.state.breakpoint_registry = registry
+    return registry
+
+
+# Type alias for the breakpoint registry dependency (avoids B008).
+RegistryDep = Annotated[BreakpointRegistry, Depends(get_breakpoint_registry)]
 
 
 @router.get("/{run_id}/events", response_class=EventSourceResponse)
@@ -1142,3 +1172,106 @@ async def inject_manual_fault(
         fault_type=fault_data.fault_type,
         fault_id=fault_id,
     )
+
+
+# ---------------------------------------------------------------------------
+# T39 typed simulation breakpoints (§8.4)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/{run_id}/breakpoints", response_model=BreakpointResponse)
+async def create_breakpoint(
+    run_id: str,
+    bp_data: BreakpointCreateRequest,
+    db: DBSession,
+    registry: RegistryDep,
+) -> BreakpointResponse:
+    """Register a typed breakpoint on a running execution (T39, §8.4).
+
+    Four kinds: ``step`` (step id) | ``instrument_call`` (resource.method) |
+    ``variable_change`` (scope.key) | ``condition`` (simpleeval-subset
+    expression evaluated server-side only). Validation errors surface as 422;
+    unknown runs 404; terminal-state runs 409.
+
+    Args:
+        run_id: The execution run identifier.
+        bp_data: kind + target (+ condition for the condition kind).
+        db: Database session.
+        registry: Typed breakpoint registry.
+
+    Returns:
+        BreakpointResponse with the generated breakpoint id.
+
+    Raises:
+        HTTPException: 404 unknown run / 409 terminal state / 422 validation.
+    """
+    result = await db.execute(select(Execution).where(Execution.id == run_id))
+    execution = result.scalar_one_or_none()
+    if not execution:
+        raise HTTPException(status_code=404, detail="Execution not found")
+    if execution.status in _TERMINAL_STATES:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Execution has no active execution to arm breakpoints on "
+                f"(status: {execution.status})"
+            ),
+        )
+
+    try:
+        validate_breakpoint(bp_data.kind, bp_data.target, bp_data.condition)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+
+    bp = TypedBreakpoint(
+        id=new_breakpoint_id(),
+        run_id=run_id,
+        kind=bp_data.kind,
+        target=bp_data.target.strip(),
+        condition=(bp_data.condition or "").strip() or None,
+    )
+    registry.add(bp)
+    return BreakpointResponse(**bp.to_dict())
+
+
+@router.get("/{run_id}/breakpoints", response_model=BreakpointListResponse)
+async def list_breakpoints(
+    run_id: str,
+    registry: RegistryDep,
+) -> BreakpointListResponse:
+    """List typed breakpoints registered for a run (T39).
+
+    Args:
+        run_id: The execution run identifier.
+        registry: Typed breakpoint registry.
+
+    Returns:
+        BreakpointListResponse with items + total.
+    """
+    items = registry.list_for_run(run_id)
+    return BreakpointListResponse(
+        items=[BreakpointResponse(**bp.to_dict()) for bp in items],
+        total=len(items),
+    )
+
+
+@router.delete("/{run_id}/breakpoints/{bp_id}", response_model=BreakpointDeleteResponse)
+async def delete_breakpoint(
+    run_id: str,
+    bp_id: str,
+    registry: RegistryDep,
+) -> BreakpointDeleteResponse:
+    """Remove a typed breakpoint — idempotent (T39).
+
+    Deleting an unknown breakpoint still returns 200 with removed=false so
+    client retries never fail.
+
+    Args:
+        run_id: The execution run identifier.
+        bp_id: The breakpoint to remove.
+        registry: Typed breakpoint registry.
+
+    Returns:
+        BreakpointDeleteResponse with removed flag.
+    """
+    return BreakpointDeleteResponse(ok=True, removed=registry.remove(run_id, bp_id))

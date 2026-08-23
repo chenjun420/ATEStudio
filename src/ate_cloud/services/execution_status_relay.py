@@ -69,6 +69,7 @@ class ExecutionStatusRelay:
         nats_client: NatsClient,
         sse_bridge: SSEBridge,
         async_session_factory: Callable[[], AsyncSession],
+        breakpoint_registry: Any | None = None,
     ) -> None:
         """Initialize the relay.
 
@@ -78,10 +79,15 @@ class ExecutionStatusRelay:
             sse_bridge: The SSE bridge used to push events to the local queue.
             async_session_factory: Factory that returns a new ``AsyncSession``
                 for DB updates. Used as ``async with factory() as session:``.
+            breakpoint_registry: Optional typed breakpoint registry (T39).
+                When provided, every status event is matched against the run's
+                breakpoints; hits publish a SSE BREAKPOINT_HIT event and reuse
+                the existing pause control contract.
         """
         self._nc = nats_client
         self._sse_bridge = sse_bridge
         self._session_factory = async_session_factory
+        self._breakpoints = breakpoint_registry
         self._psub: JetStreamContext.PullSubscription | None = None
         self._running = False
 
@@ -172,6 +178,12 @@ class ExecutionStatusRelay:
             await self._update_db(event)
             run_id = event.get("run_id", "")
             await self._sse_bridge.push_to_queue_only(run_id, event)
+            if self._breakpoints is not None:
+                from ate_cloud.services.breakpoint_registry import handle_status_event
+
+                await handle_status_event(
+                    self._breakpoints, self._sse_bridge, self._nc, event,
+                )
             await msg.ack()
         except Exception as e:
             logger.error(
