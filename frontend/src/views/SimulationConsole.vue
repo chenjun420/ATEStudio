@@ -7,7 +7,7 @@
  *   - 执行控制：选择序列 → 创建执行（run_id）→ 启动仿真 → 清空结果
  *   - 故障注入面板：配置故障注入规则（§7.7.2）随 simulate 请求下发
  *   - 调用日志：simulate 返回的决策/测量事件表格，按类型筛选
- *   - 断点管理：debug breakpoints CRUD（步骤级，需 ATE_DEV_MODE）
+ *   - 断点管理：类型化断点 CRUD（T39 §8.4：step/instrument_call/variable_change/condition）+ 命中暂停/恢复
  *   - 仿真报告：状态 / 耗时 / 统计摘要（§8.4 仿真报告）
  *
  * Route: /monitor/simulation
@@ -27,7 +27,6 @@ import {
   ElTable,
   ElTableColumn,
   ElTag,
-  ElSwitch,
 } from 'element-plus'
 import { Delete, VideoPlay, RefreshLeft } from '@element-plus/icons-vue'
 import { fetchSequences, type Sequence } from '@/api/sequences'
@@ -44,12 +43,13 @@ import {
   type SimulationResponse,
   type SimulationTier,
 } from '@/api/simulation'
+// T39 类型化断点：CRUD + BREAKPOINT_HIT SSE 状态流转封装在组合式函数中
+import { useSimulationBreakpoints } from '@/composables/useSimulationBreakpoints'
 import {
-  createBreakpoint,
-  deleteBreakpoint,
-  listBreakpoints,
-  type DebugBreakpoint,
-} from '@/api/debug'
+  BREAKPOINT_KINDS,
+  BREAKPOINT_KIND_LABELS,
+  type BreakpointForm,
+} from '@/utils/breakpointTypes'
 import { useTopologySimulation } from '@/composables/useTopologySimulation'
 import InstrumentGantt from '@/components/InstrumentGantt.vue'
 import ExecutionDiffPanel from '@/components/ExecutionDiffPanel.vue'
@@ -104,11 +104,20 @@ const faultRules = ref<Array<{ type: string; count?: number; probability?: numbe
 const faultDialogVisible = ref(false)
 const faultForm = ref({ type: 'network_delay', count: 1, probability: 1.0, condition: '', action: 'inject' })
 
-// 断点
-const breakpoints = ref<DebugBreakpoint[]>([])
+// T39 类型化断点（§8.4）：kind+target+condition CRUD、命中暂停/恢复
+const {
+  items: breakpoints,
+  paused: bpPaused,
+  load: loadBreakpoints,
+  add: addTypedBreakpoint,
+  remove: removeTypedBreakpoint,
+  resume: resumeRun,
+  connect: connectBpStream,
+} = useSimulationBreakpoints((m, t) =>
+  t === 'success' ? ElMessage.success(m) : t === 'warning' ? ElMessage.warning(m) : ElMessage.info(m),
+)
 const bpDialogVisible = ref(false)
-const bpForm = ref({ step_id: '', condition: '', enabled: true })
-const bpLoading = ref(false)
+const bpForm = ref<BreakpointForm>({ kind: 'step', target: '', condition: '' })
 
 // 拓扑驱动仿真初始化（T31，§8.3.8）：启动前校验链路并派生 GPIB/TCP 初始化段
 const { validateBeforeStart, buildInitSection } = useTopologySimulation()
@@ -153,6 +162,7 @@ async function createAndStart() {
   try {
     const execution = await createExecution({ sequence_id: selectedSequenceId.value })
     runId.value = execution.id
+    connectBpStream(execution.id) // T39：监听 BREAKPOINT_HIT SSE
     ElMessage.success(`已创建执行 ${execution.id.slice(0, 8)}，可启动仿真`)
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
@@ -253,56 +263,26 @@ function removeFaultRule(index: number) {
   faultRules.value.splice(index, 1)
 }
 
-// ─── 断点 ──────────────────────────────────────────────────────────────────
+// ─── 断点（T39 类型化）─────────────────────────────────────────────────────
 
-async function loadBreakpoints() {
-  bpLoading.value = true
-  try {
-    const res = await listBreakpoints(runId.value || undefined)
-    breakpoints.value = res.items
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e)
-    // 403 表示未开启 dev mode——静默提示
-    ElMessage.warning(`加载断点失败（可能未开启 ATE_DEV_MODE）: ${msg}`)
-  } finally {
-    bpLoading.value = false
-  }
-}
-
-async function addBreakpoint() {
-  if (!bpForm.value.step_id) {
-    ElMessage.warning('请输入步骤 ID')
+async function submitBreakpoint() {
+  const res = await addTypedBreakpoint(runId.value, bpForm.value)
+  if (!res.valid) {
+    ElMessage.warning(res.error ?? '断点配置无效')
     return
   }
-  try {
-    await createBreakpoint({
-      session_id: runId.value || null,
-      step_id: bpForm.value.step_id,
-      condition: bpForm.value.condition || null,
-      enabled: bpForm.value.enabled,
-    })
-    bpDialogVisible.value = false
-    bpForm.value = { step_id: '', condition: '', enabled: true }
-    await loadBreakpoints()
-    ElMessage.success('断点已创建')
-  } catch (e) {
-    ElMessage.error(`创建断点失败（需 ATE_DEV_MODE=true）: ${e instanceof Error ? e.message : String(e)}`)
-  }
+  bpDialogVisible.value = false
+  bpForm.value = { kind: 'step', target: '', condition: '' }
+  ElMessage.success('断点已创建')
 }
 
-async function removeBreakpoint(id: string) {
-  try {
-    await deleteBreakpoint(id)
-    await loadBreakpoints()
-    ElMessage.success('断点已删除')
-  } catch (e) {
-    ElMessage.error(`删除断点失败: ${e instanceof Error ? e.message : String(e)}`)
-  }
+async function deleteBreakpoint(id: string) {
+  await removeTypedBreakpoint(runId.value, id)
+  ElMessage.success('断点已删除')
 }
 
 onMounted(() => {
   loadSequences()
-  loadBreakpoints()
 })
 </script>
 
@@ -321,6 +301,8 @@ onMounted(() => {
         <el-icon><RefreshLeft /></el-icon>&nbsp;清空
       </el-button>
       <el-tag v-if="runId" type="info" size="default">run_id: {{ runId.slice(0, 8) }}</el-tag>
+      <el-tag v-if="bpPaused" type="warning" size="default">⏸ 断点暂停{{ lastHit ? `：${lastHit.target}` : '' }}</el-tag>
+      <el-button v-if="bpPaused" type="warning" @click="resumeRun(runId)">继续执行</el-button>
     </div>
 
     <div class="workspace">
@@ -381,8 +363,8 @@ onMounted(() => {
           </template>
           <el-empty v-if="breakpoints.length === 0" description="无断点" :image-size="40" />
           <div v-for="bp in breakpoints" :key="bp.id" class="fault-rule">
-            <el-tag size="small" :type="bp.enabled ? 'warning' : 'info'">{{ bp.step_id || bp.node_id || bp.id }}</el-tag>
-            <el-button size="small" text type="danger" @click="removeBreakpoint(bp.id)">
+            <el-tag size="small" :type="bp.enabled ? 'warning' : 'info'">{{ BREAKPOINT_KIND_LABELS[bp.kind] }}·{{ bp.target }}</el-tag>
+            <el-button size="small" text type="danger" @click="deleteBreakpoint(bp.id)">
               <el-icon><Delete /></el-icon>
             </el-button>
           </div>
@@ -499,22 +481,24 @@ onMounted(() => {
       </template>
     </el-dialog>
 
-    <!-- 断点对话框 -->
+    <!-- 断点对话框（T39 类型化：kind+target+condition） -->
     <el-dialog v-model="bpDialogVisible" title="添加断点" width="440px">
       <el-form label-width="80px" size="default">
-        <el-form-item label="步骤 ID" required>
-          <el-input v-model="bpForm.step_id" placeholder="如 dmm1" />
+        <el-form-item label="类型" required>
+          <el-select v-model="bpForm.kind" style="width: 100%">
+            <el-option v-for="k in BREAKPOINT_KINDS" :key="k" :label="BREAKPOINT_KIND_LABELS[k]" :value="k" />
+          </el-select>
         </el-form-item>
-        <el-form-item label="条件">
-          <el-input v-model="bpForm.condition" placeholder="可选断点条件表达式" />
+        <el-form-item label="目标" required>
+          <el-input v-model="bpForm.target" placeholder="步骤ID / resource.method / scope.key / *" />
         </el-form-item>
-        <el-form-item label="启用">
-          <el-switch v-model="bpForm.enabled" />
+        <el-form-item v-if="bpForm.kind === 'condition'" label="条件" required>
+          <el-input v-model="bpForm.condition" placeholder="如 voltage > 3.0（仅服务端求值）" />
         </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="bpDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="addBreakpoint">添加</el-button>
+        <el-button type="primary" @click="submitBreakpoint">添加</el-button>
       </template>
     </el-dialog>
   </div>

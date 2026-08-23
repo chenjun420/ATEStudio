@@ -216,3 +216,61 @@ export async function injectManualFault(
   )
   return response.data
 }
+
+/**
+ * 类型化断点（T39，§8.4）：kind 决定匹配语义，condition 仅 condition 类型携带
+ * （表达式仅服务端求值）。
+ */
+export interface TypedBreakpoint {
+  id: string
+  run_id: string
+  kind: 'step' | 'instrument_call' | 'variable_change' | 'condition'
+  target: string
+  condition: string | null
+  enabled: boolean
+}
+
+export interface TypedBreakpointPayload {
+  kind: TypedBreakpoint['kind']
+  target: string
+  condition?: string
+}
+
+export interface BreakpointListResponse {
+  items: TypedBreakpoint[]
+  total: number
+}
+
+/**
+ * POST /api/v1/executions/{runId}/breakpoints - 注册类型化断点（T39）。
+ */
+export async function createTypedBreakpoint(
+  runId: string,
+  payload: TypedBreakpointPayload,
+): Promise<TypedBreakpoint> {
+  const response = await api.post<TypedBreakpoint>(`/executions/${runId}/breakpoints`, payload)
+  return response.data
+}
+
+/**
+ * GET /api/v1/executions/{runId}/breakpoints - 运行的断点列表（T39）。
+ */
+export async function listTypedBreakpoints(runId: string): Promise<BreakpointListResponse> {
+  const response = await api.get<BreakpointListResponse>(`/executions/${runId}/breakpoints`)
+  return response.data
+}
+
+/**
+ * DELETE /api/v1/executions/{runId}/breakpoints/{bpId} - 幂等删除断点（T39）。
+ */
+export async function deleteTypedBreakpoint(runId: string, bpId: string): Promise<void> {
+  await api.delete(`/executions/${runId}/breakpoints/${bpId}`)
+}
+
+/**
+ * POST /api/v1/executions/{runId}/resume - 恢复暂停的执行（断点命中后继续）。
+ */
+export async function resumeExecution(runId: string): Promise<{ id: string; status: string }> {
+  const response = await api.post(`/executions/${runId}/resume`)
+  return response.data
+}

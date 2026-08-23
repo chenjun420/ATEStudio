@@ -391,7 +391,7 @@ class TestBreakpointHits:
     @pytest.mark.asyncio
     async def test_disabled_breakpoint_never_hits(self, db_session, client) -> None:
         """A disabled breakpoint does not fire even on a matching event."""
-        from ate_cloud.services.breakpoint_registry import handle_status_event
+        from ate_cloud.services.breakpoint_registry import BreakpointRegistry, handle_status_event
 
         await _insert_execution(db_session, "run-hit-disabled", status="RUNNING")
         created = (
@@ -414,3 +414,11 @@ class TestBreakpointHits:
             assert all(e["type"] != "BREAKPOINT_HIT" for e in self._drain(queue))
         finally:
             bridge.remove_queue("run-hit-disabled")
+
+    def test_breakpoint_hit_sse_category(self) -> None:
+        """BREAKPOINT_HIT maps to its own SSE `event:` name ("breakpoint")."""
+        from ate_cloud.nats.sse_bridge import _EVENT_TYPE_TO_SSE_CATEGORY
+
+        assert _EVENT_TYPE_TO_SSE_CATEGORY["BREAKPOINT_HIT"] == "breakpoint"
+        # Existing mappings untouched.
+        assert _EVENT_TYPE_TO_SSE_CATEGORY["EXECUTION_PAUSED"] == "event"

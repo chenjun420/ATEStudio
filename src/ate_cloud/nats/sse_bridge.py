@@ -37,6 +37,10 @@ _EVENT_TYPE_TO_SSE_CATEGORY: dict[str, str] = {
     et.value: EVENT_TYPE_CATEGORIES[et].value
     for et in EVENT_TYPE_CATEGORIES
 }
+# T39: BREAKPOINT_HIT gets its own SSE `event:` name ("breakpoint") so the
+# SimulationConsole can addEventListener('breakpoint'). Purely additive —
+# no existing type→category mapping is altered.
+_EVENT_TYPE_TO_SSE_CATEGORY["BREAKPOINT_HIT"] = "breakpoint"
 
 # Replay constants
 _REPLAY_BATCH_SIZE: int = 100
