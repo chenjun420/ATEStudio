@@ -31,7 +31,13 @@ import {
 } from 'element-plus'
 import { Delete, VideoPlay, RefreshLeft } from '@element-plus/icons-vue'
 import { fetchSequences, type Sequence } from '@/api/sequences'
-import { createExecution } from '@/api/executions'
+import {
+  createExecution,
+  fetchExecutionDiff,
+  listExecutions,
+  type ExecutionListItem,
+} from '@/api/executions'
+import type { DiffSummary } from '@/utils/diffView'
 import {
   runSimulation,
   type NoiseModel,
@@ -46,6 +52,7 @@ import {
 } from '@/api/debug'
 import { useTopologySimulation } from '@/composables/useTopologySimulation'
 import InstrumentGantt from '@/components/InstrumentGantt.vue'
+import ExecutionDiffPanel from '@/components/ExecutionDiffPanel.vue'
 
 // ─── 仿真层级/噪声选项（与 useSimulation 对齐）──────────────────────────────
 
@@ -82,6 +89,14 @@ const error = ref<string | null>(null)
 
 const eventFilter = ref<'all' | 'decision' | 'measurement'>('all')
 const ganttVisible = ref(false) // T36 仪器甘特时间线折叠开关
+
+// T37 运行对比（基线选择 + diff 摘要）
+const diffVisible = ref(false)
+const baselineRunId = ref('')
+const runs = ref<ExecutionListItem[]>([])
+const diffSummary = ref<DiffSummary | null>(null)
+const diffLoading = ref(false)
+const baselineOptions = computed(() => runs.value.filter((r) => r.id !== runId.value))
 
 // 故障注入规则
 const faultRules = ref<Array<{ type: string; count?: number; probability?: number; condition?: string; action?: string }>>([])
@@ -186,6 +201,35 @@ function clearResult() {
   error.value = null
   runId.value = ''
   selectedSequenceId.value = ''
+}
+
+// ─── 运行对比（T37）────────────────────────────────────────────────────────
+
+async function toggleDiff() {
+  diffVisible.value = !diffVisible.value
+  if (diffVisible.value && runs.value.length === 0) {
+    try {
+      runs.value = (await listExecutions(0, 50)).items
+    } catch {
+      ElMessage.error('加载历史运行失败')
+    }
+  }
+}
+
+async function loadDiff() {
+  if (!runId.value || !baselineRunId.value) {
+    ElMessage.warning('请先创建执行并选择基线运行')
+    return
+  }
+  diffLoading.value = true
+  try {
+    diffSummary.value = await fetchExecutionDiff(runId.value, baselineRunId.value)
+  } catch (e) {
+    diffSummary.value = null
+    ElMessage.error(`对比失败: ${e instanceof Error ? e.message : String(e)}`)
+  } finally {
+    diffLoading.value = false
+  }
 }
 
 // ─── 故障注入 ──────────────────────────────────────────────────────────────
@@ -376,6 +420,19 @@ onMounted(() => {
             {{ ganttVisible ? '收起仪器时间线 ▲' : '展开仪器时间线 ▼' }}
           </el-button>
           <InstrumentGantt v-if="ganttVisible && result" :events="result.events" />
+        </div>
+        <!-- T37 运行对比：选基线 → 拉取 ExecutionDiff 摘要 -->
+        <div class="gantt-section">
+          <el-button size="small" link type="primary" @click="toggleDiff">
+            {{ diffVisible ? '收起运行对比 ▲' : '展开运行对比 ▼' }}
+          </el-button>
+          <template v-if="diffVisible">
+            <el-select v-model="baselineRunId" placeholder="选择基线运行" size="small" filterable clearable style="width: 220px; margin: 4px 0">
+              <el-option v-for="r in baselineOptions" :key="r.id" :label="`${r.id.slice(0, 8)} · ${r.status}`" :value="r.id" />
+            </el-select>
+            <el-button size="small" type="primary" :loading="diffLoading" style="margin-left: 8px" @click="loadDiff">对比</el-button>
+            <ExecutionDiffPanel :summary="diffSummary" :loading="diffLoading" />
+          </template>
         </div>
       </main>
 

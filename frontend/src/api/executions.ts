@@ -1,4 +1,5 @@
 import http from './interceptor'
+import type { DiffSummary } from '@/utils/diffView'
 
 const api = http
 
@@ -151,5 +152,27 @@ export async function searchExecutions(
   params: ExecutionSearchRequest,
 ): Promise<ExecutionSearchResponse> {
   const response = await api.post<ExecutionSearchResponse>('/executions/search', params)
+  return response.data
+}
+
+/**
+ * ExecutionDiff summary envelope returned by the compare endpoint (T37).
+ */
+export type ExecutionDiffResponse = DiffSummary & {
+  run_id: string
+  baseline: string
+}
+
+/**
+ * Compare a run against a baseline run.
+ * GET /api/v1/executions/{runId}/diff?baseline={baseline}
+ */
+export async function fetchExecutionDiff(
+  runId: string,
+  baseline: string,
+): Promise<ExecutionDiffResponse> {
+  const response = await api.get<ExecutionDiffResponse>(`/executions/${runId}/diff`, {
+    params: { baseline },
+  })
   return response.data
 }

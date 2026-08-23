@@ -13,6 +13,7 @@ import asyncio
 import json
 import uuid
 from collections.abc import AsyncGenerator
+from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -20,6 +21,7 @@ from sqlalchemy import ColumnElement, String, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse, ServerSentEvent  # type: ignore[attr-defined]
 
+from ate_cloud.config import settings
 from ate_cloud.db import get_db
 from ate_cloud.models.execution import Execution
 from ate_cloud.nats.sse_bridge import SSEBridge
@@ -45,9 +47,11 @@ from ate_cloud.schemas.execution import (
     SimulationResponse,
     SimulationResultEvent,
 )
+from ate_platform.simulation.diff import ExecutionDiff
 from ate_platform.simulation.dry_run_scheduler import DryRunScheduler
 from ate_platform.simulation.full_chain_simulator import FullChainSimulator
 from ate_platform.simulation.instrument_simulator import NoiseConfig, NoiseModel
+from ate_platform.simulation.recording import RecordingInterceptor
 
 router = APIRouter(prefix="/executions", tags=["executions"])
 
@@ -844,6 +848,58 @@ async def force_next_execution(
         HTTPException: 409 if execution is already in a terminal state.
     """
     return await _control_execution(run_id, "force_next", db, bridge)
+
+
+@router.get("/{run_id}/diff")
+async def diff_execution(
+    run_id: str,
+    baseline: str,
+    db: DBSession,
+) -> dict[str, Any]:
+    """Compare a run against a baseline run (T37, v41-gap-analysis #37).
+
+    Loads both JSONL recordings from ``settings.recordings_dir`` using the
+    T10 finalize convention (``<recordings_dir>/<run_id>.jsonl``) and returns
+    the :meth:`ate_platform.simulation.diff.ExecutionDiff.compare` summary
+    verbatim (schema documented in that module docstring), enveloped with
+    ``run_id`` / ``baseline`` identity. ``exec_a`` is the baseline stream,
+    ``exec_b`` the candidate — so deltas read "candidate vs baseline".
+
+    Args:
+        run_id: Candidate execution run identifier.
+        baseline: Baseline execution run identifier.
+        db: Database session.
+
+    Returns:
+        ExecutionDiff summary dict plus ``run_id`` / ``baseline`` keys.
+
+    Raises:
+        HTTPException: 404 if either run is unknown or either recording
+            file is missing on disk.
+    """
+    for rid in (run_id, baseline):
+        result = await db.execute(select(Execution).where(Execution.id == rid))
+        if result.scalar_one_or_none() is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Execution '{rid}' not found",
+            )
+
+    recordings = Path(settings.recordings_dir)
+    baseline_path = recordings / f"{baseline}.jsonl"
+    candidate_path = recordings / f"{run_id}.jsonl"
+    for path in (baseline_path, candidate_path):
+        if not path.is_file():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Recording not found: {path}",
+            )
+
+    summary = ExecutionDiff.compare(
+        RecordingInterceptor.load(baseline_path),
+        RecordingInterceptor.load(candidate_path),
+    )
+    return {"run_id": run_id, "baseline": baseline, **summary}
 
 
 @router.post("/{run_id}/fault-injection", response_model=FaultInjectionResponse)

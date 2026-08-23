@@ -47,6 +47,15 @@ class Settings(BaseSettings):
     upload_queue_max_size: int = Field(default=1000, ge=1, description="Maximum number of entries in upload queue before pruning")
     upload_queue_max_age_seconds: int = Field(default=3600, ge=1, description="Maximum age in seconds before upload queue entries are pruned")
 
+    # Recordings directory — where edge RecordingInterceptor JSONL sessions land
+    # (T10 finalize convention: <recordings_dir>/<run_id>.jsonl; consumed by the
+    # T37 execution diff endpoint).
+    recordings_dir: str = Field(
+        default="/var/log/test_platform/recordings",
+        validation_alias="ATE_RECORDINGS_DIR",
+        description="Directory containing per-run JSONL recording files",
+    )
+
     # Simulation mode — when True, all drivers are created in SIM mode
     # (no PyVISA connections, simulated instrument responses)
     simulation_mode: bool = Field(
