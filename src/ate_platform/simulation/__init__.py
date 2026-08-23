@@ -16,11 +16,12 @@ Design principles:
 - Dataclass/Pydantic for all data structures (no bare dicts)
 """
 
+from .coverage import SimulationCoverage, merge_reports
 from .dry_run_scheduler import DryRunResult, DryRunScheduler, StepDecision
 from .fault_injector import (
     FaultAction,
-    FaultInjector,
     FaultInjectionError,
+    FaultInjector,
     FaultRule,
     InstrumentFaultError,
     NetworkFaultError,
@@ -46,5 +47,7 @@ __all__ = [
     "NoiseModel",
     "ProtocolFaultError",
     "SchedulerFaultError",
+    "SimulationCoverage",
     "StepDecision",
+    "merge_reports",
 ]
