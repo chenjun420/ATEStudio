@@ -109,6 +109,9 @@ ROUTER_MATRIX = [
     ("calibrations", "GET", "/api/v1/calibrations", 200),
     ("fixtures", "GET", "/api/v1/fixtures", 200),
     ("limits", "GET", "/api/v1/limits", 200),
+    # offline status: valid token passes auth; provider unconfigured in test
+    # app -> honest 503 (non-401 proves the mount-level JWT gate passed).
+    ("offline", "GET", "/api/v1/offline/status", 503),
     ("operator_checkpoints", "GET", "/api/v1/executions/nope/checkpoint/pending", 404),
     ("products", "GET", "/api/v1/products", 200),
     ("recordings", "GET", "/api/v1/executions/nope/recording", 404),
@@ -409,9 +412,9 @@ def test_all_protected_mounts_carry_security_dependency() -> None:
     protected = [m for m in mounts if "get_current_user" in _dep_names(m)]
     anonymous = [m for m in mounts if not _dep_names(m)]
 
-    # 23 protected mounts vs 5 exempt/already-protected mounts
+    # 24 protected mounts vs 5 exempt/already-protected mounts
     # (health, auth, users, rbac, apps).
-    assert len(protected) == 23
+    assert len(protected) == 24
     assert len(anonymous) == 5
 
     anonymous_routers = [_mounted(m) for m in anonymous]

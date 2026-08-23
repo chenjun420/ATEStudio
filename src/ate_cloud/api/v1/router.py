@@ -42,6 +42,7 @@ from ate_cloud.api.v1.health import router as health_router
 from ate_cloud.api.v1.limits import router as limits_router
 from ate_cloud.api.v1.node_flow_bindings import router as node_flow_bindings_router
 from ate_cloud.api.v1.node_templates import router as node_templates_router
+from ate_cloud.api.v1.offline import router as offline_router
 from ate_cloud.api.v1.operator_checkpoints import router as operator_checkpoints_router
 from ate_cloud.api.v1.products import router as products_router
 from ate_cloud.api.v1.rbac import router as rbac_router
@@ -77,6 +78,7 @@ _PROTECTED_ROUTERS = (
     faults_router,
     fixtures_router,
     limits_router,
+    offline_router,
     operator_checkpoints_router,
     products_router,
     recordings_router,
