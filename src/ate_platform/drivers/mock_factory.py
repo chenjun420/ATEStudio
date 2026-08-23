@@ -23,14 +23,20 @@ Configurable mock values:
 
 from __future__ import annotations
 
+import logging
 import random
 from typing import TYPE_CHECKING
 
 from ate_platform.drivers.base_hal import BaseDriver
 from ate_platform.drivers.base_mal import BaseAbstraction
+from ate_platform.drivers.mock.generic_mock import GenericMockSCPI, GenericMockTCP
+from ate_platform.drivers.mock.mock_gpib_gateway import register as _register_gpib_gateway
+from ate_platform.drivers.mock.mock_tcp_device import register as _register_tcp_device
 
 if TYPE_CHECKING:
     pass
+
+logger = logging.getLogger(__name__)
 
 
 # Default SCPI response map — keyed by uppercase command pattern.
@@ -253,7 +259,8 @@ class _MockPSUDriver(_MockBaseDriver):
                 self._channel_states[channel]["output_on"] = state
 
     def _generate_response(self, command: str) -> str:
-        return _generate_psu_response(command, self._channel_states.get(self._selected_channel, self._channel_states[1]))
+        state = self._channel_states.get(self._selected_channel, self._channel_states[1])
+        return _generate_psu_response(command, state)
 
 
 class MockDriverFactory:
@@ -266,6 +273,11 @@ class MockDriverFactory:
 
     # Map from abstraction class to mock driver class
     _MOCK_DRIVER_MAP: dict[type, type[_MockBaseDriver]] = {}
+
+    # String-keyed registry (design doc §6.2.7/§7.6): instrument-type/model
+    # string → mock class. Serves the T7/T8 register() hooks ('gpib_gateway',
+    # 'tcp_device') and the generic fallback resolution below.
+    _MOCK_REGISTRY: dict[str, type] = {}
 
     @classmethod
     def create_mock(
@@ -320,3 +332,136 @@ class MockDriverFactory:
     def clear_registrations(cls) -> None:
         """Clear all mock driver registrations. Useful for testing."""
         cls._MOCK_DRIVER_MAP.clear()
+
+    # ------------------------------------------------------------------
+    # String-keyed registry + generic fallback (design doc §6.2.7/§7.6)
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def register(cls, key: str, driver_cls: type) -> None:
+        """Register a mock class under a string key.
+
+        Satisfies the ``MockRegistryLike`` protocol consumed by the
+        module-level ``register(factory)`` hooks of
+        ``mock.mock_gpib_gateway`` (key ``'gpib_gateway'``) and
+        ``mock.mock_tcp_device`` (key ``'tcp_device'``).
+
+        Args:
+            key: Instrument-type/model string (normalized to lower-case).
+            driver_cls: Mock class produced for that key.
+        """
+        cls._MOCK_REGISTRY[key.strip().lower()] = driver_cls
+
+    @classmethod
+    def get_mock_class(cls, key: str) -> type:
+        """Resolve a model/instrument-type string to a mock class.
+
+        Unknown keys never hard-fail and are never silently masked: a loud
+        ``logging.warning`` names the unmatched key before the generic
+        fallback is returned, so config typos stay visible in logs while
+        simulation mode remains usable.
+
+        Args:
+            key: Model/instrument-type string (e.g. ``'dmm'``,
+                 ``'gpib_gateway'``, ``'TCP::127.0.0.1:4001'``).
+
+        Returns:
+            The registered mock class, or ``GenericMockTCP`` for
+            ``TCP::``-prefixed ids / ``GenericMockSCPI`` otherwise.
+        """
+        _ensure_eload_seeded()
+        normalized = key.strip().lower()
+        driver_cls = cls._MOCK_REGISTRY.get(normalized)
+        if driver_cls is not None:
+            return driver_cls
+        logger.warning(
+            "MockDriverFactory: no mock registered for key %r — returning "
+            "generic fallback mock (check for config typos). Known keys: %s",
+            key,
+            sorted(cls._MOCK_REGISTRY),
+        )
+        if normalized.startswith("tcp::"):
+            return GenericMockTCP
+        return GenericMockSCPI
+
+    @classmethod
+    def resolve_mock(cls, key: str, mock_values: dict[str, str] | None = None) -> object:
+        """Instantiate a usable mock for any model/instrument-type string.
+
+        Unknown keys resolve to a generic fallback mock (with a warning —
+        see :meth:`get_mock_class`). Registered asyncio-server mocks
+        (gateway/TCP device) require bespoke constructor arguments and are
+        rejected here instead of being mis-constructed.
+
+        Args:
+            key: Model/instrument-type string.
+            mock_values: Optional command → fixed-response map forwarded to
+                         SCPI-style mocks.
+
+        Returns:
+            A mock instance for SCPI-style keys; a started-pending
+            :class:`GenericMockTCP` echo server for ``TCP::`` keys.
+
+        Raises:
+            TypeError: If the registered mock needs bespoke constructor args.
+        """
+        driver_cls = cls.get_mock_class(key)
+        if driver_cls is GenericMockTCP:
+            return GenericMockTCP(resource_id=key)
+        if driver_cls is GenericMockSCPI:
+            return GenericMockSCPI(responses=mock_values)
+        if issubclass(driver_cls, _MockBaseDriver):
+            return driver_cls(mock_values=mock_values)
+        msg = (
+            f"{driver_cls.__name__} (registered for {key!r}) requires bespoke "
+            f"constructor arguments — instantiate it directly instead of "
+            f"resolve_mock()."
+        )
+        raise TypeError(msg)
+
+
+_ELOAD_SEEDED = False
+
+
+def _ensure_eload_seeded() -> None:
+    """Lazily seed the ``'eload'`` registry key on first lookup.
+
+    chroma_eload imports this module at its own import time, so seeding must
+    not happen eagerly at module bottom: in the normal import order
+    (drivers/__init__ → examples → chroma_eload → mock_factory) chroma_eload
+    would still be mid-import here and the symbol unresolvable. Deferring to
+    first registry access guarantees the module is fully initialized.
+    """
+    global _ELOAD_SEEDED
+    if _ELOAD_SEEDED:
+        return
+    _ELOAD_SEEDED = True
+    try:
+        from ate_platform.drivers.examples.chroma_eload import _MockEloadDriver
+    except ImportError:
+        return
+    MockDriverFactory._MOCK_REGISTRY.setdefault("eload", _MockEloadDriver)
+
+
+# ---------------------------------------------------------------------------
+# String-keyed registry assembly (design doc §6.2.7/§7.6) — runs once at import
+# ---------------------------------------------------------------------------
+
+
+def _seed_default_registry() -> None:
+    """Seed built-in string keys: ``'dmm'`` / ``'psu'`` → their mock drivers.
+
+    ``'eload'`` is seeded lazily by :func:`_ensure_eload_seeded` (import-order
+    constraint documented there). Existing abstraction-keyed registrations
+    (``_MOCK_DRIVER_MAP``) are untouched.
+    """
+    MockDriverFactory.register("dmm", _MockDMMDriver)
+    MockDriverFactory.register("psu", _MockPSUDriver)
+
+
+_seed_default_registry()
+
+# T7/T8 virtual instruments join the string registry via their idempotent
+# module-level hooks ('gpib_gateway' / 'tcp_device', see each FACTORY_KEY).
+_register_gpib_gateway(MockDriverFactory)
+_register_tcp_device(MockDriverFactory)
