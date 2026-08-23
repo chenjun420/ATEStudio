@@ -11,9 +11,59 @@ Tests cover:
 - Dev mode enforcement - POST/PUT/DELETE return 403 when dev_mode=False
 """
 
-import pytest
+import uuid
 
+import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+
+from ate_cloud.auth.password import hash_password
 from ate_cloud.config import settings
+from ate_cloud.models.user import User
+
+
+@pytest.fixture(scope="session")
+def rsa_keypair() -> rsa.RSAPrivateKey:
+    """RSA keypair for RS256 JWT signing (session-scoped)."""
+    return rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+
+@pytest.fixture(autouse=True)
+def _jwt_secret(rsa_keypair: rsa.RSAPrivateKey, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Configure Settings.jwt_secret so login can issue tokens."""
+    pem = rsa_keypair.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    monkeypatch.setattr(settings, "jwt_secret", pem.decode())
+
+
+@pytest.fixture
+async def auth_headers(client, db_session):
+    """Bearer-token headers for an authenticated admin user.
+
+    Since T17 all routers (debug included) require JWT authentication at
+    mount level; tests that exercise the dev_mode 403 gate must present a
+    valid token to reach the endpoint logic.
+    """
+    user = User(
+        id=str(uuid.uuid4()),
+        username=f"dbg_{uuid.uuid4().hex[:8]}",
+        password_hash=hash_password("pw123456"),
+        role="admin",
+        scopes=None,
+        is_active=True,
+    )
+    db_session.add(user)
+    await db_session.flush()
+
+    resp = await client.post(
+        "/api/v1/auth/login",
+        json={"username": user.username, "password": "pw123456"},
+    )
+    assert resp.status_code == 200
+    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
 
 
 def _sample_bp_data(
@@ -98,12 +148,14 @@ class TestCreateBreakpoint:
         assert response.status_code == 422
 
     @pytest.mark.asyncio
-    async def test_create_breakpoint_dev_mode_required(self, client, monkeypatch):
+    async def test_create_breakpoint_dev_mode_required(self, client, monkeypatch, auth_headers):
         """Test creating a breakpoint returns 403 when dev_mode=False."""
         monkeypatch.setattr(settings, "dev_mode", False)
 
         response = await client.post(
-            "/api/v1/debug/breakpoints", json=_sample_bp_data()
+            "/api/v1/debug/breakpoints",
+            json=_sample_bp_data(),
+            headers=auth_headers,
         )
 
         assert response.status_code == 403
@@ -163,16 +215,18 @@ class TestListBreakpoints:
         assert data["items"][0]["session_id"] == "sess-1"
 
     @pytest.mark.asyncio
-    async def test_list_works_without_dev_mode(self, client, monkeypatch):
+    async def test_list_works_without_dev_mode(self, client, monkeypatch, auth_headers):
         """Test listing breakpoints works even when dev_mode=False (read-only)."""
         # First create in dev mode
         await client.post(
             "/api/v1/debug/breakpoints", json=_sample_bp_data()
         )
 
-        # Then disable dev mode and list
+        # Then disable dev mode and list (authenticated: T17 mount-level JWT)
         monkeypatch.setattr(settings, "dev_mode", False)
-        response = await client.get("/api/v1/debug/breakpoints")
+        response = await client.get(
+            "/api/v1/debug/breakpoints", headers=auth_headers
+        )
 
         assert response.status_code == 200
         data = response.json()
@@ -207,7 +261,7 @@ class TestGetBreakpoint:
         assert response.status_code == 404
 
     @pytest.mark.asyncio
-    async def test_get_works_without_dev_mode(self, client, monkeypatch):
+    async def test_get_works_without_dev_mode(self, client, monkeypatch, auth_headers):
         """Test getting a breakpoint works when dev_mode=False (read-only)."""
         create_resp = await client.post(
             "/api/v1/debug/breakpoints", json=_sample_bp_data()
@@ -215,7 +269,9 @@ class TestGetBreakpoint:
         bp_id = create_resp.json()["id"]
 
         monkeypatch.setattr(settings, "dev_mode", False)
-        response = await client.get(f"/api/v1/debug/breakpoints/{bp_id}")
+        response = await client.get(
+            f"/api/v1/debug/breakpoints/{bp_id}", headers=auth_headers
+        )
 
         assert response.status_code == 200
 
@@ -277,7 +333,7 @@ class TestUpdateBreakpoint:
         assert response.status_code == 404
 
     @pytest.mark.asyncio
-    async def test_update_dev_mode_required(self, client, monkeypatch):
+    async def test_update_dev_mode_required(self, client, monkeypatch, auth_headers):
         """Test updating a breakpoint returns 403 when dev_mode=False."""
         create_resp = await client.post(
             "/api/v1/debug/breakpoints", json=_sample_bp_data()
@@ -286,7 +342,9 @@ class TestUpdateBreakpoint:
 
         monkeypatch.setattr(settings, "dev_mode", False)
         response = await client.put(
-            f"/api/v1/debug/breakpoints/{bp_id}", json={"enabled": False}
+            f"/api/v1/debug/breakpoints/{bp_id}",
+            json={"enabled": False},
+            headers=auth_headers,
         )
 
         assert response.status_code == 403
@@ -321,7 +379,7 @@ class TestDeleteBreakpoint:
         assert response.status_code == 404
 
     @pytest.mark.asyncio
-    async def test_delete_dev_mode_required(self, client, monkeypatch):
+    async def test_delete_dev_mode_required(self, client, monkeypatch, auth_headers):
         """Test deleting a breakpoint returns 403 when dev_mode=False."""
         create_resp = await client.post(
             "/api/v1/debug/breakpoints", json=_sample_bp_data()
@@ -329,7 +387,9 @@ class TestDeleteBreakpoint:
         bp_id = create_resp.json()["id"]
 
         monkeypatch.setattr(settings, "dev_mode", False)
-        response = await client.delete(f"/api/v1/debug/breakpoints/{bp_id}")
+        response = await client.delete(
+            f"/api/v1/debug/breakpoints/{bp_id}", headers=auth_headers
+        )
 
         assert response.status_code == 403
 
