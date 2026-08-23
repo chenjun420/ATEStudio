@@ -1,8 +1,8 @@
 """Scanner Scheduler for ATE Platform.
- 
+
 This module provides the core scanning scheduler that monitors
 step conditions and notifies when steps become ready for execution.
- 
+
 Key features:
 - Reactive dispatch: event handlers trigger immediate step evaluation
 - Watchdog scan loop (5s default interval) as safety net only
@@ -25,6 +25,18 @@ from collections.abc import Awaitable, Callable
 from dataclasses import asdict
 from typing import TYPE_CHECKING, Any
 
+# 直接导入子模块（绕过 simulation/__init__ 的重导出链）——fault_injector
+# 仅依赖 stdlib+simpleeval，与 scheduler 包无环（§7.7 调度层注入）
+from ..simulation.fault_injector import SchedulerFaultError
+from ..types import Condition, LoopResult, StepStatus
+from .adaptive_skip import AdaptiveConditionEvaluator, SkipConditions
+from .condition_evaluator import ConditionEvaluator
+from .event_bus import Event, EventBus, EventType
+from .resource_manager import ResourceManager
+from .step_registry import StepRegistry
+from .uut_sync import UUTManager
+from .variable_space import VariableSpace
+
 # Sentinel for "no event loop available" in _schedule_dispatch
 _NO_LOOP = object()
 
@@ -40,21 +52,9 @@ def _is_in_async_context() -> bool:
     except RuntimeError:
         return False
 
-# 直接导入子模块（绕过 simulation/__init__ 的重导出链）——fault_injector
-# 仅依赖 stdlib+simpleeval，与 scheduler 包无环（§7.7 调度层注入）
-from ..simulation.fault_injector import SchedulerFaultError
-from ..types import Condition, LoopResult, StepStatus
-from .adaptive_skip import AdaptiveConditionEvaluator, SkipConditions
-from .condition_evaluator import ConditionEvaluator
-from .event_bus import Event, EventBus, EventType
-from .resource_manager import ResourceManager
-from .step_registry import StepRegistry
-from .variable_space import VariableSpace
-
 if TYPE_CHECKING:
     from ..executor.step_executor import StepExecutor
     from ..simulation.fault_injector import FaultInjector
-
     from .watchdog import WatchDog
 
 logger = logging.getLogger(__name__)
@@ -116,6 +116,7 @@ class ScannerScheduler:
         snapshot_dir: str | None = None,
         instrument_reset_callback: Callable[[], Awaitable[None]] | None = None,
         fault_injector: FaultInjector | None = None,
+        uut_manager: UUTManager | None = None,
     ) -> None:
         """Initialize the scanner scheduler.
 
@@ -142,6 +143,9 @@ class ScannerScheduler:
                 提供后，每个步骤派发前经 check_scheduler_raise 检查，
                 命中规则则按失败处理而非派发。None 表示未接注入器，
                 钩子为单次属性判空直通。
+            uut_manager: 可选 UUTManager（T2 UUT 亲和调度）。提供后，
+                specific 亲和的步骤只在所指 UUT 槽位空闲时才就绪；
+                'any'/未注册亲和与未接管理器时行为与之前逐字节一致。
         """
         self._event_bus: EventBus = event_bus
         self._registry: StepRegistry = registry
@@ -150,9 +154,16 @@ class ScannerScheduler:
         self._resource_manager: ResourceManager = resource_manager
         self._scan_interval: float = scan_interval
         self._fault_injector: FaultInjector | None = fault_injector
+        self._uut_manager: UUTManager | None = uut_manager
         self._adaptive_skip_evaluator: AdaptiveConditionEvaluator | None = (
             adaptive_skip_evaluator
         )
+
+        # T2 UUT 亲和调度状态：
+        # - _uut_affinities: step_id → 'any' | 具体 UUT id（register_uut_affinities）
+        # - _affinity_claims: uut_id → 已派发未终态的 step_id（同 UUT 串行化）
+        self._uut_affinities: dict[str, str] = {}
+        self._affinity_claims: dict[str, str] = {}
 
         # Step executor — defaults to ProcessStepExecutor
         if step_executor is not None:
@@ -207,7 +218,7 @@ class ScannerScheduler:
         self._heartbeat: int = 0
 
         # WatchDog health monitor (created in start())
-        self._watchdog: "WatchDog | None" = None
+        self._watchdog: WatchDog | None = None
 
         # F5 执行增强：暂停/强制下一步
         self._paused: bool = False
@@ -220,7 +231,7 @@ class ScannerScheduler:
         self._instrument_reset_callback: Callable[[], Awaitable[None]] | None = (
             instrument_reset_callback
         )
-        self._snapshot: "StateSnapshot | None" = None
+        self._snapshot: StateSnapshot | None = None
         if snapshot_dir is not None:
             from .state_snapshot import StateSnapshot
 
@@ -471,9 +482,89 @@ class ScannerScheduler:
         skip_if expression is evaluated as a fallback.
 
         Args:
-            adaptive_skip_conditions: Mapping of step_id to SkipConditions.
+            adaptive_skip_conditions: Mapping of step_id → SkipConditions (typed).
         """
         self._adaptive_skip_conditions = dict(adaptive_skip_conditions)
+
+    def register_uut_affinities(self, affinities: dict[str, str]) -> None:
+        """Register per-step UUT affinity（T2）。
+
+        Each entry maps step_id → ``'any'`` or a specific UUT id. A
+        specific affinity makes the step wait until that UUT's slot is
+        free before it becomes schedulable; ``'any'`` keeps today's
+        default semantics.
+
+        When a UUTManager is attached, an affinity naming a nonexistent
+        UUT id raises ValueError here — plan validation fails fast
+        before start() instead of surfacing at first scan.
+
+        Args:
+            affinities: Mapping of step_id to affinity value.
+
+        Raises:
+            ValueError: If a specific affinity does not match any UUT
+                in the attached pool.
+        """
+        if self._uut_manager is not None:
+            known = set(self._uut_manager.uut_ids)
+            for step_id, affinity in affinities.items():
+                if affinity and affinity != "any" and affinity not in known:
+                    msg = (
+                        f"Step '{step_id}' declares uut_affinity '{affinity}' "
+                        f"but no such UUT exists in the pool {sorted(known)}"
+                    )
+                    raise ValueError(msg)
+        self._uut_affinities.update(affinities)
+
+    def _can_schedule(self, step_id: str) -> bool:
+        """UUT-affinity readiness gate（T2，_scan_ready/_can_schedule 语义）。
+
+        - 'any'/未注册亲和：立即放行，不触碰 UUT 池 —— 与 T2 前行为
+          逐字节一致。
+        - specific 亲和：所指 UUT 槽位必须空闲 —— 既不能在 UUTManager
+          中处于 TESTING，也不能已被另一个已派发未终态的步骤声明占用。
+        - 未接 UUTManager：直通（向后兼容）。
+
+        本门只是**额外的就绪前置条件**：通过后仍照常走资源检查与
+        ResourceLock 授予，绝不绕过或替代 ResourceManager。
+
+        Args:
+            step_id: The step to gate.
+
+        Returns:
+            True if the step may proceed toward dispatch.
+        """
+        affinity = self._uut_affinities.get(step_id)
+        if not affinity or affinity == "any":
+            return True
+        manager = self._uut_manager
+        if manager is None:
+            return True
+        uut = manager.get(affinity)
+        if uut is None:
+            # register_uut_affinities 已校验；防御性直通
+            return True
+        if uut.busy:
+            return False
+        occupant = self._affinity_claims.get(affinity)
+        return occupant is None or occupant == step_id
+
+    def _claim_uut(self, step_id: str) -> None:
+        """Record that a dispatched specific-affinity step occupies its UUT.
+
+        Called on both dispatch paths right before STEP_STARTED emission;
+        released when the step reaches a terminal status.
+        """
+        affinity = self._uut_affinities.get(step_id)
+        if affinity and affinity != "any" and self._uut_manager is not None:
+            self._affinity_claims.setdefault(affinity, step_id)
+
+    def _release_uut_claim(self, step_id: str) -> None:
+        """Drop the UUT claim held by step_id（终态时经状态事件调用）。"""
+        affinity = self._uut_affinities.get(step_id)
+        if affinity and affinity != "any":
+            if self._affinity_claims.get(affinity) == step_id:
+                del self._affinity_claims[affinity]
 
     def _setup_event_handlers(self) -> None:
         """Set up event subscriptions with reactive dispatch wiring."""
@@ -495,6 +586,8 @@ class ScannerScheduler:
                 scheduler_self._notified_ready.discard(step_id)
                 # Remove from pending_dispatch since it's done
                 scheduler_self._pending_dispatch.discard(step_id)
+                # T2：终态释放 UUT 占用，等待同 UUT 的 pinned 步骤可就绪
+                scheduler_self._release_uut_claim(step_id)
 
             logger.debug("Step status changed: %s -> %s — evaluating dependents", step_id, new_status)
             # §6.6 状态变更后原子保存快照（崩溃恢复用）
@@ -538,7 +631,6 @@ class ScannerScheduler:
         Heartbeat counter is incremented at the top of each iteration
         for WatchDog health monitoring.
         """
-        import time
 
         while self._running and not self._stop_event.is_set():
             # Increment heartbeat for WatchDog health monitoring
@@ -606,12 +698,20 @@ class ScannerScheduler:
             if condition is not None and not self._check_condition(condition):
                 continue
 
+            # T2 UUT 亲和门：specific 亲和的步骤等所指 UUT 槽位空闲
+            # （在故障注入之前 —— 注入计数应反映真实派发尝试）
+            if not self._can_schedule(step_id):
+                continue
+
             # §7.7 调度层故障注入：命中则按失败处理，跳过本次派发
             if await self._check_scheduler_fault(step_id):
                 continue
 
             # Mark as pending to prevent double-dispatch
             self._pending_dispatch.add(step_id)
+
+            # T2：派发即声明占用所指 UUT（终态时经状态事件释放）
+            self._claim_uut(step_id)
 
             # Emit STEP_STARTED event with normalized schema
             event_data = asdict(StepStartedData(
@@ -723,6 +823,11 @@ class ScannerScheduler:
             if step_id not in ready_steps:
                 return  # Condition not met yet
 
+            # T2 UUT 亲和门：specific 亲和的步骤等所指 UUT 槽位空闲。
+            # 不标记 notified —— 看门狗后续扫描会在 UUT 释放后重派。
+            if not self._can_schedule(step_id):
+                return
+
             # §7.7 调度层故障注入：派发前最后检查（命中则按失败处理，
             # 不标记 notified —— 重试路径可再次派发）
             if await self._check_scheduler_fault(step_id):
@@ -737,6 +842,9 @@ class ScannerScheduler:
 
             # Check pool exhaustion before emitting STEP_STARTED
             await self._check_pool_exhaustion(step_id, condition)
+
+            # T2：派发即声明占用所指 UUT（终态时经状态事件释放）
+            self._claim_uut(step_id)
 
             # Emit STEP_STARTED event
             event_data = asdict(StepStartedData(
@@ -1011,6 +1119,7 @@ class ScannerScheduler:
             reason: Human-readable reason for skipping
         """
         import time
+
         from shared.events import StepSkippedData
 
         logger.info("Step %s skipped: %s", step_id, reason)
