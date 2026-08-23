@@ -57,6 +57,9 @@ import { useTopologySimulation } from '@/composables/useTopologySimulation'
 import InstrumentGantt from '@/components/InstrumentGantt.vue'
 import ExecutionDiffPanel from '@/components/ExecutionDiffPanel.vue'
 import ManualFaultPanel from '@/components/ManualFaultPanel.vue'
+import SimulationReportPanel from '@/components/SimulationReportPanel.vue'
+// T41 仿真报告：组合报告（覆盖率/竞争/故障）拉取与折叠展示
+import { fetchSimulationReport, type SimulationReportResponse } from '@/api/executions'
 
 // ─── 仿真层级/噪声选项（与 useSimulation 对齐）──────────────────────────────
 
@@ -101,6 +104,19 @@ const runs = ref<ExecutionListItem[]>([])
 const diffSummary = ref<DiffSummary | null>(null)
 const diffLoading = ref(false)
 const baselineOptions = computed(() => runs.value.filter((r) => r.id !== runId.value))
+
+// T41 仿真报告（覆盖率/竞争/故障组合报告）
+const reportVisible = ref(false)
+const reportData = ref<SimulationReportResponse | null>(null)
+const reportLoading = ref(false)
+async function toggleReport() {
+  reportVisible.value = !reportVisible.value
+  if (!reportVisible.value || !runId.value) return
+  reportLoading.value = true
+  try { reportData.value = await fetchSimulationReport(runId.value) }
+  catch (e) { ElMessage.error(`报告加载失败: ${e instanceof Error ? e.message : String(e)}`) }
+  finally { reportLoading.value = false }
+}
 
 // 故障注入规则
 const faultRules = ref<Array<{ type: string; count?: number; probability?: number; condition?: string; action?: string }>>([])
@@ -446,6 +462,13 @@ onMounted(() => {
             <el-button size="small" type="primary" :loading="diffLoading" style="margin-left: 8px" @click="loadDiff">对比</el-button>
             <ExecutionDiffPanel :summary="diffSummary" :loading="diffLoading" />
           </template>
+        </div>
+        <!-- T41 仿真报告：覆盖率/资源竞争/故障记录组合视图 -->
+        <div class="gantt-section">
+          <el-button size="small" link type="primary" data-testid="toggle-report" @click="toggleReport">
+            {{ reportVisible ? '收起报告 ▲' : '报告 ▼' }}
+          </el-button>
+          <SimulationReportPanel v-if="reportVisible" :report="reportData" :loading="reportLoading" />
         </div>
       </main>
 

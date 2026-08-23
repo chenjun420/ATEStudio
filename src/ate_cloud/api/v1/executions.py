@@ -66,6 +66,7 @@ from ate_platform.simulation.dry_run_scheduler import DryRunScheduler
 from ate_platform.simulation.full_chain_simulator import FullChainSimulator
 from ate_platform.simulation.instrument_simulator import NoiseConfig, NoiseModel
 from ate_platform.simulation.recording import RecordingInterceptor
+from ate_cloud.services.simulation_report import build_simulation_report
 
 router = APIRouter(prefix="/executions", tags=["executions"])
 
@@ -1001,6 +1002,38 @@ async def diff_execution(
         RecordingInterceptor.load(candidate_path),
     )
     return {"run_id": run_id, "baseline": baseline, **summary}
+
+
+@router.get("/{run_id}/simulation-report")
+async def get_simulation_report(
+    run_id: str,
+    db: DBSession,
+) -> dict[str, Any]:
+    """Consolidated end-of-run simulation report (T41, v41-gap-analysis #41).
+
+    Composes three already-computed sources via
+    :func:`ate_cloud.services.simulation_report.build_simulation_report`:
+    coverage (T14 ``SimulationCoverage.report`` over the materialized plan's
+    compiled DAG + recorded step events), contention (T13 analyzer fed the
+    recording's lock events), and the execution's recorded fault records.
+    Missing data degrades to per-section ``available: false`` entries listed
+    in ``warnings`` — an aborted/partial run still renders.
+
+    Args:
+        run_id: The execution run identifier.
+        db: Database session.
+
+    Returns:
+        Report envelope (schema in the service module docstring).
+
+    Raises:
+        HTTPException: 404 if execution not found.
+    """
+    result = await db.execute(select(Execution).where(Execution.id == run_id))
+    execution = result.scalar_one_or_none()
+    if not execution:
+        raise HTTPException(status_code=404, detail=f"Execution '{run_id}' not found")
+    return await build_simulation_report(db, run_id, execution)
 
 
 @router.post("/{run_id}/fault-injection", response_model=FaultInjectionResponse)

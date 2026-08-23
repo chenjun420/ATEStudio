@@ -1,6 +1,7 @@
 import http from './interceptor'
 import type { DiffSummary } from '@/utils/diffView'
 import type { StepControlPayload, StepMode } from '@/utils/stepModes'
+import type { SimulationReportResponse } from '@/utils/simulationReportView'
 
 const api = http
 
@@ -293,5 +294,18 @@ export async function stepControlExecution(
   payload: StepControlPayload,
 ): Promise<StepControlResponse> {
   const response = await api.post<StepControlResponse>(`/executions/${runId}/step-control`, payload)
+  return response.data
+}
+
+export type { SimulationReportResponse }
+
+/**
+ * GET /api/v1/executions/{runId}/simulation-report - 仿真报告（T41）。
+ *
+ * 组合报告：覆盖率（T14）+ 资源竞争（T13）+ 故障记录；缺失数据按节降级
+ * （available=false + warnings），中止/部分运行仍可渲染。
+ */
+export async function fetchSimulationReport(runId: string): Promise<SimulationReportResponse> {
+  const response = await api.get<SimulationReportResponse>(`/executions/${runId}/simulation-report`)
   return response.data
 }
