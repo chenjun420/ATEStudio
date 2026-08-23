@@ -34,6 +34,7 @@ import { ArrowDown } from '@element-plus/icons-vue'
 import type { Graph } from '@antv/x6'
 import { useGraph } from '@/composables/useGraph'
 import { useTopologyRuntimeStore } from '@/stores/topologyRuntime'
+import RelayMatrixEditor from '@/components/RelayMatrixEditor.vue'
 import {
   createFixtureTopology,
   downloadFixtureExport,
@@ -48,6 +49,7 @@ import {
   type FixtureDeviceTemplate,
   type FixtureTopologyData,
   type FixtureTopologyResponse,
+  type Relay,
   type ValidationResult,
 } from '@/api/fixtures'
 import { listExecutions, type ExecutionListItem } from '@/api/executions'
@@ -101,6 +103,18 @@ const selectedInfo = ref<{
 
 // 布局按钮用于重新排布
 const layoutMode = ref('grid')
+
+// 继电器矩阵编辑（T27）：选中夹具节点时在属性面板编辑其 relays
+const selectedFixture = computed<Fixture | null>(() => {
+  if (selectedInfo.value.kind !== 'fixture') return null
+  return currentData.value?.fixtures.find((f) => f.id === selectedInfo.value.id) ?? null
+})
+
+function onRelaysChange(relays: Relay[]) {
+  const fixture = selectedFixture.value
+  if (!fixture) return
+  fixture.relays = relays
+}
 
 // ─── X6 画布 ──────────────────────────────────────────────────────────────
 
@@ -694,6 +708,9 @@ watch(
             <el-descriptions-item label="详情">{{ selectedInfo.detail }}</el-descriptions-item>
           </el-descriptions>
         </template>
+
+        <h4>继电器矩阵</h4>
+        <RelayMatrixEditor :fixture="selectedFixture" @relays-change="onRelaysChange" />
 
         <h4>校验结果</h4>
         <el-empty v-if="!validation" description="尚未校验" :image-size="50" />
