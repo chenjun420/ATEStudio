@@ -36,6 +36,8 @@ import { useGraph } from '@/composables/useGraph'
 import { useTopologyRuntimeStore } from '@/stores/topologyRuntime'
 import RelayMatrixEditor from '@/components/RelayMatrixEditor.vue'
 import RouteManagementPanel from '@/components/RouteManagementPanel.vue'
+import LinkFaultContextMenu from '@/components/LinkFaultContextMenu.vue'
+import { useFaultInjection, type LinkFaultType } from '@/composables/useFaultInjection'
 import {
   createFixtureTopology,
   downloadFixtureExport,
@@ -505,6 +507,13 @@ async function loadTopology(id: string) {
       g.on('blank:click', () => {
         selectedInfo.value = { kind: 'none', id: '', name: '', detail: '' }
       })
+      // 右键链路 → 故障注入菜单（T30，§8.3）
+      g.on('edge:contextmenu', ({ e, edge }) => {
+        const d = (edge.getData() ?? {}) as { kind?: string }
+        if (d.kind !== 'link') return
+        e.preventDefault()
+        faultMenu.value = { visible: true, x: e.clientX, y: e.clientY, linkId: edge.id }
+      })
       renderTopology(currentData.value!)
     })
     ElMessage.success(`已加载「${res.name}」v${res.version}`)
@@ -633,6 +642,29 @@ function connectRuntime() {
 function disconnectRuntime() {
   topologyStore.disconnect()
   runtimeConnected.value = false
+}
+
+// 链路故障注入（T30）：右键链路弹出菜单，转发云端虚拟驱动（§8.3）
+const { injecting, injectFault } = useFaultInjection()
+const faultMenu = ref({ visible: false, x: 0, y: 0, linkId: '' })
+const faultMenuEnabled = computed(() => Boolean(selectedRunId.value && runtimeConnected.value))
+
+function closeFaultMenu() {
+  faultMenu.value.visible = false
+}
+
+async function onFaultSelect(faultType: LinkFaultType) {
+  const runId = selectedRunId.value
+  const linkId = faultMenu.value.linkId
+  if (!runId || !linkId) {
+    ElMessage.warning('请先选择一个执行并连接运行时')
+    return
+  }
+  const ok = await injectFault(runId, linkId, faultType)
+  if (ok) {
+    // 即时视觉确认（§8.3.7 fault-red）；随后以 SSE runtime 事件为准
+    applyLinkRuntimeState(linkId, 'fault', false)
+  }
 }
 
 // 新建空拓扑
@@ -864,6 +896,17 @@ watch(
         </el-table-column>
       </el-table>
     </el-dialog>
+
+    <!-- 链路故障注入右键菜单（T30） -->
+    <LinkFaultContextMenu
+      :visible="faultMenu.visible"
+      :x="faultMenu.x"
+      :y="faultMenu.y"
+      :link-id="faultMenu.linkId"
+      :disabled="!faultMenuEnabled || injecting"
+      @select="onFaultSelect"
+      @close="closeFaultMenu"
+    />
   </div>
 </template>
 

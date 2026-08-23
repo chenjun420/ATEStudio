@@ -458,3 +458,26 @@ export function downloadFixtureExport(content: string, format: 'json' | 'yaml', 
   anchor.click()
   URL.revokeObjectURL(url)
 }
+
+// ─── 链路故障注入（T30，设计文档 §8.3）──────────────────────────────────────
+
+/**
+ * 链路故障类型（doc §8.3 规定集合，不得扩展）。
+ */
+export type LinkFaultKind = 'open_circuit' | 'short_circuit' | 'contact_resistance' | 'noise'
+
+/**
+ * POST /executions/{run_id}/fault-injection - 链路故障注入。
+ *
+ * 将右键菜单选择的故障类型转发给云端虚拟驱动（§8.3：禁止纯客户端模拟）。
+ */
+export async function injectLinkFault(
+  runId: string,
+  linkId: string,
+  faultType: LinkFaultKind,
+): Promise<void> {
+  await api.post(`/executions/${runId}/fault-injection`, {
+    link_id: linkId,
+    fault_type: faultType,
+  })
+}
