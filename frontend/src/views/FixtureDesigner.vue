@@ -55,6 +55,7 @@ import {
   type ValidationResult,
 } from '@/api/fixtures'
 import { listExecutions, type ExecutionListItem } from '@/api/executions'
+import { applyFixtureTierLayout } from '@/utils/fixtureLayoutAdapter'
 
 const topologyStore = useTopologyRuntimeStore()
 const { graph } = useGraph('fixture-canvas')
@@ -281,7 +282,15 @@ function addTopoNode(
   })
 }
 
-function applyLayout() {
+/** T29：dagre 分层自动布局（仪器上→夹具中→DUT 下）。仅按钮触发，数据变化不自动重排。 */
+function applyTierLayout() {
+  const g = graph.value
+  if (!g) return
+  if (!applyFixtureTierLayout(g)) return // 空画布 no-op
+}
+
+/** 旧版网格布局（按列排布），保留于布局菜单。 */
+function applyGridLayout() {
   const g = graph.value
   if (!g) return
   const colX: Record<string, number> = { instrument: 60, fixture: 320, dut: 580 }
@@ -294,6 +303,11 @@ function applyLayout() {
       }
     })
   }
+}
+
+function onLayoutCommand(command: string) {
+  if (command === 'auto') applyTierLayout()
+  else if (command === 'grid') applyGridLayout()
 }
 
 function graphNodesOfKind(g: Graph, kind: string): string[] {
@@ -684,7 +698,15 @@ watch(
       <el-button size="small" @click="saveTopology" :loading="loading">保存</el-button>
       <el-button size="small" type="warning" @click="runValidation" :loading="validating">校验</el-button>
       <el-divider direction="vertical" />
-      <el-button size="small" @click="applyLayout">布局</el-button>
+      <el-dropdown size="small" @command="onLayoutCommand">
+        <el-button size="small">布局<el-icon class="el-icon--right"><arrow-down /></el-icon></el-button>
+        <template #dropdown>
+          <el-dropdown-menu>
+            <el-dropdown-item command="auto">自动布局（分层）</el-dropdown-item>
+            <el-dropdown-item command="grid">网格布局</el-dropdown-item>
+          </el-dropdown-menu>
+        </template>
+      </el-dropdown>
       <el-button size="small" @click="showVersions">版本</el-button>
       <el-button size="small" @click="doDuplicate">复制</el-button>
       <el-dropdown size="small" @command="(c: string) => doExport(c as 'json' | 'yaml')">
