@@ -16,7 +16,7 @@ Thread Safety:
 from __future__ import annotations
 
 import threading
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING
 
 from ..types import Condition, StepStatus
@@ -42,7 +42,13 @@ class StepExecutionConfig:
         repeat_limit: 重复执行上限，0 表示无限（配合 force_repeat 语义）。
         force_repeat: 忽略 repeat_limit 强制重复（用于人工介入后重测）。
         skip_if: 跳过表达式（条件成立则该步骤跳过），None 不跳过。
+        on_failure: 终态失败处置（重试/重复耗尽或无策略时生效，§6.4 决策矩阵）：
+            'abort' 抛 ExecutionAborted 中止执行；'skip' 将步骤标记为
+            SKIPPED 后继续；'continue'（默认）保持既有终态继续 —— 向后兼容。
     """
+
+    #: on_failure 允许取值（构造时校验，fail-fast）
+    _VALID_ON_FAILURE = ("abort", "continue", "skip")
 
     max_retries: int = 0
     retry_delay_ms: int = 0
@@ -50,6 +56,14 @@ class StepExecutionConfig:
     repeat_limit: int = 0
     force_repeat: bool = False
     skip_if: str | None = None
+    on_failure: str = "continue"
+
+    def __post_init__(self) -> None:
+        if self.on_failure not in self._VALID_ON_FAILURE:
+            raise ValueError(
+                f"on_failure must be one of {self._VALID_ON_FAILURE}, "
+                f"got {self.on_failure!r}"
+            )
 
 
 class StepRegistry:
@@ -172,8 +186,8 @@ class StepRegistry:
 
     def get_ready_steps(
         self,
-        variable_space: "VariableSpace | None" = None,
-        resource_manager: "ResourceManager | None" = None,
+        variable_space: VariableSpace | None = None,
+        resource_manager: ResourceManager | None = None,
     ) -> list[str]:
         """Get list of steps that are ready to execute.
 

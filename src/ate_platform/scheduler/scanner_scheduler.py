@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any
 
 # 直接导入子模块（绕过 simulation/__init__ 的重导出链）——fault_injector
 # 仅依赖 stdlib+simpleeval，与 scheduler 包无环（§7.7 调度层注入）
+from ..exceptions import ExecutionAborted
 from ..simulation.fault_injector import SchedulerFaultError
 from ..types import Condition, LoopResult, StepStatus
 from .adaptive_skip import AdaptiveConditionEvaluator, SkipConditions
@@ -55,6 +56,7 @@ def _is_in_async_context() -> bool:
 if TYPE_CHECKING:
     from ..executor.step_executor import StepExecutor
     from ..simulation.fault_injector import FaultInjector
+    from .step_registry import StepExecutionConfig
     from .watchdog import WatchDog
 
 logger = logging.getLogger(__name__)
@@ -1440,15 +1442,21 @@ class ScannerScheduler:
         self._force_next_pending = True
 
     async def handle_step_result(self, step_id: str, status: StepStatus) -> bool:
-        """根据步骤结果决策是否重试/重复（F5）。
+        """根据步骤结果决策是否重试/重复（F5，§6.4 决策矩阵）。
 
-        决策矩阵（§6.4）：
-        - ERROR   -> 重试：retry_count < max_retries 时递增计数、置回 PENDING，
-                     返回 True；否则保持 ERROR 返回 False。
+        决策矩阵：
+        - ERROR（含超时 —— 执行器把 TimeoutError 映射为 ERROR）
+          -> 重试：retry_count < max_retries 时递增计数、置回 PENDING，
+             按 retry_delay_ms 延迟后返回 True；否则重试耗尽进入终态处置。
         - FAILED  -> 重复：repeat_on_measurement_fail 时，force_repeat 无视
                      repeat_limit 强制重复；否则 repeat_count < repeat_limit
-                     才重复。
+                     才重复；无策略或重复耗尽进入终态处置。
         - PASSED  -> 清零 retry/repeat 计数，返回 False。
+
+        终态处置（StepExecutionConfig.on_failure）：
+        - 'abort'   -> 抛出 ExecutionAborted（调用方不得吞掉）；
+        - 'skip'    -> 步骤标记 SKIPPED 后继续（依赖方按满足前置处理）；
+        - 'continue'-> 保持既有终态返回 False（默认，向后兼容）。
 
         Args:
             step_id: 步骤标识。
@@ -1456,6 +1464,9 @@ class ScannerScheduler:
 
         Returns:
             True 表示调度器应重试/重复该步骤（已置回 PENDING）。
+
+        Raises:
+            ExecutionAborted: 终态失败且 on_failure='abort'。
         """
         try:
             config = self._registry.get_config(step_id)
@@ -1470,20 +1481,22 @@ class ScannerScheduler:
                 if config.retry_delay_ms > 0:
                     await asyncio.sleep(config.retry_delay_ms / 1000.0)
                 return True
-            # 重试耗尽：保持/置回 ERROR（可能当前是 PENDING）
-            self._registry.update_status(step_id, StepStatus.ERROR)
+            # 重试耗尽：终态处置（abort→抛 / skip→SKIPPED / continue→保持 ERROR）
+            self._settle_terminal_failure(step_id, config, StepStatus.ERROR)
             return False
 
         if status == StepStatus.FAILED:
             if not config.repeat_on_measurement_fail:
+                # 无重复策略：FAILED 即终态候选，同样走 on_failure 处置
+                self._settle_terminal_failure(step_id, config, StepStatus.FAILED)
                 return False
             repeats = self._registry.get_repeat_count(step_id)
             if config.force_repeat or config.repeat_limit == 0 or repeats < config.repeat_limit:
                 self._registry.increment_repeat_count(step_id)
                 self._registry.update_status(step_id, StepStatus.PENDING)
                 return True
-            # 重复耗尽：保持/置回 FAILED
-            self._registry.update_status(step_id, StepStatus.FAILED)
+            # 重复耗尽：终态处置
+            self._settle_terminal_failure(step_id, config, StepStatus.FAILED)
             return False
 
         if status == StepStatus.PASSED:
@@ -1493,6 +1506,43 @@ class ScannerScheduler:
             return False
 
         return False
+
+    def _settle_terminal_failure(
+        self,
+        step_id: str,
+        config: StepExecutionConfig,
+        failed_status: StepStatus,
+    ) -> None:
+        """终态失败处置 —— 决策矩阵的 on_failure 分支（§6.4）。
+
+        在重试/重复耗尽或无策略可用时调用：
+
+        - 'abort'：先把状态落为失败终态再抛 ExecutionAborted（崩溃恢复
+          快照语义与 continue 一致），异常向上传播、不得被吞掉；
+        - 'skip'：把步骤标记为 SKIPPED（依赖方按满足前置继续）；
+        - 'continue'（默认）：保持既有终态。ERROR 耗尽时步骤可能仍处于
+          重试留下的 PENDING，需显式落回 ERROR；FAILED 分支调用方已置
+          FAILED，update_status 对相同状态不重复发事件，幂等安全。
+
+        Args:
+            step_id: 终态失败的步骤标识。
+            config: 该步骤的执行配置（提供 on_failure 策略）。
+            failed_status: 失败终态（ERROR 或 FAILED）。
+
+        Raises:
+            ExecutionAborted: on_failure='abort' 时必然抛出。
+        """
+        if config.on_failure == "abort":
+            self._registry.update_status(step_id, failed_status)
+            raise ExecutionAborted(
+                f"Step '{step_id}' settled {failed_status.value} "
+                "with on_failure=abort"
+            )
+        if config.on_failure == "skip":
+            self._registry.update_status(step_id, StepStatus.SKIPPED)
+            return
+        # 'continue'（默认）：保持既有终态语义
+        self._registry.update_status(step_id, failed_status)
 
     def get_status(self) -> dict[str, Any]:
         """Get current scheduler status for monitoring.

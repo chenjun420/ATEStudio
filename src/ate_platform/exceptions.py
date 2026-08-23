@@ -42,3 +42,16 @@ class ScriptExecutionError(Exception):
     """
 
     pass
+
+
+class ExecutionAborted(Exception):  # noqa: N818 — 名称由 v41-gap-analysis T4 规格钦定
+    """Raised when a step's ``on_failure='abort'`` policy terminates the run.
+
+    :meth:`ScannerScheduler.handle_step_result` raises this after retries or
+    repeats are exhausted (or when no retry/repeat policy applies) and the
+    step's :class:`~ate_platform.scheduler.step_registry.StepExecutionConfig`
+    declares ``on_failure='abort'``. Callers must let it propagate — a global
+    try/except that swallows it would defeat the abort semantics.
+    """
+
+    pass
