@@ -1,0 +1,30 @@
+# MockTCPDevice 协议 YAML — 帧格式 [HEAD(2)][ADDR][CMD][LEN(2)][DATA][CHECKSUM]。
+# 帧字段顺序/大小、校验算法、命令表均由本文件声明；MockTCPDevice 启动时解析。
+
+name: mock_tcp_demo
+latency_ms: 0
+addresses: [1]
+frame:
+  head: [0xAA, 0x55]
+  max_data_len: 64
+  fields:
+    - {name: addr, size: 1}
+    - {name: cmd, size: 1}
+    - {name: len, size: 2, endian: big}
+    - {name: data, size: 0}          # 动态长度，由 len 字段声明
+    - {name: checksum, size: 1}
+  checksum:
+    algorithm: sum                   # sum | xor
+    coverage: [addr, cmd, len, data]
+commands:
+  identify:
+    cmd: 1
+    request_data: "*IDN?"
+    response_data: "MockTCP,MTX-1000,SN0001"
+  read_temperature:
+    cmd: 2
+    latency_ms: 80
+    response_data: "25.4 C"
+  set_output:
+    cmd: 3
+    response_data: "OK"
