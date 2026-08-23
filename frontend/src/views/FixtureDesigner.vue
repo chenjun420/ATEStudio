@@ -50,9 +50,11 @@ import {
   listFixtureVersions,
   updateFixtureTopology,
   validateFixtureTopology,
+  getFaultStats,
   type FixtureDeviceTemplate,
   type FixtureTopologyData,
   type FixtureTopologyResponse,
+  type FixtureFaultStatsResponse,
   type Relay,
   type Route,
   type ValidationResult,
@@ -61,6 +63,8 @@ import { listExecutions, type ExecutionListItem } from '@/api/executions'
 import { applyFixtureTierLayout } from '@/utils/fixtureLayoutAdapter'
 import { LINK_STYLES, clearRouteHighlight, syncRouteHighlight } from '@/utils/routeHighlightAdapter'
 import { paintFaultLink, syncFaultVisuals } from '@/utils/faultVisualsAdapter'
+import { HEAT_LEGEND, type FaultStatsPayload } from '@/utils/faultHeatmap'
+import { clearHeatmap, syncHeatmap } from '@/utils/faultHeatmapAdapter'
 import { suspectLinksOf, type FaultVisualInput } from '@/utils/faultVisuals'
 
 const topologyStore = useTopologyRuntimeStore()
@@ -653,6 +657,30 @@ function onSelectSuspectLink(linkId: string) {
   paintFaultLink(g, linkId, hit?.type ?? '')
 }
 
+// 历史故障热力图（T35，§8.3）：开关打开时才懒加载 fault-stats（不拖慢初始加载）
+const heatOn = ref(false)
+
+async function toggleHeatmap(on: boolean | string | number) {
+  const g = graph.value
+  if (!g) return
+  if (!on) {
+    clearHeatmap(g)
+    return
+  }
+  if (!current.value) {
+    heatOn.value = false
+    ElMessage.warning('请先打开一个工装配置')
+    return
+  }
+  try {
+    const stats: FaultStatsPayload = await getFaultStats(current.value.id)
+    syncHeatmap(g, stats)
+  } catch (e) {
+    heatOn.value = false
+    ElMessage.error(`加载故障历史失败: ${e instanceof Error ? e.message : String(e)}`)
+  }
+}
+
 // 新建空拓扑
 function openCreateDialog() {
   createForm.value = { name: '', version: '1.0', product_model: '', description: '' }
@@ -727,6 +755,13 @@ watch(
       </el-dropdown>
       <el-button size="small" @click="showVersions">版本</el-button>
       <el-button size="small" @click="doDuplicate">复制</el-button>
+      <el-divider direction="vertical" />
+      <el-switch v-model="heatOn" size="small" active-text="热力图" @change="toggleHeatmap" />
+      <span v-if="heatOn" class="heat-legend">
+        <span v-for="l in HEAT_LEGEND" :key="l.level" class="heat-legend-item">
+          <i :style="{ background: l.color, opacity: l.opacity }" />{{ l.label }}
+        </span>
+      </span>
       <el-dropdown size="small" @command="(c: string) => doExport(c as 'json' | 'yaml')">
         <el-button size="small">导出<el-icon class="el-icon--right"><arrow-down /></el-icon></el-button>
         <template #dropdown>
@@ -913,6 +948,9 @@ watch(
 .live-badge {
   margin-left: 4px;
 }
+/* 热力图色阶图例（T35） */
+.heat-legend { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--el-text-color-secondary); }
+.heat-legend-item i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 3px; }
 .workspace {
   flex: 1;
   display: flex;

@@ -481,3 +481,31 @@ export async function injectLinkFault(
     fault_type: faultType,
   })
 }
+
+// ─── 历史故障热力图（T35，设计文档 §8.3）────────────────────────────────────
+
+/**
+ * 单链路历史故障统计条目。
+ */
+export interface FaultStatEntry {
+  count: number
+  last_seen?: string | null
+}
+
+/**
+ * GET /fixtures/{id}/fault-stats 响应。
+ */
+export interface FixtureFaultStatsResponse {
+  links: Record<string, FaultStatEntry>
+  generated_at: string
+}
+
+/**
+ * GET /fixtures/{id}/fault-stats - 按链路聚合历史故障频次（热力图数据源）。
+ *
+ * 懒加载约定：仅在用户打开 热力图 开关时调用，不参与初始加载（§8.3）。
+ */
+export async function getFaultStats(id: string): Promise<FixtureFaultStatsResponse> {
+  const response = await api.get<FixtureFaultStatsResponse>(`/fixtures/${id}/fault-stats`)
+  return response.data
+}

@@ -22,6 +22,8 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Iterable
+from datetime import UTC, datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -35,10 +37,6 @@ from ate_cloud.models.fixture_topology import (
     FixtureTopology,
     FixtureVersion,
 )
-from shared.fixture_topology import (
-    FixtureTopology as SharedFixtureTopology,
-    TopologyValidator,
-)
 from ate_cloud.schemas.fixture_topology import (
     FixtureDeviceTemplateCreate,
     FixtureDeviceTemplateResponse,
@@ -47,7 +45,12 @@ from ate_cloud.schemas.fixture_topology import (
     FixtureTopologyUpdate,
     FixtureVersionResponse,
 )
-from shared.fixture_topology import TopologyValidator
+from shared.fixture_topology import (
+    FixtureTopology as SharedFixtureTopology,
+)
+from shared.fixture_topology import (
+    TopologyValidator,
+)
 
 router = APIRouter(prefix="/fixtures", tags=["fixtures"])
 
@@ -184,6 +187,93 @@ async def get_fixture_topology(
     if not topology:
         raise HTTPException(status_code=404, detail="Fixture topology not found")
     return FixtureTopologyResponse.model_validate(topology)
+
+
+# ---------------------------------------------------------------------------
+# 历史故障热力图（T35，v41-gap-analysis #35，设计文档 §8.3）
+# ---------------------------------------------------------------------------
+
+
+def aggregate_fault_events(
+    events: Iterable[object],
+) -> dict[str, dict[str, object]]:
+    """Aggregate raw fault-event dicts into per-link ``{count, last_seen}``.
+
+    Pure function so the counting/last_seen logic is locked by tests now and
+    survives the future persistence swap unchanged.
+
+    Args:
+        events: Iterable of mappings with ``link_id`` and optional
+            ``detected_at`` (ISO-8601 string); invalid entries are skipped.
+
+    Returns:
+        dict: link_id -> {"count": int, "last_seen": str | None} where
+        last_seen is the max detected_at seen for that link.
+    """
+    agg: dict[str, dict[str, object]] = {}
+    for ev in events or []:
+        if not isinstance(ev, dict):
+            continue
+        link_id = ev.get("link_id")
+        if not link_id or not isinstance(link_id, str):
+            continue
+        entry = agg.setdefault(link_id, {"count": 0, "last_seen": None})
+        entry["count"] = int(entry["count"]) + 1  # type: ignore[call-overload]
+        detected_at = ev.get("detected_at")
+        if isinstance(detected_at, str):
+            current = entry["last_seen"]
+            if current is None or detected_at > current:
+                entry["last_seen"] = detected_at
+    return agg
+
+
+async def _load_fault_events(db: AsyncSession) -> list[dict[str, object]]:
+    """Load historical fault events for aggregation.
+
+    Persistence status (T35): there is NO durable fault-event store today —
+    ``SSEBridge.publish_stream_event`` is in-memory only, ``inject_link_fault``
+    publishes to NATS/SSE without a DB write, and no fault_events table
+    exists. Per plan #35 the endpoint therefore returns an honest empty
+    result (200 + ``{"links": {}}``) instead of fabricating history.
+
+    Swap-in point: once a ``fault_events`` table lands (written from
+    ``inject_link_fault`` / worker-side relay), query it here and yield rows
+    shaped ``{link_id, detected_at}`` — the aggregation contract above is
+    already frozen by tests.
+    """
+    return []
+
+
+@router.get("/{fixture_id}/fault-stats")
+async def get_fixture_fault_stats(
+    fixture_id: str,
+    db: DBSession,
+) -> dict[str, object]:
+    """Per-link historical fault frequency for the designer heatmap (§8.3).
+
+    Lazy-fetched by the frontend only when the 热力图 toggle is enabled —
+    never part of initial load.
+
+    Args:
+        fixture_id: Fixture topology UUID.
+        db: Database session.
+
+    Returns:
+        dict: ``{"links": {link_id: {count, last_seen}}, "generated_at"}``.
+        Zero history yields ``links == {}`` (honest empty).
+
+    Raises:
+        HTTPException: 404 if fixture topology not found.
+    """
+    result = await db.execute(select(FixtureTopology).where(FixtureTopology.id == fixture_id))
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Fixture topology not found")
+
+    events = await _load_fault_events(db)
+    return {
+        "links": aggregate_fault_events(events),
+        "generated_at": datetime.now(UTC).isoformat(),
+    }
 
 
 @router.post("", response_model=FixtureTopologyResponse, status_code=status.HTTP_201_CREATED)
