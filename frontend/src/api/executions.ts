@@ -176,3 +176,43 @@ export async function fetchExecutionDiff(
   })
   return response.data
 }
+
+/**
+ * 手动故障注入载荷（T38，与后端 ManualFaultRequest 对齐）。
+ */
+export interface ManualFaultPayload {
+  scope: 'link' | 'instrument' | 'step' | 'scheduler' | 'protocol'
+  target_id: string
+  fault_type: string
+  params?: Record<string, unknown>
+}
+
+/**
+ * 手动故障注入响应（T38，与后端 ManualFaultResponse 对齐）。
+ */
+export interface ManualFaultResponse {
+  ok: boolean
+  run_id: string
+  scope: string
+  layer: string
+  target_id: string
+  fault_type: string
+  fault_id: string
+}
+
+/**
+ * POST /api/v1/executions/{runId}/manual-fault - 手动故障注入（T38）。
+ *
+ * 将面板组合的故障规则转发给运行中执行的 FaultInjector（§7.7 运行时注入），
+ * 禁止纯客户端模拟。
+ */
+export async function injectManualFault(
+  runId: string,
+  payload: ManualFaultPayload,
+): Promise<ManualFaultResponse> {
+  const response = await api.post<ManualFaultResponse>(
+    `/executions/${runId}/manual-fault`,
+    payload,
+  )
+  return response.data
+}

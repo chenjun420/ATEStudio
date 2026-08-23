@@ -43,6 +43,8 @@ from ate_cloud.schemas.execution import (
     ExecutionSearchResponse,
     FaultInjectionRequest,
     FaultInjectionResponse,
+    ManualFaultRequest,
+    ManualFaultResponse,
     SimulationRequest,
     SimulationResponse,
     SimulationResultEvent,
@@ -996,6 +998,147 @@ async def inject_link_fault(
         ok=True,
         run_id=run_id,
         link_id=fault_data.link_id,
+        fault_type=fault_data.fault_type,
+        fault_id=fault_id,
+    )
+
+
+# T38 手动故障注入：scope → §7.7.1 注入层映射。
+MANUAL_SCOPE_LAYERS: dict[str, str] = {
+    "link": "network",
+    "instrument": "instrument",
+    "step": "scheduler",
+    "scheduler": "scheduler",
+    "protocol": "protocol",
+}
+
+# T38 每个 scope 允许的故障类型集合（与 FaultAction.is_exception 的
+# 非异常类动作及 §8.3/§7.7 词汇对齐；越界返回 422）。
+MANUAL_SCOPE_FAULT_TYPES: dict[str, frozenset[str]] = {
+    "link": frozenset({
+        "open_circuit", "short_circuit", "contact_resistance", "noise",
+        "delay", "packet_loss", "reorder",
+    }),
+    "instrument": frozenset({
+        "measurement_out_of_range", "over_voltage", "over_current",
+        "communication", "selftest_failed", "noise", "value_override",
+    }),
+    "step": frozenset({"timeout", "force_fail", "skip_step", "value_override"}),
+    "scheduler": frozenset({"resource_deadlock", "timeout", "force_fail"}),
+    "protocol": frozenset({"scpi_error", "truncated_data", "checksum_error"}),
+}
+
+
+@router.post("/{run_id}/manual-fault", response_model=ManualFaultResponse)
+async def inject_manual_fault(
+    run_id: str,
+    fault_data: ManualFaultRequest,
+    db: DBSession,
+    bridge: BridgeDep,
+) -> ManualFaultResponse:
+    """Inject an operator-composed fault into a running execution (T38).
+
+    Manual fault injection panel backend: unlike the DSL-driven path the
+    operator composes a rule here without waiting for a YAML trigger. The
+    ``scope`` maps to a §7.7.1 layer (link→network, instrument→instrument,
+    step/scheduler→scheduler, protocol→protocol) and the composed rule is
+    forwarded via the same T5 ``inject_fault`` control subject as T44.
+    Also publishes a topology-stream SSE ``fault`` event.
+
+    A NATS outage is non-fatal — the API still returns 200 (consistent
+    with the T44 link-fault endpoint and pause/resume control surface).
+
+    Args:
+        run_id: The execution run identifier.
+        fault_data: Scope + target + fault type (+ optional params).
+        db: Database session.
+        bridge: SSEBridge instance.
+
+    Returns:
+        ManualFaultResponse with ok=true, mapped layer and generated fault_id.
+
+    Raises:
+        HTTPException: 404 if execution not found.
+        HTTPException: 409 if execution has no active (non-terminal) run.
+        HTTPException: 422 if fault_type is not allowed for the scope.
+    """
+    result = await db.execute(select(Execution).where(Execution.id == run_id))
+    execution = result.scalar_one_or_none()
+
+    if not execution:
+        raise HTTPException(status_code=404, detail="Execution not found")
+
+    if execution.status in _TERMINAL_STATES:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Execution has no active execution to inject into "
+                f"(status: {execution.status})"
+            ),
+        )
+
+    layer = MANUAL_SCOPE_LAYERS[fault_data.scope]
+    allowed = MANUAL_SCOPE_FAULT_TYPES[fault_data.scope]
+    if fault_data.fault_type not in allowed:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"fault_type '{fault_data.fault_type}' is not allowed for "
+                f"scope '{fault_data.scope}'. Allowed: {sorted(allowed)}"
+            ),
+        )
+
+    # §7.7.2 DSL 规则：首次调用即命中、一次性（手动注入语义）。
+    fault_id = (
+        f"manual-{fault_data.scope}-{fault_data.target_id}-"
+        f"{fault_data.fault_type}"
+    )
+    action: dict[str, Any] = {"type": fault_data.fault_type}
+    if fault_data.params:
+        action.update(fault_data.params)
+    rule_cfg: dict[str, Any] = {
+        "fault_id": fault_id,
+        "layer": layer,
+        "target": fault_data.target_id,
+        "trigger": {"type": "count", "value": 1},
+        "action": action,
+        "once": True,
+    }
+
+    # Forward via the T5 control subject (non-fatal on NATS outage).
+    try:
+        from ate_cloud.main import get_nats
+
+        nc = get_nats()
+        if nc is not None:
+            payload = json.dumps(
+                {"action": "inject_fault", "run_id": run_id, "rule": rule_cfg}
+            ).encode()
+            await nc.publish(f"ate.control.{run_id}", payload)
+    except RuntimeError:
+        pass
+
+    # Topology SSE fault event (§8.3.7 consumers; scope-aware payload).
+    await bridge.publish_stream_event(
+        run_id=run_id,
+        stream="topology",
+        event_type="fault",
+        data={
+            "run_id": run_id,
+            "scope": fault_data.scope,
+            "target_id": fault_data.target_id,
+            "fault_type": fault_data.fault_type,
+            "fault_id": fault_id,
+            "status": "active",
+        },
+    )
+
+    return ManualFaultResponse(
+        ok=True,
+        run_id=run_id,
+        scope=fault_data.scope,
+        layer=layer,
+        target_id=fault_data.target_id,
         fault_type=fault_data.fault_type,
         fault_id=fault_id,
     )

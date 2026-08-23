@@ -53,6 +53,7 @@ import {
 import { useTopologySimulation } from '@/composables/useTopologySimulation'
 import InstrumentGantt from '@/components/InstrumentGantt.vue'
 import ExecutionDiffPanel from '@/components/ExecutionDiffPanel.vue'
+import ManualFaultPanel from '@/components/ManualFaultPanel.vue'
 
 // ─── 仿真层级/噪声选项（与 useSimulation 对齐）──────────────────────────────
 
@@ -385,6 +386,12 @@ onMounted(() => {
               <el-icon><Delete /></el-icon>
             </el-button>
           </div>
+        </el-card>
+
+        <!-- T38 手动故障注入：向运行中仿真直接注入（无活动运行时禁用） -->
+        <el-card shadow="never" class="panel-card">
+          <template #header>手动故障注入</template>
+          <ManualFaultPanel :run-id="runId || null" />
         </el-card>
       </aside>
 

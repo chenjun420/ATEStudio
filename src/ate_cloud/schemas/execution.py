@@ -211,6 +211,50 @@ class FaultInjectionResponse(BaseModel):
     fault_id: str
 
 
+class ManualFaultRequest(BaseModel):
+    """Request body for POST /api/v1/executions/{run_id}/manual-fault.
+
+    手动故障注入面板（T38，v41-gap-analysis #38）：不等待 DSL 规则触发，
+    由操作员在 SimulationConsole 直接向运行中的仿真注入故障。scope 决定
+    §7.7.1 注入层（link→network / instrument→instrument / step→scheduler /
+    scheduler→scheduler / protocol→protocol），fault_type 合法集合按 scope
+    在端点内校验（越界 422）。
+
+    Attributes:
+        scope: 注入目标域（link/instrument/step/scheduler/protocol）。
+        target_id: 目标 ID（链路/仪器/步骤 ID；scheduler 域可为 "*"）。
+        fault_type: 故障类型（须属于该 scope 的允许集合）。
+        params: 可选附加参数（如 value_override 的 value、noise 的幅度）。
+    """
+
+    scope: Literal["link", "instrument", "step", "scheduler", "protocol"]
+    target_id: str = Field(..., min_length=1)
+    fault_type: str = Field(..., min_length=1)
+    params: dict[str, Any] | None = None
+
+
+class ManualFaultResponse(BaseModel):
+    """Response for POST /api/v1/executions/{run_id}/manual-fault.
+
+    Attributes:
+        ok: 注入受理成功标志。
+        run_id: The execution run identifier.
+        scope: 注入目标域。
+        layer: 映射出的 §7.7.1 注入层。
+        target_id: 目标 ID。
+        fault_type: 故障类型。
+        fault_id: 生成的故障规则 ID。
+    """
+
+    ok: bool = True
+    run_id: str
+    scope: str
+    layer: str
+    target_id: str
+    fault_type: str
+    fault_id: str
+
+
 class SimulationRequest(BaseModel):
     """Request body for POST /api/v1/executions/{run_id}/simulate.
 
