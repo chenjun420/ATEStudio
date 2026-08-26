@@ -34,6 +34,69 @@ from ate_cloud.schemas.app_menu import (
 
 router = APIRouter(prefix="/apps", tags=["apps"])
 
+# Default apps with their menus (seed data — code is the idempotency key).
+# Menu route_path values mirror resolvable frontend routes; for routes with a
+# dynamic segment (e.g. /operator/:station_id) the entry points at a concrete
+# default path because AppLayout strips /:param segments on menu click.
+default_apps: list[dict[str, Any]] = [
+    {
+        "code": "node-mgmt",
+        "name": "节点管理",
+        "description": "管理测试节点注册、状态监控及配置下发",
+        "icon": "Monitor",
+        "sort_order": 1,
+        "menus": [
+            {"code": "stations", "name": "节点列表", "route_path": "/node/stations", "route_name": "StationManagement", "icon": "List", "sort_order": 1, "required_permissions": ["node:read"]},
+            {"code": "node-detail", "name": "节点详情", "route_path": "/node/stations/:id", "route_name": "NodeDetail", "icon": "View", "sort_order": 2, "required_permissions": ["node:read"]},
+        ],
+    },
+    {
+        "code": "flow-mgmt",
+        "name": "流程管理",
+        "description": "可视化流程编排、版本化管理及节点流程绑定",
+        "icon": "Connection",
+        "sort_order": 2,
+        "menus": [
+            {"code": "sequences", "name": "流程列表", "route_path": "/flow/sequences", "route_name": "SequenceList", "icon": "List", "sort_order": 1, "required_permissions": ["flow:read"]},
+            {"code": "sequence-editor", "name": "流程编排", "route_path": "/flow/editor", "route_name": "SequenceEditor", "icon": "Edit", "sort_order": 2, "required_permissions": ["flow:read"]},
+            {"code": "flow-templates", "name": "流程节点模板", "route_path": "/flow/templates", "route_name": "NodeTemplates", "icon": "CopyDocument", "sort_order": 3, "required_permissions": ["flow:read"]},
+            {"code": "scripts", "name": "脚本管理", "route_path": "/flow/scripts", "route_name": "ScriptManagement", "icon": "Document", "sort_order": 4, "required_permissions": ["flow:read"]},
+            {"code": "node-binding", "name": "节点流程绑定", "route_path": "/flow/binding", "route_name": "NodeFlowBinding", "icon": "Link", "sort_order": 5, "required_permissions": ["flow:read", "node:read"]},
+            {"code": "fixture-designer", "name": "工装设计调试器", "route_path": "/flow/fixture-designer", "route_name": "FixtureDesigner", "icon": "SetUp", "sort_order": 6, "required_permissions": ["flow:read"]},
+        ],
+    },
+    {
+        "code": "exec-monitor",
+        "name": "执行监控",
+        "description": "实时监控测试执行状态、历史记录及报告导出",
+        "icon": "DataLine",
+        "sort_order": 3,
+        "menus": [
+            {"code": "dashboard", "name": "实时看板", "route_path": "/monitor/dashboard", "route_name": "Dashboard", "icon": "Odometer", "sort_order": 1, "required_permissions": ["exec:read"]},
+            {"code": "history", "name": "执行历史", "route_path": "/monitor/history", "route_name": "ExecutionHistory", "icon": "Clock", "sort_order": 2, "required_permissions": ["exec:read"]},
+            {"code": "measurements", "name": "测量数据", "route_path": "/monitor/measurements", "route_name": "MeasurementExplorer", "icon": "TrendCharts", "sort_order": 3, "required_permissions": ["exec:read"]},
+            {"code": "reports", "name": "测试报告", "route_path": "/monitor/reports", "route_name": "Reports", "icon": "Tickets", "sort_order": 4, "required_permissions": ["exec:read"]},
+            {"code": "tracing", "name": "追溯查询", "route_path": "/monitor/tracing", "route_name": "TracingViewer", "icon": "Search", "sort_order": 5, "required_permissions": ["exec:read"]},
+            {"code": "simulation-console", "name": "仿真调试控制台", "route_path": "/monitor/simulation", "route_name": "SimulationConsole", "icon": "VideoPlay", "sort_order": 6, "required_permissions": ["exec:read"]},
+            # OperatorView route is /operator/:station_id; AppLayout strips
+            # /:param segments on menu click, so point at a concrete default.
+            {"code": "operator-panel", "name": "操作员面板", "route_path": "/operator/default", "route_name": "OperatorView", "icon": "User", "sort_order": 7, "required_permissions": ["exec:read"]},  # noqa: E501
+        ],
+    },
+    {
+        "code": "system",
+        "name": "系统管理",
+        "description": "系统配置、产品切换及校准管理",
+        "icon": "Setting",
+        "sort_order": 4,
+        "menus": [
+            {"code": "settings", "name": "系统设置", "route_path": "/system/settings", "route_name": "Settings", "icon": "Tools", "sort_order": 1, "required_permissions": ["system:read"]},
+            {"code": "changeover", "name": "产品切换", "route_path": "/system/changeover", "route_name": "ProductChangeover", "icon": "Switch", "sort_order": 2, "required_permissions": ["system:read"]},
+            {"code": "calibration", "name": "校准管理", "route_path": "/system/calibration", "route_name": "CalibrationPanel", "icon": "Aim", "sort_order": 3, "required_permissions": ["system:read"]},
+        ],
+    },
+]
+
 
 def _filter_menus_by_permissions(
     menus: list[AppMenu], user_permissions: set[str]
@@ -295,74 +358,20 @@ async def seed_apps(db: AsyncSession = Depends(get_db)) -> dict[str, object]:
     If a menu already exists, its required_permissions are updated to match
     the seed data (other fields are left unchanged).
     """
-    # Default apps with their menus
-    default_apps: list[dict[str, Any]] = [
-        {
-            "code": "node-mgmt",
-            "name": "节点管理",
-            "description": "管理测试节点注册、状态监控及配置下发",
-            "icon": "Monitor",
-            "sort_order": 1,
-            "menus": [
-                {"code": "stations", "name": "节点列表", "route_path": "/node/stations", "route_name": "StationManagement", "icon": "List", "sort_order": 1, "required_permissions": ["node:read"]},
-                {"code": "node-detail", "name": "节点详情", "route_path": "/node/stations/:id", "route_name": "NodeDetail", "icon": "View", "sort_order": 2, "required_permissions": ["node:read"]},
-            ],
-        },
-        {
-            "code": "flow-mgmt",
-            "name": "流程管理",
-            "description": "可视化流程编排、版本化管理及节点流程绑定",
-            "icon": "Connection",
-            "sort_order": 2,
-            "menus": [
-                {"code": "sequences", "name": "流程列表", "route_path": "/flow/sequences", "route_name": "SequenceList", "icon": "List", "sort_order": 1, "required_permissions": ["flow:read"]},
-                {"code": "sequence-editor", "name": "流程编排", "route_path": "/flow/editor", "route_name": "SequenceEditor", "icon": "Edit", "sort_order": 2, "required_permissions": ["flow:read"]},
-                {"code": "flow-templates", "name": "流程节点模板", "route_path": "/flow/templates", "route_name": "NodeTemplates", "icon": "CopyDocument", "sort_order": 3, "required_permissions": ["flow:read"]},
-                {"code": "scripts", "name": "脚本管理", "route_path": "/flow/scripts", "route_name": "ScriptManagement", "icon": "Document", "sort_order": 4, "required_permissions": ["flow:read"]},
-                {"code": "node-binding", "name": "节点流程绑定", "route_path": "/flow/binding", "route_name": "NodeFlowBinding", "icon": "Link", "sort_order": 5, "required_permissions": ["flow:read", "node:read"]},
-                {"code": "fixture-designer", "name": "工装设计调试器", "route_path": "/flow/fixture-designer", "route_name": "FixtureDesigner", "icon": "SetUp", "sort_order": 6, "required_permissions": ["flow:read"]},
-            ],
-        },
-        {
-            "code": "exec-monitor",
-            "name": "执行监控",
-            "description": "实时监控测试执行状态、历史记录及报告导出",
-            "icon": "DataLine",
-            "sort_order": 3,
-            "menus": [
-                {"code": "dashboard", "name": "实时看板", "route_path": "/monitor/dashboard", "route_name": "Dashboard", "icon": "Odometer", "sort_order": 1, "required_permissions": ["exec:read"]},
-                {"code": "history", "name": "执行历史", "route_path": "/monitor/history", "route_name": "ExecutionHistory", "icon": "Clock", "sort_order": 2, "required_permissions": ["exec:read"]},
-                {"code": "measurements", "name": "测量数据", "route_path": "/monitor/measurements", "route_name": "MeasurementExplorer", "icon": "TrendCharts", "sort_order": 3, "required_permissions": ["exec:read"]},
-                {"code": "reports", "name": "测试报告", "route_path": "/monitor/reports", "route_name": "Reports", "icon": "Tickets", "sort_order": 4, "required_permissions": ["exec:read"]},
-                {"code": "tracing", "name": "追溯查询", "route_path": "/monitor/tracing", "route_name": "TracingViewer", "icon": "Search", "sort_order": 5, "required_permissions": ["exec:read"]},
-                {"code": "simulation-console", "name": "仿真调试控制台", "route_path": "/monitor/simulation", "route_name": "SimulationConsole", "icon": "VideoPlay", "sort_order": 6, "required_permissions": ["exec:read"]},
-            ],
-        },
-        {
-            "code": "system",
-            "name": "系统管理",
-            "description": "系统配置、产品切换及校准管理",
-            "icon": "Setting",
-            "sort_order": 4,
-            "menus": [
-                {"code": "settings", "name": "系统设置", "route_path": "/system/settings", "route_name": "Settings", "icon": "Tools", "sort_order": 1, "required_permissions": ["system:read"]},
-                {"code": "changeover", "name": "产品切换", "route_path": "/system/changeover", "route_name": "ProductChangeover", "icon": "Switch", "sort_order": 2, "required_permissions": ["system:read"]},
-                {"code": "calibration", "name": "校准管理", "route_path": "/system/calibration", "route_name": "CalibrationPanel", "icon": "Aim", "sort_order": 3, "required_permissions": ["system:read"]},
-            ],
-        },
-    ]
-
     created_apps = 0
     created_menus = 0
     updated_menus = 0
 
     for app_data in default_apps:
-        menus_data = app_data.pop("menus")
+        menus_data = app_data["menus"]
+        # Non-mutating copy without the "menus" key (default_apps is a
+        # module-level constant shared across seed invocations).
+        app_fields = {k: v for k, v in app_data.items() if k != "menus"}
         # Check if app exists by code
-        result = await db.execute(select(App).where(App.code == app_data["code"]))
+        result = await db.execute(select(App).where(App.code == app_fields["code"]))
         app = result.scalar_one_or_none()
         if app is None:
-            app = App(id=str(uuid.uuid4()), **app_data)
+            app = App(id=str(uuid.uuid4()), **app_fields)
             db.add(app)
             created_apps += 1
 
