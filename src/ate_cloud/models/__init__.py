@@ -5,6 +5,7 @@ class Base(DeclarativeBase):
 
 from ate_cloud.models.app_menu import App, AppMenu
 from ate_cloud.models.execution import Execution
+from ate_cloud.models.fault_event import FaultEvent
 from ate_cloud.models.fixture_topology import (
     FixtureDeviceTemplate,
     FixtureTopology,
@@ -22,6 +23,7 @@ __all__ = [
     "App",
     "AppMenu",
     "Execution",
+    "FaultEvent",
     "FixtureDeviceTemplate",
     "FixtureTopology",
     "FixtureVersion",

@@ -11,6 +11,7 @@ This module provides REST API endpoints for execution management:
 
 import asyncio
 import json
+import logging
 import uuid
 from collections.abc import AsyncGenerator
 from pathlib import Path
@@ -24,6 +25,7 @@ from sse_starlette.sse import EventSourceResponse, ServerSentEvent  # type: igno
 from ate_cloud.config import settings
 from ate_cloud.db import get_db
 from ate_cloud.models.execution import Execution
+from ate_cloud.models.fault_event import SOURCE_LINK, SOURCE_MANUAL, FaultEvent
 from ate_cloud.nats.sse_bridge import SSEBridge
 from ate_cloud.services.breakpoint_registry import (
     BreakpointRegistry,
@@ -70,8 +72,55 @@ from ate_cloud.services.simulation_report import build_simulation_report
 
 router = APIRouter(prefix="/executions", tags=["executions"])
 
+logger = logging.getLogger(__name__)
+
 # Type alias for async DB session dependency (avoids B008 ruff warning).
 DBSession = Annotated[AsyncSession, Depends(get_db)]
+
+
+async def _persist_fault_event(
+    db: AsyncSession,
+    *,
+    run_id: str,
+    link_id: str,
+    fault_type: str,
+    source: str,
+    detail: dict[str, Any],
+) -> None:
+    """Persist one FaultEvent row (RH-1, v41-remaining-hardening #1).
+
+    Best-effort by contract: called AFTER the NATS control publish and the
+    topology SSE event so persistence can neither delay nor fail the
+    injection path. Any DB error downgrades to a warning log — the request
+    still returns 200 (mirrors the NATS-outage tolerance above).
+
+    Args:
+        db: Database session.
+        run_id: Execution run identifier.
+        link_id: Topology link id (empty string for non-link manual scopes).
+        fault_type: Fault type string.
+        source: ``link`` | ``manual`` | ``scheduler``.
+        detail: JSON payload (fault_id/scope/layer/target_id/params).
+    """
+    try:
+        db.add(
+            FaultEvent(
+                id=str(uuid.uuid4()),
+                run_id=run_id,
+                link_id=link_id,
+                fault_type=fault_type,
+                source=source,
+                detail=detail,
+            )
+        )
+        await db.commit()
+    except Exception as exc:  # noqa: BLE001 — non-blocking by contract
+        await db.rollback()
+        logger.warning(
+            "fault event persistence failed for run %s (non-blocking): %s",
+            run_id,
+            exc,
+        )
 
 
 def get_sse_bridge(request: Request) -> SSEBridge:
@@ -1126,6 +1175,20 @@ async def inject_link_fault(
         },
     )
 
+    # RH-1: persist AFTER NATS publish + SSE event (best-effort, non-blocking).
+    await _persist_fault_event(
+        db,
+        run_id=run_id,
+        link_id=fault_data.link_id,
+        fault_type=fault_data.fault_type,
+        source=SOURCE_LINK,
+        detail={
+            "fault_id": fault_id,
+            "layer": "network",
+            "params": dict(fault_data.params or {}),
+        },
+    )
+
     return FaultInjectionResponse(
         ok=True,
         run_id=run_id,
@@ -1262,6 +1325,23 @@ async def inject_manual_fault(
             "fault_type": fault_data.fault_type,
             "fault_id": fault_id,
             "status": "active",
+        },
+    )
+
+    # RH-1: persist AFTER NATS publish + SSE event (best-effort, non-blocking).
+    # 非 link 域的 target 不是拓扑链路——存空串让热力图聚合自然跳过。
+    await _persist_fault_event(
+        db,
+        run_id=run_id,
+        link_id=fault_data.target_id if fault_data.scope == "link" else "",
+        fault_type=fault_data.fault_type,
+        source=SOURCE_MANUAL,
+        detail={
+            "fault_id": fault_id,
+            "scope": fault_data.scope,
+            "layer": layer,
+            "target_id": fault_data.target_id,
+            "params": dict(fault_data.params or {}),
         },
     )
 

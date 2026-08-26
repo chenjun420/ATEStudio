@@ -32,6 +32,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ate_cloud.db import get_db
+from ate_cloud.models.fault_event import FaultEvent
 from ate_cloud.models.fixture_topology import (
     FixtureDeviceTemplate,
     FixtureTopology,
@@ -199,8 +200,8 @@ def aggregate_fault_events(
 ) -> dict[str, dict[str, object]]:
     """Aggregate raw fault-event dicts into per-link ``{count, last_seen}``.
 
-    Pure function so the counting/last_seen logic is locked by tests now and
-    survives the future persistence swap unchanged.
+    Pure function so the counting/last_seen logic is locked by tests and
+    survived the RH-1 persistence swap (rows now come from fault_events).
 
     Args:
         events: Iterable of mappings with ``link_id`` and optional
@@ -227,21 +228,51 @@ def aggregate_fault_events(
     return agg
 
 
-async def _load_fault_events(db: AsyncSession) -> list[dict[str, object]]:
-    """Load historical fault events for aggregation.
+async def _load_fault_events(
+    db: AsyncSession,
+    fixture_id: str,
+) -> list[dict[str, object]]:
+    """Load persisted fault events for one fixture's heatmap (RH-1).
 
-    Persistence status (T35): there is NO durable fault-event store today —
-    ``SSEBridge.publish_stream_event`` is in-memory only, ``inject_link_fault``
-    publishes to NATS/SSE without a DB write, and no fault_events table
-    exists. Per plan #35 the endpoint therefore returns an honest empty
-    result (200 + ``{"links": {}}``) instead of fabricating history.
+    Reads the ``fault_events`` table (written by T44 fault-injection /
+    T38 manual-fault after NATS publish). Cloud-side write paths carry no
+    execution→fixture binding, so attribution matches each event's
+    ``link_id`` against the ids declared in this fixture's topology —
+    events for foreign/unknown links never bleed into this fixture.
 
-    Swap-in point: once a ``fault_events`` table lands (written from
-    ``inject_link_fault`` / worker-side relay), query it here and yield rows
-    shaped ``{link_id, detected_at}`` — the aggregation contract above is
-    already frozen by tests.
+    Rows are shaped ``{link_id, detected_at}`` for the frozen
+    :func:`aggregate_fault_events` contract; empty-string link_ids
+    (non-link manual scopes) are skipped.
+
+    Args:
+        db: Database session.
+        fixture_id: Fixture topology UUID.
+
+    Returns:
+        list of ``{link_id, detected_at}`` dicts (empty when no history).
     """
-    return []
+    topo_result = await db.execute(
+        select(FixtureTopology.topology_data).where(FixtureTopology.id == fixture_id)
+    )
+    topology_data = topo_result.scalar_one_or_none()
+    link_ids = [
+        link["id"]
+        for link in (topology_data or {}).get("links", [])
+        if isinstance(link, dict) and isinstance(link.get("id"), str) and link["id"]
+    ]
+    if not link_ids:
+        return []
+
+    result = await db.execute(
+        select(FaultEvent)
+        .where(FaultEvent.link_id.in_(link_ids))
+        .order_by(FaultEvent.created_at.asc())
+    )
+    return [
+        {"link_id": ev.link_id, "detected_at": ev.created_at.isoformat()}
+        for ev in result.scalars().all()
+        if ev.link_id
+    ]
 
 
 @router.get("/{fixture_id}/fault-stats")
@@ -269,7 +300,7 @@ async def get_fixture_fault_stats(
     if result.scalar_one_or_none() is None:
         raise HTTPException(status_code=404, detail="Fixture topology not found")
 
-    events = await _load_fault_events(db)
+    events = await _load_fault_events(db, fixture_id)
     return {
         "links": aggregate_fault_events(events),
         "generated_at": datetime.now(UTC).isoformat(),
