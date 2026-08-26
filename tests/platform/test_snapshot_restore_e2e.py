@@ -23,14 +23,21 @@ from typing import Any
 
 import pytest
 
+from ate_platform.proxy.proxy_manager import ProxyManager
 from ate_platform.scheduler.condition_evaluator import ConditionEvaluator
 from ate_platform.scheduler.event_bus import EventBus
+from ate_platform.scheduler.jetstream_worker import (
+    JetStreamWorker,
+    PlanBootstrapper,
+    make_instrument_reset_callback,
+)
 from ate_platform.scheduler.resource_manager import ResourceManager
 from ate_platform.scheduler.scanner_scheduler import ScannerScheduler
 from ate_platform.scheduler.state_snapshot import StateSnapshot
 from ate_platform.scheduler.step_registry import StepRegistry
 from ate_platform.scheduler.variable_space import VariableSpace
 from ate_platform.types import Condition
+from shared.dsl import YamlPlan, YamlStep
 from shared.events import EventType
 from shared.types import StepStatus
 
@@ -418,3 +425,189 @@ async def test_running_step_reexecutes_exactly_once_after_crash(tmp_path: Path) 
         "s8": 1,
     }
     assert world2.variable_space.get("scope.last_executed") == "s8"
+
+
+# ---------------------------------------------------------------------------
+# Worker 级（RH-4）：PlanBootstrapper / JetStreamWorker 恢复链回调接线
+#
+# T16 缺口：ScannerScheduler 支持 instrument_reset_callback，但 worker 侧
+# PlanBootstrapper 从未传入 —— 崩溃恢复时 *RST 永远不会到达仪器。
+# 这里沿生产装配链（PlanBootstrapper → ScannerScheduler._maybe_resume）
+# 验证回调接线；不启动调度器扫描循环（无闸门计划经真实执行器会挂起），
+# 直接调用 §6.6 恢复入口 _maybe_resume（start() 内部同款调用点）。
+# ---------------------------------------------------------------------------
+
+
+class RecordingProxyManager:
+    """ProxyManager 测试替身：记录每台仪器的 reset() 调用。
+
+    fail_on 中的 resource_id 在 reset() 时抛 RuntimeError（模拟代理停止/
+    仪器不可达），用于验证容错语义。
+    """
+
+    def __init__(
+        self,
+        resource_ids: list[str],
+        fail_on: set[str] | None = None,
+    ) -> None:
+        self.config: dict[str, Any] = {
+            "instruments": {rid: {"type": "MOCK"} for rid in resource_ids}
+        }
+        self.resets: list[str] = []
+        self.fail_on = set(fail_on or ())
+
+    def client(self, resource_id: str, timeout: float = 30.0) -> Any:
+        manager = self
+
+        class _Client:
+            def reset(self) -> None:
+                if resource_id in manager.fail_on:
+                    raise RuntimeError(f"Instrument proxy stopped [{resource_id}]")
+                manager.resets.append(resource_id)
+
+        return _Client()
+
+
+def _resumable_snapshot(snapshot_dir: str) -> None:
+    """预置一份可恢复快照（模拟上次运行崩溃遗留）。"""
+    StateSnapshot(snapshot_dir).save(
+        {
+            "step_states": {"s1": "PASSED", "s2": "PENDING"},
+            "variables": {"scope": {}, "steps": {}, "loop": {}},
+            "timestamp": 0.0,
+        }
+    )
+
+
+def _two_step_plan() -> YamlPlan:
+    return YamlPlan(
+        name="rh4-restore",
+        version="1.0",
+        steps=[
+            YamlStep(id="s1", script="noop.py"),
+            YamlStep(id="s2", script="noop.py", preconditions=["s1"]),
+        ],
+    )
+
+
+@pytest.mark.asyncio
+async def test_bootstrapper_wires_reset_callback_through_restore_chain(
+    tmp_path: Path,
+) -> None:
+    """生产装配链：PlanBootstrapper 传入的回调在恢复时对每台仪器发 *RST。"""
+    _resumable_snapshot(str(tmp_path))
+    rack = InstrumentRack(INSTRUMENTS)
+
+    bootstrapper = PlanBootstrapper(
+        _two_step_plan(),
+        snapshot_dir=str(tmp_path),
+        instrument_reset_callback=rack.reset_all,
+    )
+    bootstrapper.bootstrap()  # 注册步骤 + 编译计划（不启动扫描循环）
+    assert rack.reset_count == 0, "构造期不得触发 *RST"
+
+    await bootstrapper.event_bus.start()
+    try:
+        await bootstrapper.scheduler._maybe_resume()  # noqa: SLF001 — §6.6 恢复入口
+        assert rack.reset_count == 1, "恢复时必须且只触发一次"
+        assert rack.commands == [f"{name}: *RST" for name in INSTRUMENTS]
+        assert bootstrapper.scheduler.get_status()["resumed_from_snapshot"] is True
+        assert (
+            bootstrapper.step_registry.get_status("s1") == StepStatus.PASSED
+        ), "步骤状态随恢复链还原"
+    finally:
+        await bootstrapper.event_bus.stop()
+
+
+@pytest.mark.asyncio
+async def test_bootstrapper_without_callback_keeps_legacy_restore(
+    tmp_path: Path,
+) -> None:
+    """不传回调参数 = 既有行为：恢复照常完成，调度器回调为 None。"""
+    _resumable_snapshot(str(tmp_path))
+
+    bootstrapper = PlanBootstrapper(_two_step_plan(), snapshot_dir=str(tmp_path))
+    bootstrapper.bootstrap()  # 注册步骤 + 编译计划（不启动扫描循环）
+    assert bootstrapper.scheduler._instrument_reset_callback is None  # noqa: SLF001
+
+    await bootstrapper.event_bus.start()
+    try:
+        await bootstrapper.scheduler._maybe_resume()  # noqa: SLF001
+        assert bootstrapper.scheduler.get_status()["resumed_from_snapshot"] is True
+        assert bootstrapper.step_registry.get_status("s1") == StepStatus.PASSED
+    finally:
+        await bootstrapper.event_bus.stop()
+
+
+@pytest.mark.asyncio
+async def test_worker_reset_callback_resets_each_managed_instrument_once() -> None:
+    """worker 构建的回调：对代理配置中的每台仪器恰好发一次 reset。"""
+    stub = RecordingProxyManager(list(INSTRUMENTS))
+    callback = make_instrument_reset_callback(stub)  # type: ignore[arg-type]
+
+    await callback()
+
+    assert stub.resets == sorted(INSTRUMENTS), "每台受管仪器各复位一次"
+
+
+@pytest.mark.asyncio
+async def test_worker_reset_callback_tolerates_unavailable_instruments() -> None:
+    """单台仪器不可达 → warning 继续，其余仪器照常复位，绝不抛异常。"""
+    stub = RecordingProxyManager(
+        list(INSTRUMENTS),
+        fail_on={"psu1", "eload1"},
+    )
+    callback = make_instrument_reset_callback(stub)  # type: ignore[arg-type]
+
+    await callback()  # 不应抛出
+
+    assert stub.resets == ["dmm1"], "可达仪器仍被复位，失败仪器被跳过"
+
+
+@pytest.mark.asyncio
+async def test_worker_reset_callback_tolerates_empty_proxy_config() -> None:
+    """代理无任何受管仪器 → warning 后直接返回（恢复不被阻断）。"""
+    stub = RecordingProxyManager([])
+    callback = make_instrument_reset_callback(stub)  # type: ignore[arg-type]
+
+    await callback()
+
+    assert stub.resets == []
+
+
+def test_worker_without_proxy_manager_passes_no_callback(tmp_path: Path) -> None:
+    """未配置代理的 worker：构建结果为 None → 调度器保持既有无回调行为。"""
+    worker = JetStreamWorker(snapshot_dir=str(tmp_path))
+    assert worker._build_instrument_reset_callback() is None  # noqa: SLF001
+
+    configured = JetStreamWorker(
+        snapshot_dir=str(tmp_path),
+        proxy_manager=RecordingProxyManager(list(INSTRUMENTS)),  # type: ignore[arg-type]
+    )
+    assert callable(configured._build_instrument_reset_callback())  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_inline_proxy_rst_reaches_mock_instruments(tmp_path: Path) -> None:
+    """集成冒烟：回调经真实 inline ProxyManager/InstrumentClient 到达 mock 驱动。
+
+    *RST 效果在 mock 驱动上不可观测，故验证：回调全程无异常 + 复位后
+    仪器仍可正常 query（IPC 链路未被破坏）。
+    """
+    manager = ProxyManager(
+        {"instruments": {"DMM_CH1": {"type": "DMM"}}},
+        simulation=True,
+        log_dir=str(tmp_path),
+    )
+    manager.start()
+    try:
+        client = manager.client("DMM_CH1")
+        client.connect("MOCK::DMM")
+
+        callback = make_instrument_reset_callback(manager)
+        await callback()  # 经 IPC 对 DMM_CH1 发送复位指令
+
+        response = client.query("MEAS:VOLT:DC?")
+        assert float(response) > 0, "复位后仪器仍可正常测量"
+    finally:
+        manager.stop()

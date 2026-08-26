@@ -19,6 +19,7 @@ import logging
 import os
 import socket
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,7 @@ from shared.dsl import ExecutionMode, LoopType, YamlLoop, YamlPlan, YamlStep
 from shared.events import Event, EventType
 from shared.types import Condition
 
+from ..proxy.proxy_manager import ProxyManager
 from ..simulation.fault_injector import FaultInjector
 from .condition_evaluator import ConditionEvaluator
 from .event_bus import EventBus
@@ -58,15 +60,52 @@ _FORWARDED_EVENT_TYPES = (
 )
 
 
+def make_instrument_reset_callback(
+    proxy_manager: ProxyManager,
+) -> Callable[[], Awaitable[None]]:
+    """Build an async *RST callback over all proxy-managed instruments (§6.6).
+
+    The returned coroutine sends ``*RST`` (via ``InstrumentClient.reset``)
+    to every instrument declared in ``proxy_manager.config["instruments"]``.
+    Per-instrument failures (stopped proxy, unreachable instrument) are
+    logged as warnings and never propagate — crash recovery must not be
+    blocked by a single bad instrument.
+    """
+    resource_ids = sorted((proxy_manager.config or {}).get("instruments", {}))
+
+    async def _reset_all() -> None:
+        if not resource_ids:
+            logger.warning(
+                "Instrument reset skipped: no instruments configured in proxy"
+            )
+            return
+        for rid in resource_ids:
+            try:
+                await asyncio.to_thread(proxy_manager.client(rid).reset)
+            except Exception as exc:
+                logger.warning("Instrument *RST failed [%s]: %s", rid, exc)
+            else:
+                logger.info("Instrument *RST sent [%s]", rid)
+
+    return _reset_all
+
+
 class PlanBootstrapper:
     """Flattens a YamlPlan into scheduler-ready state.
 
     Creates all five ScannerScheduler dependencies, registers steps with
     derived Conditions, and compiles the plan. YamlLoop children are
-    flattened recursively (max depth 10).
+    flattened recursively (max depth 10). An optional
+    ``instrument_reset_callback`` is forwarded to the scheduler so crash
+    recovery (§6.6) can issue ``*RST`` to all instruments.
     """
 
-    def __init__(self, plan: YamlPlan, snapshot_dir: str | None = None) -> None:
+    def __init__(
+        self,
+        plan: YamlPlan,
+        snapshot_dir: str | None = None,
+        instrument_reset_callback: Callable[[], Awaitable[None]] | None = None,
+    ) -> None:
         self._plan = plan
         self._snapshot_dir = snapshot_dir
         # T40：flatten 时顺带构建的 step_id → StepPosition 位置表
@@ -99,6 +138,8 @@ class PlanBootstrapper:
             fault_injector=self.fault_injector,
             # §6.6 崩溃恢复：提供目录即启用状态快照
             snapshot_dir=snapshot_dir,
+            # §6.6 崩溃恢复：恢复时对全部受管仪器发 *RST（T16 缺口闭合）
+            instrument_reset_callback=instrument_reset_callback,
         )
 
     def bootstrap(self, dut_id: str | None = None) -> ScannerScheduler:
@@ -246,6 +287,7 @@ class JetStreamWorker:
         max_concurrent_tasks: int = 1,
         heartbeat_interval: float = _HEARTBEAT_INTERVAL,
         snapshot_dir: str | None = None,
+        proxy_manager: ProxyManager | None = None,
     ) -> None:
         self._nats_url = nats_url
         self._worker_id_path = worker_id_path or os.environ.get(
@@ -256,6 +298,9 @@ class JetStreamWorker:
         self._heartbeat_interval = heartbeat_interval
         # §6.6 状态快照目录（None 表示禁用崩溃恢复）
         self._snapshot_dir = snapshot_dir or os.environ.get("ATE_PLATFORM_SNAPSHOT_DIR")
+        # §6.6 崩溃恢复：代理在位时，恢复链对全部受管仪器发 *RST。
+        # 生命周期（start/stop）由调用方管理。
+        self._proxy_manager = proxy_manager
         self._nc: NatsClient | None = None
         self._js: Any = None
         self._heartbeat_task: asyncio.Task[None] | None = None
@@ -290,6 +335,16 @@ class JetStreamWorker:
             "current_tasks": 0 if self._current_scheduler is None else 1,
             "timestamp": datetime.now().isoformat(),
         }
+
+    def _build_instrument_reset_callback(self) -> Callable[[], Awaitable[None]] | None:
+        """§6.6：把代理全量仪器 *RST 回调接入恢复链。
+
+        未配置代理时返回 None（既有行为不变——无回调、恢复照常）；
+        配置了代理则返回容错回调（单台仪器失败仅告警，绝不阻断恢复）。
+        """
+        if self._proxy_manager is None:
+            return None
+        return make_instrument_reset_callback(self._proxy_manager)
 
     async def start(self, nc: NatsClient | None = None) -> None:
         """Connect to NATS, register in KV, start heartbeat and control sub."""
@@ -558,7 +613,11 @@ class JetStreamWorker:
             data = json.loads(msg.data.decode("utf-8"))
             plan = _dict_to_yaml_plan(data)
 
-            bootstrapper = PlanBootstrapper(plan, snapshot_dir=self._snapshot_dir)
+            bootstrapper = PlanBootstrapper(
+                plan,
+                snapshot_dir=self._snapshot_dir,
+                instrument_reset_callback=self._build_instrument_reset_callback(),
+            )
             self._current_scheduler = bootstrapper.bootstrap(dut_id=execution_id)
             self._current_event_bus = bootstrapper.event_bus
             self._current_injector = bootstrapper.fault_injector
