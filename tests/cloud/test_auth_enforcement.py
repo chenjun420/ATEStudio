@@ -412,9 +412,12 @@ def test_all_protected_mounts_carry_security_dependency() -> None:
     protected = [m for m in mounts if "get_current_user" in _dep_names(m)]
     anonymous = [m for m in mounts if not _dep_names(m)]
 
-    # 24 protected mounts vs 5 exempt/already-protected mounts
-    # (health, auth, users, rbac, apps).
-    assert len(protected) == 24
+    # 25 protected mounts vs 5 exempt/already-protected mounts
+    # (health, auth, users, rbac, apps). The 25th is the RH-6 checkpoint-id
+    # ack alias router (POST /checkpoints/{checkpoint_id}/ack), mounted with
+    # the same get_current_user guard; its anonymous-401 is also covered in
+    # test_checkpoint_id_ack.py.
+    assert len(protected) == 25
     assert len(anonymous) == 5
 
     anonymous_routers = [_mounted(m) for m in anonymous]

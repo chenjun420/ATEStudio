@@ -26,6 +26,7 @@ __all__ = [
     "OperatorCheckpointResponse",
     "OperatorCheckpointAckRequest",
     "OperatorCheckpointAckResponse",
+    "OperatorCheckpointIdAckRequest",
     "OperatorInteractionEvent",
     "OperatorInteractionType",
 ]
@@ -44,6 +45,10 @@ class OperatorInteractionEvent(BaseModel):
         step_id: Step identifier that triggered the checkpoint.
         checkpoint: The full checkpoint definition (type, prompt, ...).
         created_at: UTC timestamp when the checkpoint was created.
+        checkpoint_id: Stable uuid assigned by the cloud API when it first
+            observes the pending checkpoint (RH-6). Present only while a
+            checkpoint is pending; used by the alias ack path
+            ``POST /api/v1/checkpoints/{checkpoint_id}/ack``.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -52,6 +57,7 @@ class OperatorInteractionEvent(BaseModel):
     step_id: str
     checkpoint: OperatorCheckpoint
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    checkpoint_id: str | None = None
 
 
 class OperatorCheckpointResponse(BaseModel):
@@ -75,6 +81,7 @@ class OperatorCheckpointResponse(BaseModel):
     step_id: str | None = None
     checkpoint: OperatorCheckpoint | None = None
     created_at: datetime | None = None
+    checkpoint_id: str | None = None
 
 
 class OperatorCheckpointRequest(BaseModel):
@@ -123,6 +130,30 @@ class OperatorCheckpointAckRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     step_id: str = Field(..., min_length=1, description="Step identifier being acked")
+    operator: str = Field(
+        ...,
+        min_length=1,
+        description="操作员姓名/工号（必须记录签署人）",
+    )
+    note: str | None = Field(default=None, description="Optional acknowledgement note")
+
+
+class OperatorCheckpointIdAckRequest(BaseModel):
+    """Request body for the checkpoint-id ack alias endpoint (RH-6).
+
+    Submitted via ``POST /api/v1/checkpoints/{checkpoint_id}/ack`` -- the
+    design-doc path alias. Unlike :class:`OperatorCheckpointAckRequest` the
+    caller does not supply ``step_id`` (or ``run_id``): the cloud-side
+    registry resolves them from ``checkpoint_id``. Only the signing
+    operator identity and optional note are carried.
+
+    Attributes:
+        operator: Operator name/ID performing the acknowledgement.
+        note: Optional free-form note recorded with the acknowledgement.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
     operator: str = Field(
         ...,
         min_length=1,
