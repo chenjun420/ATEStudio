@@ -47,3 +47,15 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
 
             DriverRegistry.register(DMM_DRIVER_NAME, hal_cls=DMMHALDriver, mal_cls=DMMAbstraction)
             DriverRegistry.register(PSU_DRIVER_NAME, hal_cls=PSUHALDriver, mal_cls=PSUAbstraction)
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Register custom markers (pyproject.toml left untouched - user WIP).
+
+    RH-2: 'integration' marks tests needing a live nats-server; they
+    fast-skip (1s probe) when no server is reachable, never hang.
+    """
+    config.addinivalue_line(
+        "markers",
+        "integration: requires a live service (e.g. nats-server); auto-skips fast when unavailable",
+    )

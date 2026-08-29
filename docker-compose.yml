@@ -25,15 +25,19 @@ services:
   nats:
     profiles: [dev, cloud]
     image: nats:2.10-alpine
+    # RH-2: explicit file-storage template (config/nats-server.conf) pins
+    # store_dir to /var/lib/nats/jetstream; the named volume mounted there
+    # makes JetStream state durable across container recreation.
     command: >-
       -js
-      --store_dir /data/jetstream
+      --config /etc/nats/nats-server.conf
       -m 8222
     ports:
       - "4222:4222"
       - "8222:8222"
     volumes:
-      - nats-data:/data
+      - ./config/nats-server.conf:/etc/nats/nats-server.conf:ro
+      - nats-jetstream-data:/var/lib/nats/jetstream
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8222/healthz"]
       interval: 10s
@@ -205,7 +209,7 @@ services:
 # Volumes — persistent data storage
 # =============================================================================
 volumes:
-  nats-data:       # NATS JetStream persistent storage
+  nats-jetstream-data:  # NATS JetStream file storage (RH-2, /var/lib/nats/jetstream)
   qdrant-data:     # Qdrant vector index storage
   neo4j-data:      # Neo4j graph database storage
   ate-scripts:     # Shared test scripts (ate-cloud writes, ate-platform reads)

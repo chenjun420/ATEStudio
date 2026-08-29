@@ -15,6 +15,14 @@ class Settings(BaseSettings):
     debug: bool = False
     nats_url: str = "nats://localhost:4222"
 
+    # JetStream file storage (RH-2, doc §5/§10.5): when True the server runs
+    # with file-backed streams (config/nats-server.conf store_dir
+    # /var/lib/nats/jetstream) so offline events survive restarts.
+    nats_file_store_enabled: bool = Field(
+        default=True,
+        description="Enable JetStream FILE storage for event streams (TESTSTATION_EVENTS)",
+    )
+
     # Database configuration
     database_type: DatabaseType = Field(default=DatabaseType.SQLITE)
     database_url: str = ""  # Auto-constructed if empty
