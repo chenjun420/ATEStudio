@@ -72,6 +72,13 @@ from ate_cloud.services.simulation_report import build_simulation_report
 
 router = APIRouter(prefix="/executions", tags=["executions"])
 
+#: Ticket-authenticated mount for the SSE streams (RH-3). Mirrors the
+#: main router's prefix; mounted in router.py WITHOUT the mount-level JWT
+#: guard (native EventSource cannot send headers) and WITH a mount-level
+#: ``require_sse_user`` dependency instead. Routes stay defined here so
+#: handler code, tags and path segments live next to their siblings.
+sse_router = APIRouter(prefix="/executions", tags=["executions"])
+
 logger = logging.getLogger(__name__)
 
 # Type alias for async DB session dependency (avoids B008 ruff warning).
@@ -166,7 +173,7 @@ def get_breakpoint_registry(request: Request) -> BreakpointRegistry:
 RegistryDep = Annotated[BreakpointRegistry, Depends(get_breakpoint_registry)]
 
 
-@router.get("/{run_id}/events", response_class=EventSourceResponse)
+@sse_router.get("/{run_id}/events", response_class=EventSourceResponse)
 async def stream_execution_events(
     run_id: str,
     request: Request,
@@ -275,7 +282,7 @@ async def stream_execution_events(
 
 # 拓扑运行时状态流（§8.3.6）：夹具/DUT 状态 SSE 推送。
 # 静态路径，须先于 /{run_id} 等动态路径定义。
-@router.get("/{run_id}/topology-stream", response_class=EventSourceResponse)
+@sse_router.get("/{run_id}/topology-stream", response_class=EventSourceResponse)
 async def stream_topology_state(
     run_id: str,
     request: Request,

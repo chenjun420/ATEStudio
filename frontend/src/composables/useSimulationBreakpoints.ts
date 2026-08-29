@@ -22,6 +22,7 @@ import {
   type BreakpointHitPayload,
   type ValidationResult,
 } from '@/utils/breakpointTypes'
+import { openTicketedEventSource, type TicketedEventSource } from '@/utils/sseTicket'
 
 export interface UseSimulationBreakpointsReturn {
   items: Ref<TypedBreakpoint[]>
@@ -42,7 +43,7 @@ export function useSimulationBreakpoints(
   const items = ref<TypedBreakpoint[]>([])
   const paused = ref(false)
   const lastHit = ref<BreakpointHitPayload | null>(null)
-  let eventSource: EventSource | null = null
+  let eventSource: TicketedEventSource | null = null
 
   async function load(runId: string): Promise<void> {
     if (!runId) return
@@ -59,15 +60,17 @@ export function useSimulationBreakpoints(
   function connect(runId: string): void {
     disconnect()
     if (!runId || typeof EventSource === 'undefined') return
-    const es = new EventSource(`/api/v1/executions/${runId}/events`)
-    es.addEventListener('breakpoint', (e: MessageEvent<string>) => {
-      try {
-        handleHit(JSON.parse(e.data) as BreakpointHitPayload)
-      } catch {
-        /* malformed payload — ignore */
-      }
+    eventSource = openTicketedEventSource(`/api/v1/executions/${runId}/events`, {
+      listeners: {
+        breakpoint: (e: MessageEvent<string>) => {
+          try {
+            handleHit(JSON.parse(e.data) as BreakpointHitPayload)
+          } catch {
+            /* malformed payload — ignore */
+          }
+        },
+      },
     })
-    eventSource = es
   }
 
   function disconnect(): void {

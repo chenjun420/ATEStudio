@@ -16,6 +16,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 
 import { fetchOfflineStatus, triggerReconcile } from '@/api/offline'
+import { openTicketedEventSource, type TicketedEventSource } from '@/utils/sseTicket'
 import {
   capacityLevel,
   formatAgeHours,
@@ -39,7 +40,7 @@ const SSE_URL = '/api/v1/offline/status/stream'
 
 const state = ref<OfflineStatusState>(initialOfflineStatusState())
 const reconciling = ref(false)
-let eventSource: EventSource | null = null
+let eventSource: TicketedEventSource | null = null
 let fallbackTimer: ReturnType<typeof setInterval> | null = null
 
 // ─── 派生 ───────────────────────────────────────────────────────────────────
@@ -90,27 +91,28 @@ function stopFallbackPolling(): void {
 }
 
 function connectStream(): void {
-  // jsdom / 老环境无 EventSource —— 静默跳过（useSimulationBreakpoints 先例）。
-  if (typeof EventSource === 'undefined') return
+  // jsdom / 老环境无 EventSource 由 openTicketedEventSource 内部静默跳过。
   disconnectStream()
-  const es = new EventSource(SSE_URL)
-  es.onopen = () => {
-    stopFallbackPolling()
-    state.value = setStreamConnected(state.value, true)
-  }
-  es.onerror = () => {
-    // EventSource 自动重连；期间降级为慢轮询，不打扰操作员。
-    state.value = setStreamConnected(state.value, false)
-    startFallbackPolling()
-  }
-  es.addEventListener(SSE_EVENT, (e: MessageEvent<string>) => {
-    try {
-      handleFrame(JSON.parse(e.data))
-    } catch {
-      /* malformed frame — reducer ignores */
-    }
+  eventSource = openTicketedEventSource(SSE_URL, {
+    onOpen: () => {
+      stopFallbackPolling()
+      state.value = setStreamConnected(state.value, true)
+    },
+    onError: () => {
+      // 瞬时断流：原生自动重连 / ticket 换票重连期间降级慢轮询，不打扰操作员。
+      state.value = setStreamConnected(state.value, false)
+      startFallbackPolling()
+    },
+    listeners: {
+      [SSE_EVENT]: (e: MessageEvent<string>) => {
+        try {
+          handleFrame(JSON.parse(e.data))
+        } catch {
+          /* malformed frame — reducer ignores */
+        }
+      },
+    },
   })
-  eventSource = es
 }
 
 function disconnectStream(): void {

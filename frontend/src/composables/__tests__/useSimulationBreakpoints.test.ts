@@ -26,6 +26,33 @@ vi.mock('@/api/executions', () => ({
   resumeExecution: resumeExecutionMock,
 }))
 
+// Ticket mechanics are covered by utils/sseTicket.test.ts; stub the seam so
+// connect() synchronously opens the (fake) global EventSource and wires the
+// breakpoint listener, keeping this test focused on handleHit parsing.
+vi.mock('@/utils/sseTicket', () => ({
+  openTicketedEventSource: (
+    path: string,
+    handlers: {
+      onOpen?: () => void
+      onError?: () => void
+      listeners?: Record<string, (e: MessageEvent<string>) => void>
+    },
+  ) => {
+    const es = new EventSource(path) as unknown as {
+      onopen: (() => void) | null
+      onerror: (() => void) | null
+      addEventListener: (t: string, cb: (e: MessageEvent<string>) => void) => void
+      close: () => void
+    }
+    es.onopen = () => handlers.onOpen?.()
+    es.onerror = () => handlers.onError?.()
+    for (const [name, cb] of Object.entries(handlers.listeners ?? {})) {
+      es.addEventListener(name, cb)
+    }
+    return { close: () => es.close() }
+  },
+}))
+
 import { useSimulationBreakpoints } from '../useSimulationBreakpoints'
 import type { BreakpointHitPayload } from '@/utils/breakpointTypes'
 

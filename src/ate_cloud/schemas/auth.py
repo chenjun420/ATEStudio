@@ -56,6 +56,18 @@ class TokenResponse(BaseModel):
     expires_in: int
 
 
+class SseTicketResponse(BaseModel):
+    """One-time SSE ticket returned by POST /auth/sse-ticket (RH-3).
+
+    Attributes:
+        ticket: Opaque single-use ticket for ``?ticket=`` on SSE endpoints.
+        expires_in: Ticket lifetime in seconds (60).
+    """
+
+    ticket: str
+    expires_in: int = 60
+
+
 class UserResponse(BaseModel):
     """User info returned by GET /auth/me.
 

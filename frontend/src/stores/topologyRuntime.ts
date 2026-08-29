@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { reactive, ref, shallowRef } from 'vue'
 
 import type { FixtureTopologyData, FaultInfo } from '@/api/fixtures'
+import { openTicketedEventSource, type TicketedEventSource } from '@/utils/sseTicket'
 
 /**
  * 拓扑运行时状态（设计文档 §8.3.6）。
@@ -10,8 +11,9 @@ import type { FixtureTopologyData, FaultInfo } from '@/api/fixtures'
  *   instrument / link / relay / measurement / fixture / fault
  * 维护运行时状态并在拓扑画布上高亮活跃链路、仪器/继电器状态、测量值。
  *
- * 与设计文档示例一致，使用 EventSource；组件在 onBeforeUnmount 时调用
- * disconnect() 避免泄漏。
+ * EventSource 无法携带 Authorization 头，故经 RH-3 一次性 ticket 鉴权
+ * （openTicketedEventSource：失败自动换票重连一次）；组件在
+ * onBeforeUnmount 时调用 disconnect() 避免泄漏。
  */
 export const useTopologyRuntimeStore = defineStore('topologyRuntime', () => {
   // 静态拓扑（加载的工装配置）——浅引用避免深拷贝开销
@@ -30,7 +32,7 @@ export const useTopologyRuntimeStore = defineStore('topologyRuntime', () => {
   const activeRunId = ref<string | null>(null)
   const error = ref<string | null>(null)
 
-  let eventSource: EventSource | null = null
+  let eventSource: TicketedEventSource | null = null
 
   /**
    * 故障条目（含可选定位信息，供拓扑画布高亮 §8.3.7）。
@@ -86,47 +88,50 @@ export const useTopologyRuntimeStore = defineStore('topologyRuntime', () => {
     if (!runId) return
 
     activeRunId.value = runId
-    const es = new EventSource(`/api/v1/executions/${runId}/topology-stream`)
-    eventSource = es
+    const path = `/api/v1/executions/${runId}/topology-stream`
+    const parse = (e: MessageEvent<string>) => JSON.parse(e.data) as Record<string, unknown>
 
-    es.onopen = () => {
-      connected.value = true
-      error.value = null
-    }
-    es.onerror = () => {
-      // EventSource 会自动重连；仅当连接从未建立时记录错误
-      connected.value = false
-      error.value = '拓扑状态流连接断开，正在重连…'
-    }
-
-    es.addEventListener('instrument', (e: MessageEvent<string>) => {
-      const data = JSON.parse(e.data) as Record<string, unknown>
-      updateInstrumentStatus(String(data.instrument_id), String(data.status ?? ''), data)
-    })
-    es.addEventListener('link', (e: MessageEvent<string>) => {
-      const data = JSON.parse(e.data) as Record<string, unknown>
-      updateLinkStatus(String(data.link_id), Boolean(data.active), String(data.status ?? ''))
-    })
-    es.addEventListener('relay', (e: MessageEvent<string>) => {
-      const data = JSON.parse(e.data) as Record<string, unknown>
-      updateRelayState(String(data.relay_id), String(data.state ?? ''))
-    })
-    es.addEventListener('measurement', (e: MessageEvent<string>) => {
-      const data = JSON.parse(e.data) as Record<string, unknown>
-      updateMeasurement(
-        String(data.dut_id),
-        String(data.testpoint_id),
-        data.value == null ? null : Number(data.value),
-        String(data.status ?? ''),
-      )
-    })
-    es.addEventListener('fixture', (e: MessageEvent<string>) => {
-      const data = JSON.parse(e.data) as Record<string, unknown>
-      updateFixtureStatus(String(data.fixture_id), String(data.status ?? ''), data)
-    })
-    es.addEventListener('fault', (e: MessageEvent<string>) => {
-      const data = JSON.parse(e.data) as { fault?: FaultInfo; location?: unknown }
-      if (data.fault) addFault(data.fault, data.location)
+    eventSource = openTicketedEventSource(path, {
+      onOpen: () => {
+        connected.value = true
+        error.value = null
+      },
+      onError: () => {
+        // 瞬时断流由原生自动重连/ticket 换票处理；重连期间标记未连接。
+        connected.value = false
+        error.value = '拓扑状态流连接断开，正在重连…'
+      },
+      listeners: {
+        instrument: (e) => {
+          const data = parse(e)
+          updateInstrumentStatus(String(data.instrument_id), String(data.status ?? ''), data)
+        },
+        link: (e) => {
+          const data = parse(e)
+          updateLinkStatus(String(data.link_id), Boolean(data.active), String(data.status ?? ''))
+        },
+        relay: (e) => {
+          const data = parse(e)
+          updateRelayState(String(data.relay_id), String(data.state ?? ''))
+        },
+        measurement: (e) => {
+          const data = parse(e)
+          updateMeasurement(
+            String(data.dut_id),
+            String(data.testpoint_id),
+            data.value == null ? null : Number(data.value),
+            String(data.status ?? ''),
+          )
+        },
+        fixture: (e) => {
+          const data = parse(e)
+          updateFixtureStatus(String(data.fixture_id), String(data.status ?? ''), data)
+        },
+        fault: (e) => {
+          const data = JSON.parse(e.data) as { fault?: FaultInfo; location?: unknown }
+          if (data.fault) addFault(data.fault, data.location)
+        },
+      },
     })
   }
 

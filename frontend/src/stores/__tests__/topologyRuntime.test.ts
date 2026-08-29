@@ -10,6 +10,34 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 
+// Ticket mechanics are covered by utils/sseTicket.test.ts; here we stub the
+// seam so it synchronously opens the (fake) global EventSource on the raw
+// path and wires the store's handlers onto it, keeping this test focused on
+// the store's state updates.
+vi.mock('@/utils/sseTicket', () => ({
+  openTicketedEventSource: (
+    path: string,
+    handlers: {
+      onOpen?: () => void
+      onError?: () => void
+      listeners?: Record<string, (e: MessageEvent<string>) => void>
+    },
+  ) => {
+    const es = new EventSource(path) as unknown as {
+      onopen: (() => void) | null
+      onerror: (() => void) | null
+      addEventListener: (t: string, cb: (e: MessageEvent<string>) => void) => void
+      close: () => void
+    }
+    es.onopen = () => handlers.onOpen?.()
+    es.onerror = () => handlers.onError?.()
+    for (const [name, cb] of Object.entries(handlers.listeners ?? {})) {
+      es.addEventListener(name, cb)
+    }
+    return { close: () => es.close() }
+  },
+}))
+
 import { useTopologyRuntimeStore } from '../topologyRuntime'
 
 interface MockEventSource {

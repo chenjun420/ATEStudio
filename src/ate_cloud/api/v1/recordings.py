@@ -50,6 +50,11 @@ from ate_platform.recorder.types import RecordedEvent
 
 router = APIRouter(prefix="/executions", tags=["recordings"])
 
+#: Ticket-authenticated mount for the SSE replay stream (RH-3). Mounted
+#: in router.py WITHOUT the mount-level JWT guard and WITH a mount-level
+#: ``require_sse_user`` dependency (see executions.sse_router note).
+sse_router = APIRouter(prefix="/executions", tags=["recordings"])
+
 # Type alias for async DB session dependency (avoids B008 ruff warning).
 DBSession = Annotated[AsyncSession, Depends(get_db)]
 
@@ -513,7 +518,7 @@ async def resume_replay(
     )
 
 
-@router.get("/{run_id}/replay/stream", response_class=EventSourceResponse)
+@sse_router.get("/{run_id}/replay/stream", response_class=EventSourceResponse)
 async def stream_replay(
     run_id: str,
     request: Request,

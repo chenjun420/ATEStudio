@@ -53,6 +53,11 @@ from ate_platform.offline import (
 
 router = APIRouter(prefix="/offline", tags=["offline"])
 
+#: Ticket-authenticated mount for the SSE stream (RH-3). Mounted in
+#: router.py WITHOUT the mount-level JWT guard and WITH a mount-level
+#: ``require_sse_user`` dependency (see executions.sse_router note).
+sse_router = APIRouter(prefix="/offline", tags=["offline"])
+
 #: Pseudo run-id for the dedicated offline stream queue. Double-underscore
 #: prefix can never collide with a real execution run id.
 OFFLINE_STREAM_RUN_ID = "__offline__"
@@ -355,7 +360,7 @@ async def list_cache_items(
     return CacheItemsResponse(items=items, total=len(items))
 
 
-@router.get("/status/stream", response_class=EventSourceResponse)
+@sse_router.get("/status/stream", response_class=EventSourceResponse)
 async def stream_offline_status(
     request: Request,
     bridge: Annotated[SSEBridge, Depends(get_sse_bridge)],

@@ -1,10 +1,11 @@
 """Authentication API endpoints.
 
 Provides:
-    POST /api/v1/auth/login     — authenticate with username/password, return tokens
-    POST /api/v1/auth/register  — public registration, auto-login after register
-    POST /api/v1/auth/refresh   — exchange refresh token for new token pair (rotation)
-    GET  /api/v1/auth/me        — return current authenticated user info
+    POST /api/v1/auth/login     - authenticate with username/password, return tokens
+    POST /api/v1/auth/register  - public registration, auto-login after register
+    POST /api/v1/auth/refresh   - exchange refresh token for new token pair (rotation)
+    POST /api/v1/auth/sse-ticket - issue one-time SSE ticket (RH-3)
+    GET  /api/v1/auth/me        - return current authenticated user info
 """
 
 import uuid
@@ -23,6 +24,7 @@ from ate_cloud.auth.jwt import (
 )
 from ate_cloud.auth.password import hash_password, verify_password
 from ate_cloud.auth.rbac import get_effective_scopes
+from ate_cloud.auth.sse_ticket import SSE_TICKET_TTL_SECONDS, issue_sse_ticket
 from ate_cloud.config import settings
 from ate_cloud.db import get_db
 from ate_cloud.models.user import User
@@ -30,6 +32,7 @@ from ate_cloud.schemas.auth import (
     LoginRequest,
     RefreshRequest,
     RegisterRequest,
+    SseTicketResponse,
     TokenResponse,
     UserResponse,
 )
@@ -180,6 +183,29 @@ async def refresh(
         access_token=new_access,
         refresh_token=new_refresh,
         expires_in=settings.jwt_expire_minutes * 60,
+    )
+
+
+@router.post("/sse-ticket", response_model=SseTicketResponse)
+async def create_sse_ticket(
+    user: User = Depends(get_current_user),
+) -> SseTicketResponse:
+    """Issue a one-time SSE ticket for EventSource streams (RH-3).
+
+    Native EventSource cannot send an Authorization header; the client
+    calls this JWT-protected endpoint, then opens the SSE endpoint with
+    ``?ticket=<value>``. The ticket is single-consume with a 60s TTL.
+
+    Args:
+        user: The authenticated user (injected by get_current_user).
+
+    Returns:
+        SseTicketResponse with the opaque ticket and its TTL.
+    """
+    ticket = issue_sse_ticket(user.id)
+    return SseTicketResponse(
+        ticket=ticket,
+        expires_in=int(SSE_TICKET_TTL_SECONDS),
     )
 
 

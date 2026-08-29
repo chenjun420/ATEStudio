@@ -18,12 +18,15 @@ authentication (``get_current_user``, RS256 — design doc §9) centrally:
   per-endpoint (``Security(get_current_user, scopes=...)``) in their modules
   and are mounted unchanged.
 
-SSE note: the executions/recordings routers include EventSource streams
-(``/{run_id}/events``, ``/{run_id}/topology-stream``,
-``/{run_id}/replay/stream``). Native EventSource cannot send an
-Authorization header, so browser clients must migrate to a token-carrying
-mechanism (fetch-based stream or query-param token); tracked as T24 which
-inherits this protection pattern.
+SSE note: the executions/recordings/offline routers include EventSource
+streams (``/{run_id}/events``, ``/{run_id}/topology-stream``,
+``/{run_id}/replay/stream``, ``/offline/status/stream``). Native
+EventSource cannot send an Authorization header, so these endpoints
+authenticate via the RH-3 one-time ticket mechanism instead: the client
+POSTs ``/auth/sse-ticket`` (JWT-protected) and opens the stream with
+``?ticket=<value>`` (single-consume, 60s TTL - see
+``ate_cloud.auth.sse_ticket``). Anonymous/mount-level guard behavior is
+unchanged for every other endpoint.
 """
 
 from fastapi import APIRouter, Depends
@@ -36,6 +39,7 @@ from ate_cloud.api.v1.dashboard import router as dashboard_router
 from ate_cloud.api.v1.debug import router as debug_router
 from ate_cloud.api.v1.diagnose import router as diagnose_router
 from ate_cloud.api.v1.executions import router as executions_router
+from ate_cloud.api.v1.executions import sse_router as executions_sse_router
 from ate_cloud.api.v1.faults import router as faults_router
 from ate_cloud.api.v1.fixtures import router as fixtures_router
 from ate_cloud.api.v1.health import router as health_router
@@ -43,10 +47,12 @@ from ate_cloud.api.v1.limits import router as limits_router
 from ate_cloud.api.v1.node_flow_bindings import router as node_flow_bindings_router
 from ate_cloud.api.v1.node_templates import router as node_templates_router
 from ate_cloud.api.v1.offline import router as offline_router
+from ate_cloud.api.v1.offline import sse_router as offline_sse_router
 from ate_cloud.api.v1.operator_checkpoints import router as operator_checkpoints_router
 from ate_cloud.api.v1.products import router as products_router
 from ate_cloud.api.v1.rbac import router as rbac_router
 from ate_cloud.api.v1.recordings import router as recordings_router
+from ate_cloud.api.v1.recordings import sse_router as recordings_sse_router
 from ate_cloud.api.v1.reports import router as reports_router
 from ate_cloud.api.v1.resources import router as resources_router
 from ate_cloud.api.v1.scripts import router as scripts_router
@@ -58,6 +64,7 @@ from ate_cloud.api.v1.users import router as users_router
 from ate_cloud.api.v1.workers import router as workers_router
 from ate_cloud.api.v1.workflows import router as workflows_router
 from ate_cloud.auth.dependencies import get_current_user
+from ate_cloud.auth.sse_ticket import require_sse_user
 
 # Routers requiring a valid RS256 JWT on every endpoint (T17).
 _PROTECTED_ROUTERS = (
@@ -103,4 +110,19 @@ for _protected in _PROTECTED_ROUTERS:
     api_router.include_router(
         _protected,
         dependencies=[Depends(get_current_user)],
+    )
+
+# ── SSE streams: one-time ticket auth (RH-3) ──────────────────────────────
+# EventSource cannot send an Authorization header, so these mounts use the
+# one-time ticket dependency instead of the bearer guard (single-consume,
+# 60s TTL - ate_cloud.auth.sse_ticket). Anonymous requests still get 401.
+_SSE_ROUTERS = (
+    executions_sse_router,
+    offline_sse_router,
+    recordings_sse_router,
+)
+for _sse in _SSE_ROUTERS:
+    api_router.include_router(
+        _sse,
+        dependencies=[Depends(require_sse_user)],
     )
