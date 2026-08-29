@@ -2470,6 +2470,8 @@ flowchart TB
 
 > 工装调试器与序列编排器统一技术栈，抽取 X6 共享组件层（约 1 人日），复用节点/边/画布基础设施。
 
+> **实现备注(2026-08)：** 操作员面板的实际前端路由是站级作用域的 `/operator/:station_id`（`frontend/src/router/index.ts`），为独立页面、不套 AppLayout 侧边栏，`props: true` 将 station_id 直接传入视图。导航入口并非 `/monitor/operator`：DB 菜单种子 `src/ate_cloud/api/v1/apps.py`（RH-5）在"执行监控"应用下播种"操作员面板"菜单，其 `route_path` 指向具体默认站路径 `/operator/default`（动态段 `:station_id` 会在菜单点击时被 AppLayout 剥离，故种子数据使用具体路径而非参数路径）。
+
 ### 8.2 序列编排器（SequenceEditor）
 
 #### 8.2.1 目录结构
@@ -3127,6 +3129,8 @@ GET    /api/v1/executions/{id}/topology-stream  # SSE 实时状态流
 POST   /api/v1/executions/{id}/fault-injection  # 运行时注入故障
 ```
 
+> **实现备注(2026-08)：** 操作员检查点确认已支持双路径（RH-6，提交 `8aa03fd`）：运行作用域路径 `POST /api/v1/executions/{run_id}/checkpoint/ack` 与按稳定 id 的别名路径 `POST /api/v1/checkpoints/{checkpoint_id}/ack`，均在 `src/ate_cloud/api/v1/operator_checkpoints.py`。checkpoint_id 是云侧首次观测到待处理检查点时分配的 uuid4 hex（经 `GET .../checkpoint/pending` 或 `OPERATOR_CHECKPOINT` SSE 事件下发），别名路径通过 `app.state.checkpoint_index` 反查 `(run_id, step_id)` 后委托同一 `_ack_checkpoint` 逻辑，因此两条路径响应结构与 `OPERATOR_CHECKPOINT_RESOLVED` SSE 载荷完全一致。错误语义：未知 id 返回 404、重复确认/无待处理检查点返回 409、缺少 operator 字段由 schema 校验返回 422。
+
 脚本库管理 API：
 
 - `POST /api/scripts/upload`：上传脚本，解析元数据入 PostgreSQL，文件存磁盘
@@ -3204,6 +3208,8 @@ PRAGMA cache_size = -20000;
 - 变量写入白名单：脚本仅可写 `steps.<step_id>.*` 或白名单全局变量
 - 脚本进程隔离执行（multiprocessing.Process），故障域隔离
 - 条件表达式使用 simpleeval 沙箱求值（禁止任意 eval；故障规则 condition 表达式仅在可信配置源中使用）
+
+> **实现备注(2026-08)：** 故障注入事件已落库持久化（RH-1）：`FaultEvent` 表（`src/ate_cloud/models/fault_event.py`，Alembic 迁移 `aa11bb22cc33`）记录链路右键注入、手动面板注入、worker 调度中继三类来源，云侧写路径在 NATS 控制发布成功后落库、DB 失败仅告警不阻断注入主流程，并由 `GET /api/v1/fixtures/{fixture_id}/fault-stats`（`src/ate_cloud/api/v1/fixtures.py`）按链路聚合计数与最近出现时间，供 §8.3 历史故障热力图使用。流式接口的鉴权另有专门机制（RH-3）：浏览器原生 `EventSource` 不能设置 `Authorization` 请求头，SSE 端点无法走常规 Bearer 守卫，改用一次性票据——客户端先以 JWT 调用 `POST /api/v1/auth/sse-ticket`（`src/ate_cloud/api/v1/auth.py`）换取 60 秒有效、单次消费的随机票据，再以 `?ticket=<值>` 打开 EventSource；依赖 `require_sse_user`（`src/ate_cloud/auth/sse_ticket.py`）对缺失、非法、过期、已消费的票据一律返回 401，票据首次校验即删除、无法重放，前端封装见 `frontend/src/utils/sseTicket.ts`。
 
 ### 9.6 临时文件与存储
 
@@ -3325,6 +3331,8 @@ flowchart TB
 | 执行记录缓存 | SQLite 待上传队列 | execution/step 结果、测量值、PASS/FAIL 判定 | 状态机 pending→uploaded→ack；ACK 后保留 7 天再清理 |
 | 事件缓存 | NATS JetStream 本地文件存储 | 端→云事件流 | Leafnode 断连期间本地持久化，恢复后补传 |
 | 调用录制 | JSONL 文件 | 仪器调用日志 | `/var/log/test_platform/recordings/`，上传成功后归档 |
+
+> **实现备注(2026-08)：** 离线自治模块实际以进程内组件形态落在端侧 `src/ate_platform/offline/`（event_buffer / heartbeat / upload_queue / cache_store / capacity_guard / reconciliation / script_cache / version_lock）。其中 `event_buffer.py`（RH-2）把站内事件写入 JetStream 流 `TESTSTATION_EVENTS`，显式声明 `FileStorage` 并以 durable pull consumer（`AckExplicit` + `DeliverAll`）取回逐条 ACK；服务器侧 `config/nats-server.conf` 将 `store_dir` 固定为 `/var/lib/nats/jetstream`（具名卷挂载），NATS 不可达或进程重启后消息不丢。`publish()` 遵守 fail-soft 契约：NATS 不可达、JetStream 错误、序列化失败一律返回 `False` 并告警，绝不抛异常。云侧对应物是只读模型 `src/ate_cloud/api/v1/offline.py`：`GET /api/v1/offline/status`（离线徽标快照）、`POST /api/v1/offline/reconcile`（手动对账，202）、`GET /api/v1/offline/cache/items` 与 SSE `GET /api/v1/offline/status/stream`，通过构造注入消费端侧组件的公开接口，自身不持有存储。
 
 #### 10.5.3 离线执行流程
 
@@ -3515,6 +3523,8 @@ AI 生成代码时严格按以下顺序，先底座后上层；每个模块都�
 
 - FastAPI（端口 8000，Swagger /docs）、脚本库管理 API、AI 脚本生成、NATS 云边通信（Core + JetStream）、SSE 事件桥、Git-based 脚本版本、JWT 认证（RS256）
 - AntV X6 3.1.7 序列编辑器、节点组件、属性面板、X6↔YAML 序列化、拖拽、循环依赖检测、Monaco 编辑
+
+> **实现备注(2026-08)：** Worker 版本核对端点已实现：`GET /api/v1/workers/{worker_id}/version-check`（`src/ate_cloud/api/v1/workers.py`），响应模型为 `WorkerVersionCheckResponse`（含逐项 `WorkerVersionDiff`，定义于 `src/ate_cloud/schemas/script.py`）。它从 JetStream KV 桶 `ate-scripts` 读取该 worker 上报的脚本版本标签，与脚本仓库当前 Git HEAD 逐一比对；属于只读诊断，不要求 worker 当前在线注册——离线节点的版本滞后正是要检查的内容。NATS 客户端缺失时返回 503，KV 读取失败返回 502。
 
 ### 13.3 已实现但路由未挂载（13 个 → 已全部挂载）
 
