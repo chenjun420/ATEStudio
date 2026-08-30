@@ -9,9 +9,9 @@ Tests cover:
 - Active worker tracking
 """
 
-import asyncio
 import os
 import tempfile
+from typing import Any
 
 import pytest
 

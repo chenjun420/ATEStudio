@@ -38,6 +38,9 @@ dev = [
     "ruff>=0.4.0",
     "mypy>=1.10.0",
 ]
+openhtf = [
+    "openhtf>=0.12.0",
+]
 
 [build-system]
 requires = ["hatchling"]

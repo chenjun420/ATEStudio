@@ -107,6 +107,12 @@ jobs:
             ate_platform.simulation.headless_runner \
             tests/fixtures/plan_v32_production.yaml \
             --tier dry_run --junit reports/sim-v32-dryrun.xml
+      - name: Run v3.2 production sequence headless (v32 semantic tier)
+        run: |
+          ATE_SIMULATION_MODE=true uv run python -m \
+            ate_platform.simulation.headless_runner \
+            tests/fixtures/plan_v32_production.yaml \
+            --tier v32 --junit reports/sim-v32-semantic.xml
       - name: Upload headless simulation JUnit reports
         uses: actions/upload-artifact@v4
         with:

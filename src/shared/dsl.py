@@ -166,6 +166,8 @@ class YamlPlan:
         version: Version of the test plan
         scope: Scope variables as a dictionary (supports both dict and string for backward compat)
         max_concurrency: Maximum number of concurrent steps
+        uut_count: v3.2 多 UUT 测试的 UUT 实例数（barrier 参与者数，默认 1）
+        fixture_id: v3.2 计划级默认夹具 ID（未在步骤级声明时使用）
         steps: List of steps and/or loops in the plan
     """
 
@@ -173,4 +175,6 @@ class YamlPlan:
     version: str
     scope: dict[str, Any] = field(default_factory=dict)
     max_concurrency: int = 1
+    uut_count: int = 1
+    fixture_id: str | None = None
     steps: list[YamlStep | YamlLoop] = field(default_factory=list)

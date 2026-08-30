@@ -57,6 +57,45 @@ steps:
 
 
 @pytest.fixture
+def v32_multi_uut_plan(tmp_path: Path) -> Path:
+    """A v3.2 plan with 2 UUTs exercising a real sync barrier."""
+    content = """\
+name: headless_v32_multi_uut
+version: "3.2"
+scope: production
+uut_count: 2
+max_concurrency: 2
+steps:
+  - id: fixture_clamp
+    type: fixture_control
+    action: clamp
+    fixture_id: "fixture_ps_12v5a_v1"
+  - id: power_on
+    type: action
+    script: dmm_measure.py
+    depends_on: [fixture_clamp]
+  - id: sync_power_on
+    type: barrier
+    barrier_name: "all_powered_on"
+    depends_on: [power_on]
+  - id: measure
+    type: action
+    script: dmm_measure.py
+    depends_on: [sync_power_on]
+    retry: 1
+    on_failure: continue
+  - id: fixture_release
+    type: fixture_control
+    action: release
+    fixture_id: "fixture_ps_12v5a_v1"
+    depends_on: [measure]
+"""
+    path = tmp_path / "headless_v32_multi_uut.yaml"
+    path.write_text(content, encoding="utf-8")
+    return path
+
+
+@pytest.fixture
 def v30_plan(tmp_path: Path) -> Path:
     """A legacy v3.0 plan (no type fields) — backward-compat coverage."""
     content = """\
@@ -199,4 +238,43 @@ class TestHeadlessFull:
             fault_config_path=rules,
         )
         # fault config loads without error; exit code reflects dry-run result
+        assert code == 0
+
+
+class TestHeadlessV32Semantic:
+    """Tests for the v32 tier — real barrier/fixture_control semantics."""
+
+    def test_v32_tier_passes(self, v32_multi_uut_plan: Path) -> None:
+        """v32 tier runs to completion with all steps passing."""
+        code = run_headless(plan_path=v32_multi_uut_plan, tier="v32")
+        assert code == 0
+
+    def test_v32_tier_writes_junit_with_barrier(
+        self,
+        v32_multi_uut_plan: Path,
+        tmp_path: Path,
+    ) -> None:
+        """JUnit report includes barrier + fixture steps with zero failures."""
+        junit = tmp_path / "sim-v32.xml"
+        code = run_headless(
+            plan_path=v32_multi_uut_plan, tier="v32", junit_out=junit,
+        )
+        assert code == 0
+        root = ET.parse(junit).getroot()
+        suite = root.find("testsuite")
+        assert suite is not None
+        assert suite.get("failures") == "0"
+        names = [str(tc.get("name")) for tc in suite]
+        # barrier step present and passed (system-out detail mentions all UUTs)
+        assert "sync_power_on" in names
+        barrier = next(tc for tc in suite if tc.get("name") == "sync_power_on")
+        sysout = barrier.find("system-out")
+        assert sysout is not None and "all UUTs" in (sysout.text or "")
+        # fixture clamp/release present
+        assert "fixture_clamp" in names
+        assert "fixture_release" in names
+
+    def test_v32_tier_v30_plan_backward_compat(self, v30_plan: Path) -> None:
+        """Legacy v3.0 plan (no type) runs under v32 tier as script steps."""
+        code = run_headless(plan_path=v30_plan, tier="v32")
         assert code == 0

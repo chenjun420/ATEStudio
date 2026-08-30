@@ -8,12 +8,10 @@ from __future__ import annotations
 
 import threading
 from abc import ABC
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
 import pyvisa
-
-if TYPE_CHECKING:
-    from pyvisa.resources import MessageBasedResource
+from pyvisa.resources import MessageBasedResource
 
 
 class BaseDriver(ABC):

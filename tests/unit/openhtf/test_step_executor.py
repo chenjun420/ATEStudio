@@ -80,12 +80,15 @@ class TestOpenHTFDependency:
     """Verify openhtf is declared as a production dependency."""
 
     def test_openhtf_in_pyproject_deps(self) -> None:
-        """openhtf must appear in [project] dependencies (not optional)."""
+        """openhtf must appear in [project.optional-dependencies] (openhtf extra)."""
         pyproject_path = _find_pyproject()
         with open(pyproject_path, "rb") as f:
             data: dict[str, Any] = tomllib.load(f)
 
-        deps: list[str] = data["project"]["dependencies"]
-        assert any("openhtf" in dep.lower() for dep in deps), (
-            "openhtf not found in [project] dependencies"
+        optional: dict[str, list[str]] = data["project"]["optional-dependencies"]
+        all_optional: list[str] = [
+            dep for deps in optional.values() for dep in deps
+        ]
+        assert any("openhtf" in dep.lower() for dep in all_optional), (
+            "openhtf not found in [project.optional-dependencies]"
         )

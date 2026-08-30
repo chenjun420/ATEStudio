@@ -44,13 +44,14 @@ class TestEventType:
         assert EventType.WORKER_EXHAUSTED.value == "WORKER_EXHAUSTED"
 
     def test_event_type_count(self) -> None:
-        """EventType should have exactly 20 unique values.
+        """EventType should have exactly 21 unique values.
 
         VARIABLE_CHANGED is a deprecated alias of MEASUREMENT_RECORDED (same
         value), so Python's Enum counts them as one member. The alias is still
-        accessible as EventType.VARIABLE_CHANGED.
+        accessible as EventType.VARIABLE_CHANGED. ALARM_RAISED (added with
+        SPC alarm indexing) brings the count to 21.
         """
-        assert len(EventType) == 20
+        assert len(EventType) == 21
         # Verify the deprecated alias is still accessible
         assert EventType.VARIABLE_CHANGED is EventType.MEASUREMENT_RECORDED
 

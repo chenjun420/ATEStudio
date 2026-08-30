@@ -58,6 +58,8 @@ class YamlParser:
 
         # Extract optional fields with defaults
         max_concurrency = data.get("max_concurrency", 1)
+        uut_count = data.get("uut_count", 1)
+        plan_fixture_id = data.get("fixture_id")
 
         # Parse steps (can contain both YamlStep and YamlLoop)
         steps_data = data.get("steps", [])
@@ -71,6 +73,8 @@ class YamlParser:
             version=version,
             scope=scope,
             max_concurrency=max_concurrency,
+            uut_count=uut_count,
+            fixture_id=plan_fixture_id,
             steps=steps,
         )
 
@@ -386,6 +390,9 @@ class YamlParser:
 
         if plan.max_concurrency < 1:
             errors.append("max_concurrency must be at least 1")
+
+        if plan.uut_count < 1:
+            errors.append("uut_count must be at least 1")
 
         # Validate steps and loops, collecting all IDs for uniqueness check
         step_ids: set[str] = set()
