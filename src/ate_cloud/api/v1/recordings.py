@@ -29,7 +29,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from nats.aio.client import Client as NatsClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sse_starlette.sse import EventSourceResponse, ServerSentEvent  # type: ignore[attr-defined]
+from sse_starlette import EventSourceResponse, ServerSentEvent
 
 from ate_cloud.db import get_db
 from ate_cloud.models.execution import Execution

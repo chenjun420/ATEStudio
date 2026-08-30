@@ -20,7 +20,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import ColumnElement, String, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sse_starlette.sse import EventSourceResponse, ServerSentEvent  # type: ignore[attr-defined]
+from sse_starlette import EventSourceResponse, ServerSentEvent
 
 from ate_cloud.config import settings
 from ate_cloud.db import get_db
