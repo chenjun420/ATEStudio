@@ -32,6 +32,11 @@ from ..executor.process_executor import ProcessExecutor
 from ..types import StepResult, StepStatus
 from .breakpoint_manager import BreakpointData
 
+try:
+    import debugpy
+except ImportError:  # debugpy is an optional debugging dependency
+    debugpy = None  # type: ignore[assignment]
+
 logger = logging.getLogger(__name__)
 
 # Environment variable names passed to the child process
@@ -452,7 +457,8 @@ class DebugProcessExecutor:
             return self._adapter_port
 
         try:
-            import debugpy
+            if debugpy is None:
+                raise ImportError("debugpy is not installed")
 
             actual_host = self._dap_host
             actual_port = self._dap_port
