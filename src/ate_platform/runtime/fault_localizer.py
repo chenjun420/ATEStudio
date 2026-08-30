@@ -85,7 +85,7 @@ class FaultLocalizer:
         self._route_index: dict[str, Route] = {
             r.id: r for r in topology.routes
         }
-        self._link_index: dict[str, Any] = {l.id: l for l in topology.links}
+        self._link_index: dict[str, Any] = {link.id: link for link in topology.links}
         self._fixture_index: dict[str, Any] = {
             f.id: f for f in topology.fixtures
         }

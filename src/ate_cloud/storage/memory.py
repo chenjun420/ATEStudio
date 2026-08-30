@@ -1,10 +1,7 @@
 import asyncio
-from typing import Generic, TypeVar
-
-T = TypeVar("T")
 
 
-class MemoryStorage(Generic[T]):
+class MemoryStorage[T]:
     def __init__(self) -> None:
         self._data: dict[str, T] = {}
         self._lock = asyncio.Lock()

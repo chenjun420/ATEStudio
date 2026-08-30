@@ -20,8 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from ate_platform.proxy import InstrumentClient, ProxyManager
-from ate_platform.drivers.examples.dmm import DMMAbstraction
+from ate_platform.proxy import ProxyManager
 
 # 每台仪器的模拟配置（simulation=True 走 Mock 驱动）
 INSTRUMENT_CONFIG = {

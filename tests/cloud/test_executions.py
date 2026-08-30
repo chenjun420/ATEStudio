@@ -4,7 +4,6 @@ Uses httpx AsyncClient with ASGITransport to test the FastAPI endpoints.
 SSE bridge tests verify local-mode operation (no NATS required).
 """
 
-import asyncio
 import json
 import time
 
@@ -241,8 +240,9 @@ class TestSSEEndpoint:
     @pytest.mark.asyncio
     async def test_sse_endpoint_returns_event_source(self, app):
         """Test SSE endpoint returns EventSourceResponse with correct content type."""
-        from ate_cloud.api.v1.executions import stream_execution_events
         from unittest.mock import MagicMock
+
+        from ate_cloud.api.v1.executions import stream_execution_events
 
         # Create an execution first to get a valid run_id
         transport = ASGITransport(app=app)
@@ -293,7 +293,7 @@ class TestReplayPagination:
         This test verifies the pagination loop structure by mocking the
         JetStream pull subscriber to return multiple batches.
         """
-        from unittest.mock import AsyncMock, MagicMock, patch
+        from unittest.mock import AsyncMock, MagicMock
 
         # Create a mock NATS client
         mock_nc = MagicMock()
@@ -388,7 +388,7 @@ class TestReplayPagination:
         mock_nc.jetstream.return_value = mock_js
 
         mock_psub = MagicMock()
-        mock_psub.fetch = AsyncMock(side_effect=asyncio.TimeoutError())
+        mock_psub.fetch = AsyncMock(side_effect=TimeoutError())
         mock_js.pull_subscribe = AsyncMock(return_value=mock_psub)
 
         bridge = SSEBridge(nc=mock_nc)
@@ -481,11 +481,11 @@ class TestSSEEndpointHeartbeat:
     @pytest.mark.asyncio
     async def test_keep_alive_timeout_is_15s(self):
         """Verify keep-alive timeout is 15 seconds (not 30)."""
-        from ate_cloud.api.v1.executions import stream_execution_events
-
         # The timeout is embedded in the event_generator closure.
         # We verify by reading the source — the heartbeat_interval is 15.0.
         import inspect
+
+        from ate_cloud.api.v1.executions import stream_execution_events
         source = inspect.getsource(stream_execution_events)
         assert "heartbeat_interval = 15.0" in source or "timeout=heartbeat_interval" in source
 
@@ -493,6 +493,7 @@ class TestSSEEndpointHeartbeat:
     async def test_local_mode_uses_asyncio_wait_for_heartbeat(self):
         """Test local mode heartbeat uses asyncio.wait race pattern."""
         import inspect
+
         from ate_cloud.api.v1.executions import stream_execution_events
         source = inspect.getsource(stream_execution_events)
         # Local mode should use asyncio.wait with FIRST_COMPLETED

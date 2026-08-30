@@ -14,7 +14,7 @@ from ate_platform.drivers.base_mal import BaseAbstraction
 from ate_platform.drivers.capabilities import PSUCapabilities
 
 if TYPE_CHECKING:
-    import pyvisa
+    pass
 
 
 PSU_DRIVER_NAME = "psu"
@@ -98,8 +98,10 @@ DriverRegistry.register(PSU_DRIVER_NAME, hal_cls=PSUHALDriver, mal_cls=PSUAbstra
 # Mock driver — simulation mode
 # ---------------------------------------------------------------------------
 
-from ate_platform.drivers.mock_factory import MockDriverFactory
-from ate_platform.drivers.mock_factory import _MockPSUDriver as MockPSUDriver
+# Imports deferred below registration code: mock_factory lazily imports this
+# examples package, so an eager import here would be circular at load time.
+from ate_platform.drivers.mock_factory import MockDriverFactory  # noqa: E402
+from ate_platform.drivers.mock_factory import _MockPSUDriver as MockPSUDriver  # noqa: E402
 
 # Register the PSU mock driver so MockDriverFactory.create_mock(PSUAbstraction)
 # works, and so scripts may import MockPSUDriver directly for simulation.

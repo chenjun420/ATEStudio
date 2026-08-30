@@ -107,9 +107,9 @@ async def create_sequence(
     try:
         await db.commit()
         await db.refresh(sequence)
-    except IntegrityError:
+    except IntegrityError as e:
         await db.rollback()
-        raise HTTPException(status_code=409, detail="Sequence name already exists")
+        raise HTTPException(status_code=409, detail="Sequence name already exists") from e
 
     return SequenceResponse.model_validate(sequence)
 
@@ -147,9 +147,9 @@ async def update_sequence(
     try:
         await db.commit()
         await db.refresh(sequence)
-    except IntegrityError:
+    except IntegrityError as e:
         await db.rollback()
-        raise HTTPException(status_code=409, detail="Sequence name already exists")
+        raise HTTPException(status_code=409, detail="Sequence name already exists") from e
 
     return SequenceResponse.model_validate(sequence)
 

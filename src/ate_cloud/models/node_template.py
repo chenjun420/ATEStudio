@@ -5,9 +5,9 @@ node templates that can be used in flow graphs.
 """
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
-from sqlalchemy import String, JSON, DateTime, func
+from sqlalchemy import JSON, DateTime, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from . import Base
@@ -31,8 +31,8 @@ class NodeTemplate(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     name: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
     type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
-    appearance: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
-    default_data: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    appearance: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    default_data: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

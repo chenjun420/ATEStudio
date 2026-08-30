@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import logging
 
-from ate_platform.common.circuit_breaker import CircuitBreaker, CircuitBreakerOpenError
 from ate_cloud.config import settings
+from ate_platform.common.circuit_breaker import CircuitBreaker, CircuitBreakerOpenError
 
 logger = logging.getLogger(__name__)
 

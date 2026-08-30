@@ -14,7 +14,6 @@ import logging
 import os
 import threading
 import time
-from dataclasses import dataclass
 from typing import Any
 
 import pytest
@@ -55,7 +54,7 @@ class TestPoolUtilization:
 
     def test_get_pool_utilization_zero_workers(self) -> None:
         """get_pool_utilization should return 0.0 when max_workers is 0.
-        
+
         Note: ThreadPoolExecutor requires max_workers >= 1, so we test
         the edge case by creating with max_workers=1 and verifying the
         formula handles zero correctly via division logic.

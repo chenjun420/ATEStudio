@@ -12,7 +12,7 @@ from .condition_evaluator import ConditionEvaluator
 from .event_bus import Event, EventBus, EventType
 from .resource_manager import ResourceManager
 from .state_snapshot import StateSnapshot
-from .uut_sync import BarrierResult, SyncBarrier, UUT, UUTManager, UUTState
+from .uut_sync import UUT, BarrierResult, SyncBarrier, UUTManager, UUTState
 from .variable_space import VariableSpace
 
 __all__ = [

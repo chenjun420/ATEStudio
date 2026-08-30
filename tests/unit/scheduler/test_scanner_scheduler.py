@@ -18,7 +18,7 @@ import asyncio
 import pytest
 
 from ate_platform.scheduler.condition_evaluator import ConditionEvaluator
-from ate_platform.scheduler.event_bus import EventBus, Event, EventType
+from ate_platform.scheduler.event_bus import Event, EventBus, EventType
 from ate_platform.scheduler.resource_manager import ResourceManager
 from ate_platform.scheduler.scanner_scheduler import (
     DeadlockDetectedError,
@@ -873,7 +873,6 @@ class TestReactiveDispatch:
         """on_resource_released should trigger dispatch for resource-blocked steps."""
         event_bus = EventBus()
         registry = StepRegistry(event_bus=event_bus)
-        evaluator = ConditionEvaluator({}, None, None)
         variable_space = VariableSpace()
         resource_manager = ResourceManager(event_bus=event_bus)
 

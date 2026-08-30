@@ -13,10 +13,10 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from sse_starlette.sse import EventSourceResponse
 
 from ate_cloud.api.v1.executions import stream_topology_state
 from ate_cloud.nats.sse_bridge import SSEBridge
-from sse_starlette.sse import EventSourceResponse
 
 
 class TestTopologyStreamEndpoint:

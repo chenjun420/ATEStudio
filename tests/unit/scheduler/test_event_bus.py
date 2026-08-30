@@ -12,7 +12,7 @@ from datetime import datetime
 
 import pytest
 
-from ate_platform.scheduler.event_bus import EventBus, Event, EventType
+from ate_platform.scheduler.event_bus import Event, EventBus, EventType
 
 
 class TestEventType:

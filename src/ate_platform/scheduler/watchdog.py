@@ -66,10 +66,10 @@ class WatchDog:
 
     def __init__(
         self,
-        heartbeat_counter: "Callable[[], int]",
+        heartbeat_counter: Callable[[], int],
         scan_interval: float = 5.0,
-        event_bus: "EventBus | None" = None,
-        emergency_shutdown_callback: "Callable[[], object] | None" = None,
+        event_bus: EventBus | None = None,
+        emergency_shutdown_callback: Callable[[], object] | None = None,
     ) -> None:
         """Initialize the WatchDog.
 

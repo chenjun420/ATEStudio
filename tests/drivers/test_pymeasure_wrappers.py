@@ -11,8 +11,8 @@ import pytest
 
 from ate_platform.drivers.base import DriverRegistry
 from ate_platform.drivers.pymeasure_wrappers.adapter import (
-    PyMeasureAdapter,
     PyMeasureAbstraction,
+    PyMeasureAdapter,
 )
 from ate_platform.drivers.pymeasure_wrappers.register import (
     _load_pymeasure_class,
@@ -49,22 +49,21 @@ class StubKeysightDMM:
 
 from typing import Any  # noqa: E402
 
-
 # ---------------------------------------------------------------------------
 # 适配 HAL 驱动
 # ---------------------------------------------------------------------------
 
 
 def test_wrap_creates_bound_subclass() -> None:
-    Wrapped = PyMeasureAdapter.wrap(StubKeysightDMM)
-    assert issubclass(Wrapped, PyMeasureAdapter)
-    assert Wrapped.pymeasure_class is StubKeysightDMM
-    assert Wrapped.__name__ == "Platform_StubKeysightDMM"
+    wrapped = PyMeasureAdapter.wrap(StubKeysightDMM)
+    assert issubclass(wrapped, PyMeasureAdapter)
+    assert wrapped.pymeasure_class is StubKeysightDMM
+    assert wrapped.__name__ == "Platform_StubKeysightDMM"
 
 
 def test_connect_instantiates_pymeasure_driver() -> None:
-    Wrapped = PyMeasureAdapter.wrap(StubKeysightDMM)
-    driver = Wrapped()
+    wrapped = PyMeasureAdapter.wrap(StubKeysightDMM)
+    driver = wrapped()
     assert not driver.is_connected
     driver.connect("TCPIP0::192.168.1.5::INSTR")
     assert driver.is_connected
@@ -73,8 +72,8 @@ def test_connect_instantiates_pymeasure_driver() -> None:
 
 
 def test_query_write_forwarded() -> None:
-    Wrapped = PyMeasureAdapter.wrap(StubKeysightDMM)
-    driver = Wrapped()
+    wrapped = PyMeasureAdapter.wrap(StubKeysightDMM)
+    driver = wrapped()
     driver.connect("MOCK::DMM")
     assert driver.query("MEAS:VOLT:DC?") == "5.000000E+00"
     driver.write("CONF:VOLT:DC 10")
@@ -84,8 +83,8 @@ def test_query_write_forwarded() -> None:
 
 
 def test_read_and_reset_forwarded() -> None:
-    Wrapped = PyMeasureAdapter.wrap(StubKeysightDMM)
-    driver = Wrapped()
+    wrapped = PyMeasureAdapter.wrap(StubKeysightDMM)
+    driver = wrapped()
     driver.connect("MOCK::DMM")
     assert driver.read() == "1.000000E+03"
     driver.reset()
@@ -93,15 +92,15 @@ def test_read_and_reset_forwarded() -> None:
 
 
 def test_semantic_method_via_getattr() -> None:
-    Wrapped = PyMeasureAdapter.wrap(StubKeysightDMM)
-    driver = Wrapped()
+    wrapped = PyMeasureAdapter.wrap(StubKeysightDMM)
+    driver = wrapped()
     driver.connect("MOCK::DMM")
     assert driver.measure_voltage() == 5.0
 
 
 def test_disconnect_calls_shutdown() -> None:
-    Wrapped = PyMeasureAdapter.wrap(StubKeysightDMM)
-    driver = Wrapped()
+    wrapped = PyMeasureAdapter.wrap(StubKeysightDMM)
+    driver = wrapped()
     driver.connect("MOCK::DMM")
     pm = driver.unwrap()
     driver.disconnect()
@@ -115,8 +114,8 @@ def test_disconnect_calls_shutdown() -> None:
 
 
 def test_operation_before_connect_raises() -> None:
-    Wrapped = PyMeasureAdapter.wrap(StubKeysightDMM)
-    driver = Wrapped()
+    wrapped = PyMeasureAdapter.wrap(StubKeysightDMM)
+    driver = wrapped()
     with pytest.raises(RuntimeError, match="Not connected"):
         driver.query("MEAS:VOLT:DC?")
 
@@ -132,8 +131,8 @@ def test_connect_failure_wraps_as_runtime_error(monkeypatch: pytest.MonkeyPatch)
         def __init__(self, address: str) -> None:
             raise OSError("no device")
 
-    Wrapped = PyMeasureAdapter.wrap(Boom)
-    driver = Wrapped()
+    wrapped = PyMeasureAdapter.wrap(Boom)
+    driver = wrapped()
     with pytest.raises(RuntimeError, match="Failed to instantiate"):
         driver.connect("MOCK::BOOM")
 
@@ -144,8 +143,8 @@ def test_connect_failure_wraps_as_runtime_error(monkeypatch: pytest.MonkeyPatch)
 
 
 def test_mal_abstraction_semantic_forwarding() -> None:
-    Wrapped = PyMeasureAdapter.wrap(StubKeysightDMM)
-    hal = Wrapped()
+    wrapped = PyMeasureAdapter.wrap(StubKeysightDMM)
+    hal = wrapped()
     hal.connect("MOCK::DMM")
     mal = PyMeasureAbstraction(driver=hal)  # type: ignore[arg-type]
     assert mal.measure_voltage() == 5.0
@@ -154,8 +153,8 @@ def test_mal_abstraction_semantic_forwarding() -> None:
 
 
 def test_mal_unknown_attribute_raises() -> None:
-    Wrapped = PyMeasureAdapter.wrap(StubKeysightDMM)
-    hal = Wrapped()
+    wrapped = PyMeasureAdapter.wrap(StubKeysightDMM)
+    hal = wrapped()
     hal.connect("MOCK::DMM")
     mal = PyMeasureAbstraction(driver=hal)  # type: ignore[arg-type]
     with pytest.raises(AttributeError):

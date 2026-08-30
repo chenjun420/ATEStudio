@@ -22,7 +22,6 @@ from ate_platform.scheduler.step_registry import StepExecutionConfig, StepRegist
 from ate_platform.scheduler.variable_space import VariableSpace
 from ate_platform.types import StepStatus
 
-
 # ---------------------------------------------------------------------------
 # StepExecutionConfig + StepRegistry tests
 # ---------------------------------------------------------------------------

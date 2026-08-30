@@ -27,20 +27,6 @@ from ate_cloud.db import get_db
 from ate_cloud.models.execution import Execution
 from ate_cloud.models.fault_event import SOURCE_LINK, SOURCE_MANUAL, FaultEvent
 from ate_cloud.nats.sse_bridge import SSEBridge
-from ate_cloud.services.breakpoint_registry import (
-    BreakpointRegistry,
-    TypedBreakpoint,
-    new_breakpoint_id,
-    validate_breakpoint,
-)
-from ate_cloud.services.execution_dispatch import (
-    ExecutionDispatchError,
-    ExecutionDispatchService,
-)
-from ate_cloud.services.plan_materializer import (
-    ExecutionPlanMaterializer,
-    PlanMaterializeError,
-)
 from ate_cloud.schemas.execution import (
     BreakpointCreateRequest,
     BreakpointDeleteResponse,
@@ -63,12 +49,26 @@ from ate_cloud.schemas.execution import (
     StepControlRequest,
     StepControlResponse,
 )
+from ate_cloud.services.breakpoint_registry import (
+    BreakpointRegistry,
+    TypedBreakpoint,
+    new_breakpoint_id,
+    validate_breakpoint,
+)
+from ate_cloud.services.execution_dispatch import (
+    ExecutionDispatchError,
+    ExecutionDispatchService,
+)
+from ate_cloud.services.plan_materializer import (
+    ExecutionPlanMaterializer,
+    PlanMaterializeError,
+)
+from ate_cloud.services.simulation_report import build_simulation_report
 from ate_platform.simulation.diff import ExecutionDiff
 from ate_platform.simulation.dry_run_scheduler import DryRunScheduler
 from ate_platform.simulation.full_chain_simulator import FullChainSimulator
 from ate_platform.simulation.instrument_simulator import NoiseConfig, NoiseModel
 from ate_platform.simulation.recording import RecordingInterceptor
-from ate_cloud.services.simulation_report import build_simulation_report
 
 router = APIRouter(prefix="/executions", tags=["executions"])
 
@@ -229,7 +229,7 @@ async def stream_execution_events(
                             event=event.get("category", "event"),
                             id=event.get("id"),
                         )
-                    except asyncio.TimeoutError:
+                    except TimeoutError:
                         # Send keep-alive comment to prevent connection timeout
                         yield ServerSentEvent(data="", comment="keep-alive")
             else:
@@ -318,7 +318,7 @@ async def stream_topology_state(
                         event=event.get("type", "event"),
                         id=event.get("id"),
                     )
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     yield ServerSentEvent(data="", comment="keep-alive")
         finally:
             bridge.remove_stream_queue(run_id, "topology")

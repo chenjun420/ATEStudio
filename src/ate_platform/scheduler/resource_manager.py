@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import threading
 from dataclasses import asdict
-from typing import TYPE_CHECKING, Any, override
+from typing import TYPE_CHECKING, override
 
 from ..exceptions import ResourceAcquireError
 

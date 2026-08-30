@@ -12,7 +12,7 @@ from ate_platform.drivers.base_hal import BaseDriver
 from ate_platform.drivers.base_mal import BaseAbstraction
 
 if TYPE_CHECKING:
-    from pyvisa.resources import Resource
+    pass
 
 
 class MockHALDriver(BaseDriver):

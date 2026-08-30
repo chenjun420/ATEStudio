@@ -114,12 +114,6 @@ class TopologyValidator:
     def _check_resource_wiring(self, result: ValidationResult) -> None:
         """检查 2：步骤资源需求与拓扑接线 / UUT 亲和一致。"""
         dut_ids = {d.id for d in self.topology.duts}
-        # 已接线的 DUT 测试点（拓扑链路终点）
-        wired_duts: set[str] = {
-            l.to.entity_id
-            for l in self.topology.links
-            if l.to.entity_type == LinkEndpointType.DUT_TESTPOINT
-        }
         for step in self._iter_steps():
             uut_affinity = self._step_uut(step)
             if uut_affinity is None:

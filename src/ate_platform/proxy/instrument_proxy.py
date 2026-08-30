@@ -36,12 +36,12 @@ from pathlib import Path
 from queue import Empty
 from typing import Any
 
+import structlog
+
 from ate_platform.drivers.base_hal import BaseDriver
 from ate_platform.drivers.base_mal import BaseAbstraction
 from ate_platform.drivers.mock_factory import MockDriverFactory
 from ate_platform.proxy.connection_pool import ConnectionPool
-
-import structlog
 
 logger = structlog.get_logger(__name__)
 

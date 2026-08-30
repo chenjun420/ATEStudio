@@ -19,8 +19,6 @@ from __future__ import annotations
 
 import pytest
 
-from shared.fixture_topology import ChannelType
-
 
 def _valid_topo_dict(name: str = "PSU 产测工装") -> dict[str, object]:
     """合法拓扑：PSU--夹具--DUT，接地完整。"""

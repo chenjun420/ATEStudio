@@ -52,8 +52,16 @@ class Settings(BaseSettings):
     embedding_dimensions: int = 1536  # DeepAgents / OpenAI compatible
 
     # Upload queue settings
-    upload_queue_max_size: int = Field(default=1000, ge=1, description="Maximum number of entries in upload queue before pruning")
-    upload_queue_max_age_seconds: int = Field(default=3600, ge=1, description="Maximum age in seconds before upload queue entries are pruned")
+    upload_queue_max_size: int = Field(
+        default=1000,
+        ge=1,
+        description="Maximum number of entries in upload queue before pruning",
+    )
+    upload_queue_max_age_seconds: int = Field(
+        default=3600,
+        ge=1,
+        description="Maximum age in seconds before upload queue entries are pruned",
+    )
 
     # Recordings directory — where edge RecordingInterceptor JSONL sessions land
     # (T10 finalize convention: <recordings_dir>/<run_id>.jsonl; consumed by the

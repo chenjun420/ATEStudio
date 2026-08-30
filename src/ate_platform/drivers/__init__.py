@@ -6,11 +6,11 @@ from ate_platform.drivers.base_mal import BaseAbstraction
 from ate_platform.drivers.capabilities import DMMCapabilities, PSUCapabilities
 from ate_platform.drivers.examples import (
     DMM_DRIVER_NAME,
-    DMMHALDriver,
-    DMMAbstraction,
     PSU_DRIVER_NAME,
-    PSUHALDriver,
+    DMMAbstraction,
+    DMMHALDriver,
     PSUAbstraction,
+    PSUHALDriver,
 )
 from ate_platform.drivers.mock_factory import (
     MockDriverFactory,

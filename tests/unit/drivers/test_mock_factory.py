@@ -1,12 +1,10 @@
 """Unit tests for MockDriverFactory auto-mock generation."""
 
-from unittest.mock import MagicMock
 
 import pytest
 
-from ate_platform.drivers.base_hal import BaseDriver
 from ate_platform.drivers.base_mal import BaseAbstraction
-from ate_platform.drivers.capabilities import DMMCapabilities, PSUCapabilities
+from ate_platform.drivers.capabilities import DMMCapabilities
 from ate_platform.drivers.examples.dmm import DMMAbstraction
 from ate_platform.drivers.examples.psu import PSUAbstraction
 from ate_platform.drivers.mock_factory import (

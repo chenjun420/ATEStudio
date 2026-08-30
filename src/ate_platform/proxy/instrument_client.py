@@ -159,7 +159,10 @@ class InstrumentClient:
             *args: 位置参数。
             **kwargs: 关键字参数。
         """
-        return self._call("method", method_name=method_name, *args, **kwargs)
+        # Proxy dispatch (instrument_proxy) pops method_name from kwargs, so it
+        # must travel as a keyword; *args precedes keyword args per B026.
+        method_kwargs = {"method_name": method_name, **kwargs}
+        return self._call("method", *args, **method_kwargs)
 
     def __getattr__(self, name: str) -> Any:
         """透明转发任意方法调用（如 ``client.measure_voltage()``）。
@@ -184,7 +187,7 @@ class InstrumentClient:
     # ------------------------------------------------------------------
     # 上下文管理
     # ------------------------------------------------------------------
-    def __enter__(self) -> "InstrumentClient":
+    def __enter__(self) -> InstrumentClient:
         """上下文入口（与 BaseDriver 一致）。"""
         return self
 

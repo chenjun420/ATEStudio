@@ -1,6 +1,7 @@
 """Tests for ContextProxy and measure decorator."""
 
 import logging
+
 import pytest
 
 from ate_platform.executor import ContextProxy, measure

@@ -53,8 +53,8 @@ def register_pymeasure_drivers() -> dict[str, bool]:
     global _registered
     from ate_platform.drivers.base import DriverRegistry
     from ate_platform.drivers.pymeasure_wrappers.adapter import (
-        PyMeasureAdapter,
         PyMeasureAbstraction,
+        PyMeasureAdapter,
     )
 
     results: dict[str, bool] = {}

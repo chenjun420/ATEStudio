@@ -15,14 +15,13 @@ Test coverage:
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from ate_cloud.services.embedding_service import EmbeddingService
 from ate_cloud.services.hybrid_retriever import HybridRetriever
 from ate_platform.common.circuit_breaker import CircuitBreakerOpenError, CircuitState
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

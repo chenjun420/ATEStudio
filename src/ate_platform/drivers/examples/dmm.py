@@ -14,7 +14,7 @@ from ate_platform.drivers.base_mal import BaseAbstraction
 from ate_platform.drivers.capabilities import DMMCapabilities
 
 if TYPE_CHECKING:
-    import pyvisa
+    pass
 
 
 DMM_DRIVER_NAME = "dmm"
@@ -109,8 +109,10 @@ DriverRegistry.register(DMM_DRIVER_NAME, hal_cls=DMMHALDriver, mal_cls=DMMAbstra
 # Mock driver — simulation mode
 # ---------------------------------------------------------------------------
 
-from ate_platform.drivers.mock_factory import MockDriverFactory
-from ate_platform.drivers.mock_factory import _MockDMMDriver as MockDMMDriver
+# Imports deferred below registration code: mock_factory lazily imports this
+# examples package, so an eager import here would be circular at load time.
+from ate_platform.drivers.mock_factory import MockDriverFactory  # noqa: E402
+from ate_platform.drivers.mock_factory import _MockDMMDriver as MockDMMDriver  # noqa: E402
 
 # Register the DMM mock driver so MockDriverFactory.create_mock(DMMAbstraction)
 # works, and so scripts may import MockDMMDriver directly for simulation.

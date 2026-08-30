@@ -21,35 +21,34 @@ from datetime import datetime
 import pytest
 
 from shared.events import (
+    EVENT_DATA_CLASSES,
+    EVENT_TYPE_CATEGORIES,
     ConditionTimeoutData,
     DeadlockDetectedData,
     Event,
     EventCategory,
     EventType,
+    ExecutionCompletedData,
     ExecutionPausedData,
+    ExecutionStartedData,
+    ExternalCmdData,
+    LoopIterationCompletedData,
+    LoopIterationStartedData,
     MeasurementRecordedData,
+    ResourceReleasedData,
     ResourceTimeoutData,
-    StepStatusChangedData,
-    StepStartedData,
     StepCompletedData,
     StepFailedData,
     StepSkippedData,
-    ResourceReleasedData,
-    TimerExpiredData,
-    ExternalCmdData,
-    LoopIterationStartedData,
-    LoopIterationCompletedData,
-    ExecutionStartedData,
-    ExecutionCompletedData,
+    StepStartedData,
+    StepStatusChangedData,
     StepTimeoutData,
+    TimerExpiredData,
     VariableChangedData,
     WorkerExhaustedData,
-    EVENT_DATA_CLASSES,
-    EVENT_TYPE_CATEGORIES,
-    get_event_category,
     _warn_variable_changed_deprecated,
+    get_event_category,
 )
-
 
 # ---------------------------------------------------------------------------
 # EventCategory enum
@@ -466,7 +465,7 @@ class TestEventDataClassesCompleteness:
             DeadlockDetectedData: {},
             WorkerExhaustedData: {},
         }
-        for et, cls in EVENT_DATA_CLASSES.items():
+        for _et, cls in EVENT_DATA_CLASSES.items():
             kwargs = required_args.get(cls, {})
             instance = cls(**kwargs)  # type: ignore[call-arg]
             d = asdict(instance)

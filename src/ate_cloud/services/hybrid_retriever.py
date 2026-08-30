@@ -321,11 +321,11 @@ class HybridRetriever:
         from langchain_openai import ChatOpenAI
         from pydantic import SecretStr
 
-        kwargs: dict[str, Any] = dict(
-            model=self._model,
-            api_key=SecretStr(self._api_key),
-            temperature=0,
-        )
+        kwargs: dict[str, Any] = {
+            "model": self._model,
+            "api_key": SecretStr(self._api_key),
+            "temperature": 0,
+        }
         if settings.openai_base_url:
             kwargs["base_url"] = settings.openai_base_url
         self._llm = ChatOpenAI(**kwargs)

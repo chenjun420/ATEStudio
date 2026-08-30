@@ -3,20 +3,20 @@
 from ate_platform.drivers import DriverRegistry
 from ate_platform.drivers.examples.chroma_eload import (
     ELOAD_DRIVER_NAME,
-    ChromaEloadHALDriver,
     ChromaEloadAbstraction,
+    ChromaEloadHALDriver,
 )
 from ate_platform.drivers.examples.dmm import (
     DMM_DRIVER_NAME,
-    DMMHALDriver,
     DMMAbstraction,
     DMMDriver,
+    DMMHALDriver,
 )
 from ate_platform.drivers.examples.psu import (
     PSU_DRIVER_NAME,
-    PSUHALDriver,
     PSUAbstraction,
     PSUDriver,
+    PSUHALDriver,
 )
 
 # Register drivers

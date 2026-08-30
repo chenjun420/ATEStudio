@@ -119,9 +119,9 @@ async def create_script(
     try:
         await db.commit()
         await db.refresh(script)
-    except IntegrityError:
+    except IntegrityError as e:
         await db.rollback()
-        raise HTTPException(status_code=409, detail="Script name already exists")
+        raise HTTPException(status_code=409, detail="Script name already exists") from e
 
     return ScriptResponse.model_validate(script)
 
@@ -159,9 +159,9 @@ async def update_script(
     try:
         await db.commit()
         await db.refresh(script)
-    except IntegrityError:
+    except IntegrityError as e:
         await db.rollback()
-        raise HTTPException(status_code=409, detail="Script name already exists")
+        raise HTTPException(status_code=409, detail="Script name already exists") from e
 
     return ScriptResponse.model_validate(script)
 

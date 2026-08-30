@@ -12,14 +12,15 @@ import inspect
 import logging
 import threading
 from collections.abc import Callable
-from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Any
 
 from shared.events import (
     Event as Event,  # 显式 re-export：event_bus 作为 Event/EventType 的统一出口
-    EventCategory,
+)
+from shared.events import (
     EventType as EventType,
+)
+from shared.events import (
     get_event_category,
 )
 
@@ -134,7 +135,7 @@ class EventBus:
 
         # Fallback: try to get the running loop from the current thread
         try:
-            running_loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()  # probe: raises RuntimeError if no loop
             # We're in an async context — schedule directly
             _ = asyncio.create_task(self.publish(event_type, data))
             return

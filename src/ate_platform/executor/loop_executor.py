@@ -34,20 +34,19 @@ Example:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 from dataclasses import asdict
 from typing import Any
 
-from ..scheduler.condition_evaluator import ConditionEvaluator
-from ..scheduler.event_bus import EventBus, EventType
-from ..scheduler.variable_space import VariableSpace
-from ..types import Condition, LoopIterationResult, LoopResult, StepResult, StepStatus
-from .step_executor import StepExecutor
 from shared.dsl import ExecutionMode, LoopType, YamlLoop, YamlStep
 from shared.events import LoopIterationCompletedData, LoopIterationStartedData
 from shared.types import ExecuteTask
+
+from ..scheduler.event_bus import EventBus, EventType
+from ..scheduler.variable_space import VariableSpace
+from ..types import LoopIterationResult, LoopResult, StepResult, StepStatus
+from .step_executor import StepExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -332,7 +331,6 @@ class LoopExecutor:
         # written by iteration N that shouldn't be visible yet.
         iteration_snapshots: list[dict[str, Any]] = []
         for i in range(count):
-            snapshot = self._variable_space.get_all_scope_vars().copy()
             # Also capture loop variables for this iteration
             loop_vars: dict[str, Any] = {}
             for key, value in self._variable_space.get_all_scope_vars().items():

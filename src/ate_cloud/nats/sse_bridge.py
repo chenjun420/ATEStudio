@@ -27,7 +27,7 @@ from typing import Any
 
 from nats.aio.client import Client as NatsClient
 
-from shared.events import EVENT_TYPE_CATEGORIES, EventType
+from shared.events import EVENT_TYPE_CATEGORIES
 
 logger = logging.getLogger(__name__)
 
@@ -205,7 +205,7 @@ class SSEBridge:
                         if len(msgs) < _REPLAY_BATCH_SIZE:
                             break
 
-                    except asyncio.TimeoutError:
+                    except TimeoutError:
                         # No more messages available (timeout waiting for batch)
                         break
 
@@ -486,7 +486,7 @@ class SSEBridge:
         while True:
             try:
                 event = await asyncio.wait_for(queue.get(), timeout=30.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 continue
             except asyncio.CancelledError:
                 return

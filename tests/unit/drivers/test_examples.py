@@ -10,18 +10,17 @@ from ate_platform.drivers.base_mal import BaseAbstraction
 from ate_platform.drivers.capabilities import DMMCapabilities, PSUCapabilities
 from ate_platform.drivers.examples.dmm import (
     DMM_DRIVER_NAME,
-    DMMHALDriver,
     DMMAbstraction,
     DMMDriver,
+    DMMHALDriver,
 )
 from ate_platform.drivers.examples.psu import (
     PSU_DRIVER_NAME,
-    PSUHALDriver,
     PSUAbstraction,
     PSUDriver,
+    PSUHALDriver,
 )
 from ate_platform.drivers.mock_factory import MockDriverFactory
-
 
 # ---------------------------------------------------------------------------
 # DMM HAL + MAL tests

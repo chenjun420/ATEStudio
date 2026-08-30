@@ -74,7 +74,7 @@ class TextEchoServer(_BaseEchoServer):
                         self.received.append(line)
                         conn.sendall(line)
                         line = b""
-        except (socket.timeout, OSError):
+        except (TimeoutError, OSError):
             return
 
 
@@ -103,7 +103,7 @@ class ChromaEchoServer(_BaseEchoServer):
                     resp_body = header[2:4] + len(resp_data).to_bytes(2, "big") + resp_data
                     resp_checksum = (sum(resp_body) & 0xFF).to_bytes(1, "big")
                     conn.sendall(b"\xaa\x55" + resp_body + resp_checksum)
-        except (socket.timeout, OSError):
+        except (TimeoutError, OSError):
             return
 
 

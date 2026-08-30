@@ -377,7 +377,6 @@ class TestEndToEndIntegration:
         Then: safe step scheduled before risky step.
         """
         from ate_platform.scheduler.cpsat import CPSATScheduler
-
         from ate_platform.scheduler.fault_penalty import FaultPenaltyIntegrator
         from ate_platform.scheduler.fault_predictor import FaultPredictor
 
@@ -423,7 +422,6 @@ class TestEndToEndIntegration:
         Then: schedule respects resource constraints.
         """
         from ate_platform.scheduler.cpsat import CPSATScheduler
-
         from ate_platform.scheduler.fault_penalty import FaultPenaltyIntegrator
         from ate_platform.scheduler.fault_predictor import FaultPredictor
 

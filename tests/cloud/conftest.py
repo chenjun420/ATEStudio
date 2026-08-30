@@ -14,7 +14,6 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from ate_cloud.main import create_app
 from ate_cloud.models import Base
 
-
 # Test database URL - SQLite in-memory with async driver
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 

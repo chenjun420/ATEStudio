@@ -1,8 +1,8 @@
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, status
-from sqlalchemy import text
 from nats.js.errors import NotFoundError
+from sqlalchemy import text
 
 from ate_cloud.db import async_session_factory
 

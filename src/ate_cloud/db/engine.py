@@ -4,7 +4,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from ate_cloud.config import settings, DatabaseType
+from ate_cloud.config import DatabaseType, settings
 
 logger = logging.getLogger(__name__)
 

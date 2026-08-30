@@ -147,7 +147,7 @@ class ProxyManager:
     # ------------------------------------------------------------------
     # 上下文管理
     # ------------------------------------------------------------------
-    def __enter__(self) -> "ProxyManager":
+    def __enter__(self) -> ProxyManager:
         self.start()
         return self
 

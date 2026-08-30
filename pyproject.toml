@@ -57,6 +57,33 @@ target-version = "py312"
 select = ["E", "F", "W", "I", "N", "UP", "B", "C4"]
 ignore = ["B024"]  # Abstract class without abstract methods is intentional
 
+# str+Enum mixins (UP042) are intentional: these enums serialize as plain
+# strings over JSON/NATS payloads and renaming the mixin risks contract drift.
+[tool.ruff.lint.per-file-ignores]
+"src/shared/fixture_topology.py" = ["UP042"]
+"src/ate_cloud/config.py" = ["UP042"]
+"src/shared/measurement.py" = ["UP042"]
+# Intentional re-export barrel: imports follow package init code and are the
+# public surface of the package (F401 unused-import is expected).
+"src/ate_cloud/models/__init__.py" = ["E402", "F401"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI dependency-injection calls in argument defaults are the framework's
+# intended usage, not the mutable-default bug B008 guards against.
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.Security",
+    "fastapi.Query",
+    "fastapi.Path",
+    "fastapi.Body",
+    "fastapi.Header",
+    "fastapi.Cookie",
+    "fastapi.Form",
+    "fastapi.File",
+    "fastapi.HTTPBearer",
+    "ate_cloud.auth.dependencies.require_scopes",
+]
+
 [tool.mypy]
 python_version = "3.12"
 strict = true

@@ -36,13 +36,13 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
             from ate_platform.drivers import DriverRegistry
             from ate_platform.drivers.examples.dmm import (
                 DMM_DRIVER_NAME,
-                DMMHALDriver,
                 DMMAbstraction,
+                DMMHALDriver,
             )
             from ate_platform.drivers.examples.psu import (
                 PSU_DRIVER_NAME,
-                PSUHALDriver,
                 PSUAbstraction,
+                PSUHALDriver,
             )
 
             DriverRegistry.register(DMM_DRIVER_NAME, hal_cls=DMMHALDriver, mal_cls=DMMAbstraction)

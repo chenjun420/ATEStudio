@@ -8,15 +8,13 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Generator
-from datetime import datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 from qdrant_client.http import models as qmodels
 
 from ate_cloud.services.failure_indexer import FailureIndexer
 from shared.events import Event, EventType
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

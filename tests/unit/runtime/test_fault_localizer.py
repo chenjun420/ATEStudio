@@ -11,8 +11,8 @@
 
 from __future__ import annotations
 
-from shared.fixture_topology import FixtureTopology, LinkStatus
 from ate_platform.runtime import FaultLocalizer
+from shared.fixture_topology import FixtureTopology, LinkStatus
 
 
 def _topology_dict(**overrides: object) -> dict[str, object]:
@@ -106,8 +106,8 @@ class TestMeasurementAnalysis:
             "dut_id": "DUT1", "testpoint_id": "TP1", "value": 0,
         })
         locs = _localizer().localize(result)
-        assert any(l.type == "open_circuit" for l in locs)
-        open_loc = next(l for l in locs if l.type == "open_circuit")
+        assert any(loc.type == "open_circuit" for loc in locs)
+        open_loc = next(loc for loc in locs if loc.type == "open_circuit")
         assert open_loc.suspect_links == ["L1", "L2"]
         assert open_loc.suspect_relays == ["R1"]
         assert open_loc.testpoint_id == "TP1"
@@ -118,8 +118,8 @@ class TestMeasurementAnalysis:
             "dut_id": "DUT1", "testpoint_id": "TP1", "value": 3.2,
         })
         locs = _localizer().localize(result)
-        under = [l for l in locs if l.type == "measurement_out_of_range"]
-        assert under, f"expected under-range fault, got {[l.type for l in locs]}"
+        under = [loc for loc in locs if loc.type == "measurement_out_of_range"]
+        assert under, f"expected under-range fault, got {[loc.type for loc in locs]}"
         assert "低于下限" in under[0].message
 
     def test_above_max_detects_over_range(self) -> None:
@@ -127,7 +127,7 @@ class TestMeasurementAnalysis:
             "dut_id": "DUT1", "testpoint_id": "TP1", "value": 6.1,
         })
         locs = _localizer().localize(result)
-        over = [l for l in locs if l.type == "measurement_out_of_range"]
+        over = [loc for loc in locs if loc.type == "measurement_out_of_range"]
         assert over
         assert "高于上限" in over[0].message
 
@@ -137,8 +137,8 @@ class TestMeasurementAnalysis:
         })
         locs = _localizer().localize(result)
         assert not any(
-            l.type in ("open_circuit", "measurement_out_of_range")
-            for l in locs
+            loc.type in ("open_circuit", "measurement_out_of_range")
+            for loc in locs
         )
 
     def test_no_measurement_no_fault(self) -> None:
@@ -164,7 +164,7 @@ class TestInstrumentStatus:
         locs = FaultLocalizer(
             FixtureTopology.model_validate(topo)
         ).localize(result)
-        comm = [l for l in locs if l.type == "communication"]
+        comm = [loc for loc in locs if loc.type == "communication"]
         assert comm
         assert comm[0].instrument_id == "PSU_MAIN"
         assert "VISA timeout" in comm[0].message
@@ -177,7 +177,7 @@ class TestRelayStates:
             relay_states={"R1": "open"},
         )
         locs = _localizer().localize(result)
-        relay_fault = [l for l in locs if l.type == "relay_fault"]
+        relay_fault = [loc for loc in locs if loc.type == "relay_fault"]
         assert relay_fault
         assert relay_fault[0].suspect_relays == ["R1"]
 
@@ -187,14 +187,14 @@ class TestRelayStates:
             relay_states={"R1": "closed"},
         )
         locs = _localizer().localize(result)
-        assert not any(l.type == "relay_fault" for l in locs)
+        assert not any(loc.type == "relay_fault" for loc in locs)
 
     def test_relay_state_dict_form(self) -> None:
         result = _step_result(
             relay_states={"R1": {"state": "open"}},
         )
         locs = _localizer().localize(result)
-        assert any(l.type == "relay_fault" for l in locs)
+        assert any(loc.type == "relay_fault" for loc in locs)
 
 
 class TestFixtureSensors:
@@ -204,8 +204,8 @@ class TestFixtureSensors:
         )
         locs = _localizer().localize(result)
         assert any(
-            l.type == "relay_fault" and l.fixture_id == "FIX1"
-            for l in locs
+            loc.type == "relay_fault" and loc.fixture_id == "FIX1"
+            for loc in locs
         )
 
     def test_temperature_out_of_range(self) -> None:
@@ -213,7 +213,7 @@ class TestFixtureSensors:
             fixture_sensors={"FIX1": {"temp": {"value": 80, "expected": None}}},
         )
         locs = _localizer().localize(result)
-        temp_fault = [l for l in locs if l.type == "measurement_out_of_range"]
+        temp_fault = [loc for loc in locs if loc.type == "measurement_out_of_range"]
         assert temp_fault
         assert temp_fault[0].severity == "warning"
 
@@ -223,8 +223,8 @@ class TestFixtureSensors:
         )
         locs = _localizer().localize(result)
         assert not any(
-            l.type == "measurement_out_of_range" and "温度" in l.message
-            for l in locs
+            loc.type == "measurement_out_of_range" and "温度" in loc.message
+            for loc in locs
         )
 
 

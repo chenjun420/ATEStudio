@@ -5,7 +5,6 @@ All tests use SQLite in-memory database configured in conftest.py.
 """
 
 import pytest
-import httpx
 
 
 class TestListScripts:

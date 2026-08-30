@@ -16,7 +16,6 @@ from ate_platform.scheduler.event_bus import Event, EventBus, EventType
 from ate_platform.scheduler.watchdog import WatchDog
 from shared.events import HeartbeatLostData
 
-
 # ── Fixtures ───────────────────────────────────────────────────────────
 
 
@@ -466,7 +465,7 @@ class TestWatchDogDeadlockDetection:
         watchdog.start()
 
         # Increment heartbeat every few checks
-        for i in range(5):
+        for _ in range(5):
             await asyncio.sleep(0.04)
             counter["value"] += 1
 

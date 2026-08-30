@@ -5,7 +5,6 @@ import json
 import logging
 from typing import Any
 
-import nats
 from nats.aio.client import Client as NatsClient
 from nats.aio.msg import Msg
 from nats.js import JetStreamContext
@@ -108,7 +107,7 @@ class NATSSubscriber:
                 msgs = await self._psub.fetch(batch=1, timeout=1.0)
                 for msg in msgs:
                     await self._handle_message(msg)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 # No messages available, continue polling
                 continue
             except asyncio.CancelledError:

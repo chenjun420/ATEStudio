@@ -12,9 +12,11 @@
 from __future__ import annotations
 
 import pytest
+import yaml
 from pydantic import ValidationError
 
 from shared.fixture_topology import (
+    DUT,
     Actuator,
     ActuatorType,
     Channel,
@@ -22,7 +24,6 @@ from shared.fixture_topology import (
     ChannelType,
     CommunicationConfig,
     CommunicationType,
-    DUT,
     Fixture,
     FixtureTopology,
     Instrument,
@@ -222,7 +223,7 @@ class TestYamlRoundTrip:
         assert back.instruments[0].channels[0].direction == ChannelDirection.OUTPUT
 
     def test_malformed_yaml_raises(self) -> None:
-        with pytest.raises(Exception):
+        with pytest.raises(yaml.YAMLError):
             parse_fixture_topology(": : : not : yaml")
 
 
@@ -297,7 +298,7 @@ class TestValidator:
     def test_ground_integrity_warning(self) -> None:
         topo = _base_topology()
         # 移除地线
-        topo.links = [l for l in topo.links if l.signal_type != LinkSignalType.GROUND]
+        topo.links = [link for link in topo.links if link.signal_type != LinkSignalType.GROUND]
         result = topo.validate_topology()
         assert result.valid  # warning 不阻断
         assert any(i.code == TopologyValidator.CHECK_GROUND for i in result.warnings)

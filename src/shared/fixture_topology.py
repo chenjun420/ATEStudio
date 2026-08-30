@@ -350,7 +350,7 @@ class Actuator(BaseModel):
 
     id: str = Field(..., min_length=1, description="执行器标识")
     type: ActuatorType = Field(..., description="执行器类型")
-    controlMethod: Literal["gpio", "modbus", "tcp"] = Field(
+    controlMethod: Literal["gpio", "modbus", "tcp"] = Field(  # noqa: N815 — camelCase key part of fixture JSON contract
         default="gpio", description="控制方式"
     )
     state: Literal["idle", "moving", "active"] = Field(default="idle", description="状态")
@@ -499,7 +499,7 @@ class DUT(BaseModel):
     serial_number: str | None = Field(None, description="序列号（运行时绑定）")
     test_points: list[TestPoint] = Field(default_factory=list, description="测试点列表")
     power_pins: list[PowerPin] = Field(default_factory=list, description="电源引脚列表")
-    uutIndex: int = Field(default=0, description="多 UUT 时的索引")
+    uutIndex: int = Field(default=0, description="多 UUT 时的索引")  # noqa: N815 — camelCase key part of fixture JSON contract
     slot_index: int = Field(default=0, description="槽位索引")
     status: DUTStatus = Field(default=DUTStatus.IDLE, description="状态")
     measurements: dict[str, Any] = Field(default_factory=dict, description="测量值记录")
@@ -569,7 +569,7 @@ class Link(BaseModel):
     signal_type: LinkSignalType = Field(..., description="信号类型")
     wire_gauge: str | None = Field(None, description="线规")
     max_current: float | None = Field(None, description="最大电流（A）")
-    routeId: str | None = Field(None, description="关联的矩阵开关路由")
+    routeId: str | None = Field(None, description="关联的矩阵开关路由")  # noqa: N815 — camelCase key part of fixture JSON contract
     status: LinkStatus = Field(default=LinkStatus.IDLE, description="链路状态")
     fault_info: FaultInfo | None = Field(None, description="故障信息")
 
@@ -864,11 +864,11 @@ class TopologyValidator:
 
     def _check_ground_integrity(self, topo: FixtureTopology, result: ValidationResult) -> None:
         """检查 4 接地完整性（warning）：电源回路必须有地线连接。"""
-        power_links = [l for l in topo.links if l.signal_type == LinkSignalType.POWER]
+        power_links = [link for link in topo.links if link.signal_type == LinkSignalType.POWER]
         if not power_links:
             return
         ground_count = sum(
-            1 for l in topo.links if l.signal_type == LinkSignalType.GROUND
+            1 for link in topo.links if link.signal_type == LinkSignalType.GROUND
         )
         if ground_count == 0:
             self._add(
@@ -896,10 +896,10 @@ class TopologyValidator:
             if len(targets) > 1:
                 # 检查是否有经过矩阵开关的路径（routeId 存在）
                 has_matrix = any(
-                    l.routeId
-                    for l in topo.links
-                    if l.from_endpoint.entity_id == inst_id
-                    and l.from_endpoint.port_id == ch_id
+                    link.routeId
+                    for link in topo.links
+                    if link.from_endpoint.entity_id == inst_id
+                    and link.from_endpoint.port_id == ch_id
                 )
                 if not has_matrix:
                     labels = [f"{d}.{p}" for d, p in sorted(targets)]

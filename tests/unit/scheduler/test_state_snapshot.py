@@ -11,16 +11,15 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from pathlib import Path
+from typing import Any
 
 import pytest
-from shared.types import StepStatus
 
 from ate_platform.scheduler import StateSnapshot, VariableSpace
 from ate_platform.scheduler.scanner_scheduler import ScannerScheduler
 from ate_platform.scheduler.step_registry import StepRegistry
-
+from shared.types import StepStatus
 
 # ---------------------------------------------------------------------------
 # StateSnapshot 组件
@@ -115,8 +114,8 @@ def test_variable_space_restore_tolerates_bad_structure() -> None:
 
 
 def _make_scheduler(tmp_path: Path, reset_calls: list) -> tuple[ScannerScheduler, Any]:
-    from ate_platform.scheduler.event_bus import EventBus
     from ate_platform.scheduler.condition_evaluator import ConditionEvaluator
+    from ate_platform.scheduler.event_bus import EventBus
     from ate_platform.scheduler.resource_manager import ResourceManager
     from ate_platform.types import Condition
 
@@ -224,8 +223,8 @@ async def test_status_change_writes_snapshot(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_no_snapshot_when_disabled(tmp_path: Path) -> None:
     """未启用 snapshot_dir 时完全无快照行为。"""
-    from ate_platform.scheduler.event_bus import EventBus
     from ate_platform.scheduler.condition_evaluator import ConditionEvaluator
+    from ate_platform.scheduler.event_bus import EventBus
     from ate_platform.scheduler.resource_manager import ResourceManager
 
     event_bus = EventBus()

@@ -8,8 +8,7 @@ pathlib.Path for cross-platform compatibility (ARM64/x86_64, Linux/Windows).
 from __future__ import annotations
 
 import json
-import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -185,7 +184,7 @@ class ScriptVersioningService:
 
         for commit in commits:
             # GitPython committed_date is a Unix timestamp (int)
-            ts = datetime.fromtimestamp(commit.committed_date, tz=timezone.utc)
+            ts = datetime.fromtimestamp(commit.committed_date, tz=UTC)
             versions.append({
                 "hash": str(commit.hexsha),
                 "message": str(commit.message).strip(),
@@ -257,7 +256,7 @@ class ScriptVersioningService:
         posix_path = script_path.replace("\\", "/")
         try:
             commit = next(self.repo.iter_commits(paths=posix_path))
-            return datetime.fromtimestamp(commit.committed_date, tz=timezone.utc)
+            return datetime.fromtimestamp(commit.committed_date, tz=UTC)
         except StopIteration:
             return None
 

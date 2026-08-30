@@ -422,7 +422,7 @@ class CPSATScheduler:
                         step_intervals[step.id]
                     )
 
-        for resource_id, intervals in resource_usage.items():
+        for _resource_id, intervals in resource_usage.items():
             demands = [1] * len(intervals)
             model.AddCumulative(intervals, demands, 1)
 
@@ -563,7 +563,8 @@ class CPSATScheduler:
         idle_scale = int(idle_power * power_scale)
         # Energy = active_energy + idle_scale * num_resources * makespan - idle_scale * total_active_time
         total_active_time = sum(step_durations.values())
-        # model.Add(energy_cost == active_energy + idle_scale * num_resources * makespan - idle_scale * total_active_time)
+        # model.Add(energy_cost == active_energy + idle_scale * num_resources
+        #           * makespan - idle_scale * total_active_time)
         # Simplify: the constant part doesn't matter for minimization, but matters for Pareto comparison
         energy_constant = active_energy - idle_scale * total_active_time
         model.Add(energy_cost == energy_constant + idle_scale * num_resources * makespan)
@@ -839,7 +840,7 @@ class CPSATScheduler:
                 for rid in step.resources:
                     resource_steps.setdefault(rid, []).append(step.id)
 
-        for rid, sids in resource_steps.items():
+        for _rid, sids in resource_steps.items():
             sorted_by_start = sorted(sids, key=lambda sid: raw[sid][0])
             for i in range(1, len(sorted_by_start)):
                 predecessors[sorted_by_start[i]].add(sorted_by_start[i - 1])

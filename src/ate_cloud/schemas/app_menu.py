@@ -1,7 +1,5 @@
 """Pydantic schemas for App and AppMenu API responses."""
 
-from datetime import datetime
-from typing import Optional
 from pydantic import BaseModel, ConfigDict
 
 
@@ -12,12 +10,12 @@ class AppMenuResponse(BaseModel):
 
     id: str
     app_id: str
-    parent_id: Optional[str] = None
+    parent_id: str | None = None
     code: str
     name: str
     route_path: str
-    route_name: Optional[str] = None
-    icon: Optional[str] = None
+    route_name: str | None = None
+    icon: str | None = None
     sort_order: int
     is_active: bool
     required_permissions: list[str] | None = None
@@ -37,8 +35,8 @@ class AppResponse(BaseModel):
     id: str
     code: str
     name: str
-    description: Optional[str] = None
-    icon: Optional[str] = None
+    description: str | None = None
+    icon: str | None = None
     sort_order: int
     is_active: bool
 
@@ -62,23 +60,23 @@ class MenuCreateRequest(BaseModel):
     code: str
     name: str
     route_path: str
-    route_name: Optional[str] = None
-    icon: Optional[str] = None
+    route_name: str | None = None
+    icon: str | None = None
     sort_order: int = 0
-    is_active: Optional[bool] = None
-    parent_id: Optional[str] = None
-    required_permissions: Optional[list[str]] = None
+    is_active: bool | None = None
+    parent_id: str | None = None
+    required_permissions: list[str] | None = None
 
 
 class MenuUpdateRequest(BaseModel):
     """Request body for updating a menu item. All fields optional."""
 
-    code: Optional[str] = None
-    name: Optional[str] = None
-    route_path: Optional[str] = None
-    route_name: Optional[str] = None
-    icon: Optional[str] = None
-    sort_order: Optional[int] = None
-    is_active: Optional[bool] = None
-    parent_id: Optional[str] = None
-    required_permissions: Optional[list[str]] = None
+    code: str | None = None
+    name: str | None = None
+    route_path: str | None = None
+    route_name: str | None = None
+    icon: str | None = None
+    sort_order: int | None = None
+    is_active: bool | None = None
+    parent_id: str | None = None
+    required_permissions: list[str] | None = None

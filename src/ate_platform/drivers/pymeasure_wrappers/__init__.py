@@ -10,7 +10,7 @@ BaseDriver(HAL)/BaseAbstraction(MAL) 架构下不可行（MRO 冲突风险），
 ``__getattr__`` 透传语义方法；MAL 抽象提供平台统一接口。
 """
 
-from ate_platform.drivers.pymeasure_wrappers.adapter import PyMeasureAdapter, PyMeasureAbstraction
+from ate_platform.drivers.pymeasure_wrappers.adapter import PyMeasureAbstraction, PyMeasureAdapter
 from ate_platform.drivers.pymeasure_wrappers.register import (
     ensure_pymeasure_drivers_registered,
     register_pymeasure_drivers,

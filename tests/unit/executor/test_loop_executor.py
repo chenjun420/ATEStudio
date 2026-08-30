@@ -25,7 +25,7 @@ from ate_platform.executor.loop_executor import LoopExecutor
 from ate_platform.executor.process_executor import ProcessExecutor
 from ate_platform.scheduler.event_bus import EventBus, EventType
 from ate_platform.scheduler.variable_space import VariableSpace
-from ate_platform.types import LoopIterationResult, LoopResult, StepStatus
+from ate_platform.types import StepStatus
 from shared.dsl import ExecutionMode, LoopType, YamlLoop, YamlStep
 
 
@@ -447,7 +447,7 @@ class TestLoopVariableScoping:
             ],
         )
 
-        result = await loop_executor.execute_loop(loop)
+        await loop_executor.execute_loop(loop)
 
         # Check result is stored
         stored = variable_space.get_loop_result("loop_result_test")
@@ -549,8 +549,6 @@ class TestLoopFailure:
         self, loop_executor: LoopExecutor, fixtures_dir: Path,
     ) -> None:
         """Should stop FOR loop when a step fails."""
-        pass_script = str(fixtures_dir / "pass_script.py")
-
         # Create a failing script
         with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
             f.write('result = {"status": "FAILED", "error": "Test failure"}\n')

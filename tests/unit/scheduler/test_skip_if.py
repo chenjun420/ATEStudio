@@ -12,12 +12,11 @@ Tests cover:
 from __future__ import annotations
 
 import asyncio
-from dataclasses import asdict
 
 import pytest
 
 from ate_platform.scheduler.condition_evaluator import ConditionEvaluator
-from ate_platform.scheduler.event_bus import EventBus, Event, EventType
+from ate_platform.scheduler.event_bus import Event, EventBus, EventType
 from ate_platform.scheduler.resource_manager import ResourceManager
 from ate_platform.scheduler.scanner_scheduler import ScannerScheduler
 from ate_platform.scheduler.step_registry import StepRegistry
@@ -520,7 +519,7 @@ class TestSkipIfDsl:
 
     def test_yaml_loop_has_skip_if_field(self) -> None:
         """YamlLoop should have skip_if and skip_reason fields."""
-        from shared.dsl import YamlLoop, LoopType
+        from shared.dsl import LoopType, YamlLoop
 
         loop = YamlLoop(
             id="loop1",
@@ -534,7 +533,7 @@ class TestSkipIfDsl:
 
     def test_yaml_loop_skip_if_defaults_to_none(self) -> None:
         """YamlLoop skip_if should default to None."""
-        from shared.dsl import YamlLoop, LoopType
+        from shared.dsl import LoopType, YamlLoop
 
         loop = YamlLoop(id="loop1", loop_type=LoopType.FOR)
 

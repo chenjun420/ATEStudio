@@ -161,7 +161,7 @@ class PyMeasureAdapter(BaseDriver):
         return self._pm
 
     @classmethod
-    def wrap(cls, pymeasure_class: type[Any], **kwargs: Any) -> type["PyMeasureAdapter"]:
+    def wrap(cls, pymeasure_class: type[Any], **kwargs: Any) -> type[PyMeasureAdapter]:
         """动态生成绑定指定 pymeasure 类的适配 HAL 驱动类。
 
         Args:

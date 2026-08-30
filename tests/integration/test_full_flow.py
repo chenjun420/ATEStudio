@@ -15,11 +15,10 @@ Timing assertions:
 
 import asyncio
 import time
+from collections.abc import AsyncGenerator
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
-
-from collections.abc import AsyncGenerator
 
 import pytest
 
@@ -28,7 +27,7 @@ from ate_platform.data.publisher import NATSPublisher
 from ate_platform.dsl.parser import YamlParser
 from ate_platform.executor.process_executor import ProcessExecutor
 from ate_platform.scheduler.condition_evaluator import ConditionEvaluator
-from ate_platform.scheduler.event_bus import EventBus, Event, EventType
+from ate_platform.scheduler.event_bus import Event, EventBus, EventType
 from ate_platform.scheduler.resource_manager import ResourceManager
 from ate_platform.scheduler.scanner_scheduler import ScannerScheduler
 from ate_platform.scheduler.step_registry import StepRegistry
@@ -469,7 +468,7 @@ class TestFullWorkflowIntegration:
         # Initialize result variables
         measure_result: StepResult = StepResult(status=StepStatus.PENDING)
         validate_result: StepResult = StepResult(status=StepStatus.PENDING)
-        
+
         if init_result.status == StepStatus.PASSED:
             measure_result = process_executor.execute(
                 str(scripts_dir / "measure_pass.py"),

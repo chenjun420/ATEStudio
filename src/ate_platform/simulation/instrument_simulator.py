@@ -126,7 +126,7 @@ class InstrumentSimulator:
         driver: BaseDriver,
         instrument_type: str = "GENERIC",
         config: NoiseConfig | None = None,
-        injector: "FaultInjector | None" = None,
+        injector: FaultInjector | None = None,
     ) -> None:
         """Initialize the instrument simulator.
 
@@ -184,7 +184,7 @@ class InstrumentSimulator:
         return self._state.query_count
 
     @property
-    def injector(self) -> "FaultInjector | None":
+    def injector(self) -> FaultInjector | None:
         """故障注入器（无则 None）。"""
         return self._injector
 

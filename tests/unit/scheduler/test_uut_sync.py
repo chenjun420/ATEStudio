@@ -15,8 +15,7 @@ import time
 
 import pytest
 
-from ate_platform.scheduler.uut_sync import SyncBarrier, UUT, UUTManager, UUTState
-
+from ate_platform.scheduler.uut_sync import UUT, SyncBarrier, UUTManager, UUTState
 
 # ---------------------------------------------------------------------------
 # UUT 状态机
@@ -91,7 +90,6 @@ def test_barrier_all_arrive_together() -> None:
             arrived_at.append(time.monotonic())
 
     threads = [threading.Thread(target=_worker, args=(uid,)) for uid in ["UUT_0", "UUT_1", "UUT_2"]]
-    start = time.monotonic()
     for t in threads:
         t.start()
     for t in threads:

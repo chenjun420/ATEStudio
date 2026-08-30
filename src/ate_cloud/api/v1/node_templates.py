@@ -113,11 +113,11 @@ async def create_node_template(
     try:
         await db.commit()
         await db.refresh(template)
-    except IntegrityError:
+    except IntegrityError as e:
         await db.rollback()
         raise HTTPException(
             status_code=409, detail="Node template name already exists"
-        )
+        ) from e
 
     return NodeTemplateResponse.model_validate(template)
 
@@ -157,11 +157,11 @@ async def update_node_template(
     try:
         await db.commit()
         await db.refresh(template)
-    except IntegrityError:
+    except IntegrityError as e:
         await db.rollback()
         raise HTTPException(
             status_code=409, detail="Node template name already exists"
-        )
+        ) from e
 
     return NodeTemplateResponse.model_validate(template)
 

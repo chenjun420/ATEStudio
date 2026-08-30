@@ -20,7 +20,7 @@ validation -- unknown keys are rejected rather than silently ignored.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -138,7 +138,7 @@ class Measurement(BaseModel):
         description="Pass/Fail/Warning verdict (auto-calculated if not provided)",
     )
     timestamp: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc),
+        default_factory=lambda: datetime.now(UTC),
         description="Measurement timestamp (UTC)",
     )
 
@@ -151,7 +151,7 @@ class Measurement(BaseModel):
         return v
 
     @model_validator(mode="after")
-    def _auto_calculate_outcome(self) -> "Measurement":
+    def _auto_calculate_outcome(self) -> Measurement:
         """Recalculate outcome from value vs limits when not explicitly FAIL.
 
         If the caller set outcome to FAIL explicitly we honour it. Otherwise we

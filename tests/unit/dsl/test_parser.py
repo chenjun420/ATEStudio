@@ -3,7 +3,6 @@
 from pathlib import Path
 
 import pytest
-import yaml
 
 from ate_platform.dsl.parser import YamlParser
 from shared.dsl import ExecutionMode, LoopType, YamlLoop, YamlPlan, YamlStep

@@ -7,21 +7,18 @@ All tests use SQLite in-memory database configured in conftest.py.
 
 from __future__ import annotations
 
-import pytest
-from httpx import ASGITransport, AsyncClient
 from pathlib import Path
 
+import pytest
 from fastapi import FastAPI
-from sqlalchemy.ext.asyncio import AsyncSession
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from ate_cloud.db import get_db
 from ate_cloud.main import create_app
 from ate_cloud.models import Base
 from ate_cloud.nats.sse_bridge import SSEBridge
 from ate_cloud.services.script_versioning import ScriptVersioningService
-
-from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
-
 
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 
@@ -262,14 +259,14 @@ class TestScriptVersioningService:
 
     def test_init_creates_git_repo(self, tmp_path: Path) -> None:
         """Test that initialization creates a Git repo if none exists."""
-        svc = ScriptVersioningService(scripts_root=tmp_path)
+        ScriptVersioningService(scripts_root=tmp_path)
         assert (tmp_path / ".git").is_dir()
 
     def test_init_existing_repo(self, tmp_path: Path) -> None:
         """Test that initialization works with an existing Git repo."""
         ScriptVersioningService(scripts_root=tmp_path)
         # Second init should not fail
-        svc = ScriptVersioningService(scripts_root=tmp_path)
+        ScriptVersioningService(scripts_root=tmp_path)
         assert (tmp_path / ".git").is_dir()
 
     def test_read_content(self, tmp_path: Path) -> None:

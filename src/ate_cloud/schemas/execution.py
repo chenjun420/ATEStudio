@@ -7,7 +7,7 @@ Defines request/response models for execution CRUD and SSE streaming:
 - ExecutionAbortResponse: Schema for abort endpoint response
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
@@ -75,8 +75,8 @@ class ExecutionResponse(BaseModel):
     dut_serial: str | None = None
     station_id: str | None = None
     instrument_ids: list[str] | None = None
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     model_config = {"from_attributes": True}
 

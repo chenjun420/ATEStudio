@@ -270,7 +270,9 @@ class TestX6NodeSerialization:
         """Should call toJSON() on objects that have it."""
 
         class FakeX6Node:
-            def toJSON(self) -> dict:
+            # Name mirrors AntV X6's JS toJSON() hook that serialize_x6_node
+            # duck-types via getattr(node, "toJSON"); renaming breaks the test.
+            def toJSON(self) -> dict:  # noqa: N802
                 return {"id": "fake", "shape": "rect"}
 
         result = BreakpointManager.serialize_x6_node(FakeX6Node())

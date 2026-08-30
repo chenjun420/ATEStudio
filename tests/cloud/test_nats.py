@@ -5,8 +5,9 @@ Tests message handling, graceful degradation, and error scenarios.
 
 import asyncio
 import json
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from ate_cloud.nats.subscriber import NATSSubscriber
 
@@ -217,7 +218,7 @@ class TestNATSGracefulDegradation:
             nonlocal timeout_count
             timeout_count += 1
             if timeout_count < 3:
-                raise asyncio.TimeoutError()
+                raise TimeoutError()
             else:
                 # After a few timeouts, raise CancelledError to stop
                 raise asyncio.CancelledError()

@@ -11,9 +11,9 @@
 
 from __future__ import annotations
 
+from ate_platform.scheduler.topology_validator import TopologyValidator
 from shared.dsl import ExecutionMode, LoopType, YamlLoop, YamlPlan, YamlStep
 from shared.fixture_topology import FixtureTopology
-from ate_platform.scheduler.topology_validator import TopologyValidator
 
 
 def _topology_dict(**overrides: object) -> dict[str, object]:
@@ -227,7 +227,7 @@ class TestResourceWiring:
         plan = _plan(_step("s1", instrument="PSU_MAIN", uut="DUT1"))
         # DMM 经继电器不可达 DUT 的用例：移除 DMM 链路
         topo = _topology_dict()
-        topo["links"] = [l for l in topo["links"] if not l["id"].startswith("L3")]
+        topo["links"] = [link for link in topo["links"] if not link["id"].startswith("L3")]
         topo["links"] = list(topo["links"])
         # 加入一个只接夹具不接 DUT 的仪器
         topo["instruments"] = [

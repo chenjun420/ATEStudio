@@ -16,7 +16,6 @@ Tests cover:
 - run_id parameter
 """
 
-import asyncio
 import os
 import tempfile
 from pathlib import Path
@@ -150,7 +149,6 @@ class TestProcessExecutorCancellation:
         self, executor: ProcessExecutor, examples_dir: Path
     ) -> None:
         """Should cancel a running task."""
-        script_path = examples_dir / "test_timeout.py"
         # Start a long-running task
         step_id = "cancel_test_step"
         # Execute asynchronously would need threading, but cancel() works on tracked tasks

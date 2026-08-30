@@ -50,6 +50,8 @@ from ate_cloud.api.v1.offline import router as offline_router
 from ate_cloud.api.v1.offline import sse_router as offline_sse_router
 from ate_cloud.api.v1.operator_checkpoints import (
     checkpoint_alias_router,
+)
+from ate_cloud.api.v1.operator_checkpoints import (
     router as operator_checkpoints_router,
 )
 from ate_cloud.api.v1.products import router as products_router

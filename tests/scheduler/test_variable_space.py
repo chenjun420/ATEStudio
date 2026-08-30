@@ -7,8 +7,6 @@ Tests cover:
 - Whitelist validation for write operations
 """
 
-import threading
-import time
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -146,7 +144,7 @@ class TestVariableSpaceThreadSafety:
         num_iterations = 100
 
         def writer() -> None:
-            for i in range(num_iterations):
+            for _ in range(num_iterations):
                 current = vs.get("scope.counter")
                 vs.set("scope.counter", current + 1)
 

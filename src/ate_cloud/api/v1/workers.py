@@ -17,7 +17,7 @@ JetStreamWorker instances via the ``ate-workers`` JetStream KV bucket:
 
 import json
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -136,7 +136,7 @@ async def register_worker(
         "capabilities": capabilities,
         "max_concurrent_tasks": max_concurrent_tasks,
         "current_tasks": 0,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
     }).encode("utf-8")
 
     try:
@@ -162,7 +162,7 @@ async def register_worker(
         capabilities=capabilities,
         max_concurrent_tasks=max_concurrent_tasks,
         current_tasks=0,
-        last_heartbeat=datetime.now(timezone.utc),
+        last_heartbeat=datetime.now(UTC),
     )
 
 
