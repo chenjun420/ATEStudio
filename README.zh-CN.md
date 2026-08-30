@@ -8,6 +8,7 @@
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-009688?logo=fastapi)
 ![Vue 3](https://img.shields.io/badge/Vue-3.5-4FC08D?logo=vue.js)
 ![TypeScript](https://img.shields.io/badge/TypeScript-6.0-3178C6?logo=typescript)
+![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)
 ![CI](https://github.com/chenjun420/ATEStudio/actions/workflows/ci.yml/badge.svg)
 
 ATE Studio 是面向通信、服务器及消费电子制造的端到端产测工程平台，将事件驱动测试调度、YAML 测试计划 DSL、脚本执行、三级无硬件仿真与可视化流程编排整合于一体。
@@ -253,3 +254,7 @@ GitHub Actions（`.github/workflows/`）：
 ## 贡献
 
 欢迎在 [GitHub](https://github.com/chenjun420/ATEStudio) 上提交 issue 或 pull request。提交前请运行 `ruff`、`mypy` 与测试套件。
+
+## 许可证
+
+本项目基于 [Apache License 2.0](LICENSE) 开源。
