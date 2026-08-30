@@ -24,6 +24,7 @@ import logging
 import multiprocessing
 import os
 import queue
+import threading
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -47,6 +48,12 @@ _ENV_STEP_ID = "ATE_DEBUG_STEP_ID"
 
 _DEFAULT_DAP_HOST = "127.0.0.1"
 _DEFAULT_DAP_PORT = 0  # 0 = auto-assign ephemeral port
+
+# How long the debug child waits for an IDE (DAP client) to attach before
+# proceeding with script execution. Bounds unattended edge runs so a missing
+# IDE never blocks a test step; an IDE attaching within this window can still
+# take an interactive debug session.
+_DEBUG_CLIENT_ATTACH_TIMEOUT = 5.0
 
 
 def _run_debug_child(
@@ -85,6 +92,14 @@ def _run_debug_child(
 
     # Connect to the parent's debugpy adapter (--connect mode).
     # The parent must have called debugpy.listen() on (dap_host, dap_port).
+    #
+    # debugpy.wait_for_client() blocks the calling thread until a DAP client
+    # (IDE) attaches. On an unattended edge station nobody attaches, so running
+    # it inline would hang the whole script until the parent's timeout kills
+    # the process (Windows and Linux alike). Run the wait on a daemon thread
+    # with a bounded join: the script proceeds immediately when no IDE is
+    # present, while an IDE that attaches within the grace window can still
+    # debug (the daemon thread keeps serving pydevd in the background).
     try:
         import debugpy
 
@@ -92,7 +107,13 @@ def _run_debug_child(
             (dap_host, dap_port),
             access_token=access_token or None,
         )
-        debugpy.wait_for_client()
+        wait_thread = threading.Thread(
+            target=debugpy.wait_for_client,
+            name="debugpy-wait-for-client",
+            daemon=True,
+        )
+        wait_thread.start()
+        wait_thread.join(timeout=_DEBUG_CLIENT_ATTACH_TIMEOUT)
     except Exception as e:  # noqa: BLE001
         # If debugpy connection fails, fall back to running without debugging.
         # This is NOT silent degradation of an external service - debugpy is a
@@ -313,7 +334,6 @@ class DebugProcessExecutor:
         )
         proc.start()
 
-        result_data: dict[str, Any] | None = None
         deadline = time.monotonic() + effective_timeout
 
         while proc.is_alive() or not pause_queue.empty():
@@ -414,7 +434,7 @@ class DebugProcessExecutor:
                 try:
                     sid, event = await asyncio.wait_for(event_queue.get(), timeout=0.1)
                     await publish_pause(sid, event)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     continue
                 except asyncio.CancelledError:
                     break

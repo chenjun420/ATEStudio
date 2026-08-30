@@ -27,14 +27,14 @@ import pytest
 
 from ate_platform.debug.breakpoint_manager import BreakpointData
 from ate_platform.debug.debug_executor import (
-    DebugProcessExecutor,
     _ENV_DAP_HOST,
     _ENV_DAP_PORT,
     _ENV_DAP_TOKEN,
+    DebugProcessExecutor,
     _run_debug_child,
 )
 from ate_platform.executor.process_executor import ProcessExecutor
-from ate_platform.types import StepResult, StepStatus
+from ate_platform.types import StepStatus
 
 
 @pytest.fixture
@@ -466,6 +466,19 @@ class TestSerializeEvent:
 
 class TestRunDebugChild:
     """Tests for the _run_debug_child module-level function."""
+
+    @pytest.fixture(autouse=True)
+    def _stub_child_debugpy(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Inject a debugpy stub for the in-child ``import debugpy``.
+
+        ``_run_debug_child`` is normally the spawned child-process entry point,
+        but these tests call it in-process. A real ``debugpy.connect()`` attaches
+        pydevd to the pytest process permanently; a second call then blocks
+        forever in ``wait_for_client()`` (no DAP client ever attaches), hanging
+        the suite on Windows. A MagicMock stands in for debugpy so connect() and
+        wait_for_client() are instant no-ops.
+        """
+        monkeypatch.setitem(sys.modules, "debugpy", MagicMock())
 
     def test_run_debug_child_passes(self) -> None:
         """Should execute a passing script and return PASSED."""
