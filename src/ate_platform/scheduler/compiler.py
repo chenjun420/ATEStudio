@@ -258,7 +258,8 @@ class SequenceCompiler:
                                 iteration=n,
                             )
                         )
-            self._terminal[loop.id] = last
+            if last is not None:
+                self._terminal[loop.id] = last
             return None
 
         # WHILE / FOREACH / count-less FOR: single deferred node.
@@ -317,35 +318,40 @@ class SequenceCompiler:
         depends_on = [self._resolve_target(t, frames) for t in (item.depends_on or inherited_deps)]
         # 旧式无 type 字段的脚本步骤按 SCRIPT 处理（DSL v3.0 向后兼容）
         step_type = item.type if item.type is not None else StepType.SCRIPT
-        common = {
-            "id": expanded_id,
-            "type": step_type,
-            "script": item.script,
-            "depends_on": depends_on,
-            "uut_affinity": item.uut_affinity,
-            "timeout": item.timeout,
-            "retry": item.retry,
-            "on_failure": item.on_failure if item.on_failure is not None else item.on_fail,
-            "barrier_name": item.barrier_name,
-            "action": item.action,
-            "fixture_id": item.fixture_id,
-            "source_step_id": item.id,
-            "iteration": self._innermost_iteration(frames),
-            "export_outputs": item.export_outputs,
-        }
 
         if item.type == StepType.BRANCH:
             params = {k: v for k, v in item.params.items() if k not in ("condition", "then", "else")}
-            return [
-                CompiledStep(
-                    **common,
-                    params=params,                    condition=item.params.get("condition"),
-                    then_ids=self._resolve_reference_list(item.params.get("then", []), frames),
-                    else_ids=self._resolve_reference_list(item.params.get("else", []), frames),
-                )
-            ]
+            condition = item.params.get("condition")
+            then_ids = self._resolve_reference_list(item.params.get("then", []), frames)
+            else_ids = self._resolve_reference_list(item.params.get("else", []), frames)
+        else:
+            params = dict(item.params)
+            condition = None
+            then_ids = []
+            else_ids = []
 
-        return [CompiledStep(**common, params=dict(item.params))]
+        return [
+            CompiledStep(
+                id=expanded_id,
+                type=step_type,
+                script=item.script,
+                params=params,
+                depends_on=depends_on,
+                uut_affinity=item.uut_affinity,
+                timeout=item.timeout,
+                retry=item.retry,
+                on_failure=item.on_failure if item.on_failure is not None else item.on_fail,
+                barrier_name=item.barrier_name,
+                action=item.action,
+                fixture_id=item.fixture_id,
+                then_ids=then_ids,
+                else_ids=else_ids,
+                condition=condition,
+                source_step_id=item.id,
+                iteration=self._innermost_iteration(frames),
+                export_outputs=item.export_outputs,
+            )
+        ]
 
     def _emit_loop(
         self,

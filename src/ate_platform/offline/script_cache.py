@@ -30,6 +30,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
@@ -130,17 +131,17 @@ class OfflineScriptCache:
         base = self._script_dir(script_id) / _safe_name(version)
         return base.with_suffix(_CONTENT_SUFFIX), base.with_suffix(_META_SUFFIX)
 
-    def _read_meta(self, meta_path: Path) -> dict | None:
+    def _read_meta(self, meta_path: Path) -> dict[str, Any] | None:
         try:
             raw = json.loads(meta_path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return None
         return raw if isinstance(raw, dict) else None
 
-    def _iter_metas(self, script_id: str) -> list[dict]:
+    def _iter_metas(self, script_id: str) -> list[dict[str, Any]]:
         """该脚本全部 sidecar，按 (stored_at, seq) 新→旧排序（Windows 同秒决胜靠 seq）。"""
         script_dir = self._script_dir(script_id)
-        metas: list[dict] = []
+        metas: list[dict[str, Any]] = []
         if not script_dir.is_dir():
             return metas
         for meta_path in script_dir.glob(f"*{_META_SUFFIX}"):

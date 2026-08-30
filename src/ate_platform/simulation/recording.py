@@ -279,6 +279,8 @@ class RecordingInterceptor:
                     rec = json.loads(line)
                 except json.JSONDecodeError:
                     continue  # 撕裂尾行：崩溃安全前缀之外的部分
+                if not isinstance(rec, dict):
+                    continue  # 非对象行：录制格式损坏，容错跳过
                 if rec.get("kind") == _HEADER_KIND:
                     continue
                 events.append(rec)
@@ -296,7 +298,7 @@ class RecordingInterceptor:
                     rec = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if rec.get("kind") == _HEADER_KIND:
+                if isinstance(rec, dict) and rec.get("kind") == _HEADER_KIND:
                     return rec
                 break  # 头部只可能在首行
         return {}

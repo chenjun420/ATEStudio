@@ -114,10 +114,11 @@ def _values_equal(expected: Any, actual: Any, tol: float) -> bool:
             _values_equal(e, a, tol) for e, a in zip(expected, actual, strict=False)
         )
     if isinstance(expected, dict) and isinstance(actual, dict):
-        return expected.keys() == actual.keys() and all(
-            _values_equal(v, actual[k], tol) for k, v in expected.items()
+        return bool(
+            expected.keys() == actual.keys()
+            and all(_values_equal(v, actual[k], tol) for k, v in expected.items())
         )
-    return expected == actual
+    return bool(expected == actual)
 
 
 class ReplayEngine:
@@ -156,10 +157,12 @@ class ReplayEngine:
             raise ValueError("provide exactly one of recording_path / events")
 
         if events is None:
+            # XOR check above guarantees recording_path is set here.
+            assert recording_path is not None
             events = RecordingInterceptor.load(recording_path)
-            self.execution_id: str | None = (
-                RecordingInterceptor.read_header(recording_path).get("execution_id")
-            )
+            self.execution_id: str | None = RecordingInterceptor.read_header(
+                recording_path
+            ).get("execution_id")
         else:
             self.execution_id = None
 
@@ -268,9 +271,9 @@ class ReplayEngine:
             )
             self._deviate(err)
 
-        detail = self._validate_args(recorded, args, kwargs)
-        if detail is not None:
-            reason, message, expected, actual = detail
+        mismatch = self._validate_args(recorded, args, kwargs)
+        if mismatch is not None:
+            reason, message, expected, actual = mismatch
             err = ReplayMismatchError(
                 f"Replay mismatch ({reason}): {resource}.{method} call #{call_index} "
                 f"(seq={seq}): {message}",

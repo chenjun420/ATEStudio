@@ -52,13 +52,11 @@ recomputed percentages; commutative and deterministic).
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable, Mapping
-from typing import TYPE_CHECKING, Any
+from collections.abc import Iterable, Iterator, Mapping
+from typing import Any
 
+from ate_platform.scheduler.compiler import CompiledStep
 from shared.dsl import StepType
-
-if TYPE_CHECKING:
-    from ate_platform.scheduler.compiler import CompiledStep
 
 _ARM_VALUES = ("else", "then")  # sorted order for deterministic output
 _ITER_SUFFIX = re.compile(r"(_iter\d+)+$")
@@ -270,27 +268,30 @@ class _PlanView:
         branch_ids = {branch.id for branch in self._branches}
         self._node_ids = [sid for sid in report["plan"]["all_step_ids"] if sid not in branch_ids]
 
-    def __iter__(self):
-        return iter([_NodeView(step_id) for step_id in self._node_ids] + self._branches)
+    def __iter__(self) -> Iterator[CompiledStep]:
+        nodes: list[CompiledStep] = [
+            _NodeView(step_id) for step_id in self._node_ids
+        ]
+        nodes.extend(self._branches)
+        return iter(nodes)
 
 
-class _NodeView:
+class _NodeView(CompiledStep):
     """CompiledStep stand-in carrying only id/source_step_id/type."""
 
     def __init__(self, step_id: str) -> None:
-        self.id = step_id
+        super().__init__(id=step_id)
         self.source_step_id = _ITER_SUFFIX.sub("", step_id)
-        self.type = None
-        self.then_ids: list[str] = []
-        self.else_ids: list[str] = []
 
 
-class _BranchView:
+class _BranchView(CompiledStep):
     """CompiledStep stand-in for a BRANCH node rebuilt from a report entry."""
 
     def __init__(self, branch_id: str, entry: Mapping[str, Any]) -> None:
-        self.id = branch_id
-        self.source_step_id = branch_id
-        self.type = StepType.BRANCH
-        self.then_ids = list(entry["then_ids"])
-        self.else_ids = list(entry["else_ids"])
+        super().__init__(
+            id=branch_id,
+            type=StepType.BRANCH,
+            then_ids=list(entry["then_ids"]),
+            else_ids=list(entry["else_ids"]),
+            source_step_id=branch_id,
+        )

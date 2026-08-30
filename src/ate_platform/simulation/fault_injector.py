@@ -27,7 +27,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from simpleeval import SimpleEval  # type: ignore[import-untyped]  # 第三方库无类型存根
+from simpleeval import SimpleEval
 
 # 四层注入点（§7.7.1）
 LAYER_NETWORK = "network"

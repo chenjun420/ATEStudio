@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Protocol, runtime_checkable
 
 import structlog
@@ -44,6 +44,7 @@ import structlog
 from ate_platform.offline.cache_store import (
     KIND_SEQUENCE,
     KIND_TOPOLOGY,
+    EntryStatus,
     OfflineCacheError,
     OfflineCacheStore,
 )
@@ -155,8 +156,9 @@ class Reconciler:
         cache: T18 ACK 门控缓存（序列/工装拓扑）。
         scripts: T19 脚本磁盘缓存。
         locks: T26 版本锁管理器。
-        uploader: 传输缝（Protocol 或任意同形回调对象）；亦可在测试中直接
-            赋值 :attr:`_uploader` 为单个 ``Callable[[UploadRecord], bool]``。
+        uploader: 传输缝（:class:`ReconcileUploader` 完整协议对象，或任意
+            同形对象；测试中亦可赋值 :attr:`upload_record_fn` 为单个
+            ``Callable[[UploadRecord], bool]`` 回调，仅覆盖 Phase 1 上传缝）。
         clock: 可注入时钟（测试用）；生产省略即取 ``time.time``。
     """
 
@@ -174,7 +176,11 @@ class Reconciler:
         self._cache = cache
         self._scripts = scripts
         self._locks = locks
-        self._uploader: ReconcileUploader | Callable[[UploadRecord], bool] = uploader
+        # 两个传输角色显式分离：完整协议缝（Phase 2/3 的 resolve_version /
+        # report_script 必须存在）与 Phase 1 可选的裸回调覆盖。测试可直接赋值
+        # ``rec._uploader`` 为同形最小对象或注入 ``upload_record_fn``。
+        self._uploader: ReconcileUploader = uploader
+        self.upload_record_fn: Callable[[UploadRecord], bool] | None = None
         self._clock: Callable[[], float] = time.time if clock is None else clock
         self.last_report: ReconcileReport | None = None
 
@@ -260,11 +266,11 @@ class Reconciler:
         )
 
     def _call_uploader(self, record: UploadRecord) -> bool:
-        """支持完整 Protocol 对象或裸 ``Callable[[UploadRecord], bool]`` 缝。"""
-        uploader = self._uploader
-        if callable(uploader) and not hasattr(uploader, "upload_record"):
-            return uploader(record)
-        return uploader.upload_record(record)  # type: ignore[union-attr]
+        """Phase 1 上传缝：可选裸回调覆盖优先，否则走完整协议的 ``upload_record``。"""
+        upload_fn = self.upload_record_fn
+        if upload_fn is not None:
+            return upload_fn(record)
+        return self._uploader.upload_record(record)
 
     # ------------------------------------------------------------------
     # Phase 2 — 未上报缓存版本对账（confirmed → ACK；conflict → 新版本化）
@@ -331,7 +337,7 @@ class Reconciler:
             quarantine=quarantine,
         )
 
-    def _apply_conflict_new_version(self, status, new_version: str | None) -> bool:
+    def _apply_conflict_new_version(self, status: EntryStatus, new_version: str | None) -> bool:
         """冲突 → 以服务器指定的新版本号重新落库并直接 ACK。
 
         经公开 API 操作：``get_usable(require_acked=False)`` 读回本地载荷
@@ -408,19 +414,33 @@ class Reconciler:
     # 不可变报告推进助手
     # ------------------------------------------------------------------
     @staticmethod
-    def _advance(report: ReconcileReport, **updates) -> ReconcileReport:
-        """以 updates 生成推进后的报告副本（frozen dataclass 的演进方式）。"""
-        base = {
-            "started_at": report.started_at,
-            "finished_at": report.finished_at,
-            "uploaded": report.uploaded,
-            "acked": report.acked,
-            "confirmed_entries": report.confirmed_entries,
-            "conflicts_resolved": report.conflicts_resolved,
-            "quarantined": report.quarantined,
-            "locks_released": report.locks_released,
-            "ok": report.ok,
-            "quarantine": list(report.quarantine),
-        }
-        base.update(updates)
-        return ReconcileReport(**base)
+    def _advance(
+        report: ReconcileReport,
+        *,
+        finished_at: float | None = None,
+        uploaded: int | None = None,
+        acked: int | None = None,
+        confirmed_entries: int | None = None,
+        conflicts_resolved: int | None = None,
+        quarantined: int | None = None,
+        locks_released: int | None = None,
+        ok: bool | None = None,
+        quarantine: list[QuarantinedItem] | None = None,
+    ) -> ReconcileReport:
+        """以显式关键字段生成推进后的报告副本（frozen dataclass 的演进方式）；
+
+        未传入（None）的字段保持 ``report`` 现值。注意 ``ok=False`` / 计数 0
+        是有效更新值，故以 ``is not None`` 而非真值判断取舍。
+        """
+        return replace(
+            report,
+            finished_at=report.finished_at if finished_at is None else finished_at,
+            uploaded=report.uploaded if uploaded is None else uploaded,
+            acked=report.acked if acked is None else acked,
+            confirmed_entries=report.confirmed_entries if confirmed_entries is None else confirmed_entries,
+            conflicts_resolved=report.conflicts_resolved if conflicts_resolved is None else conflicts_resolved,
+            quarantined=report.quarantined if quarantined is None else quarantined,
+            locks_released=report.locks_released if locks_released is None else locks_released,
+            ok=report.ok if ok is None else ok,
+            quarantine=report.quarantine if quarantine is None else quarantine,
+        )

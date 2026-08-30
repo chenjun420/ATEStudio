@@ -24,7 +24,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Iterable
 from datetime import UTC, datetime
-from typing import Annotated, Literal
+from typing import Annotated, Literal, TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
@@ -195,9 +195,16 @@ async def get_fixture_topology(
 # ---------------------------------------------------------------------------
 
 
+class _FaultAggEntry(TypedDict):
+    """Per-link heatmap aggregate: event count + latest ISO-8601 timestamp."""
+
+    count: int
+    last_seen: str | None
+
+
 def aggregate_fault_events(
     events: Iterable[object],
-) -> dict[str, dict[str, object]]:
+) -> dict[str, _FaultAggEntry]:
     """Aggregate raw fault-event dicts into per-link ``{count, last_seen}``.
 
     Pure function so the counting/last_seen logic is locked by tests and
@@ -211,7 +218,7 @@ def aggregate_fault_events(
         dict: link_id -> {"count": int, "last_seen": str | None} where
         last_seen is the max detected_at seen for that link.
     """
-    agg: dict[str, dict[str, object]] = {}
+    agg: dict[str, _FaultAggEntry] = {}
     for ev in events or []:
         if not isinstance(ev, dict):
             continue
@@ -219,7 +226,7 @@ def aggregate_fault_events(
         if not link_id or not isinstance(link_id, str):
             continue
         entry = agg.setdefault(link_id, {"count": 0, "last_seen": None})
-        entry["count"] = int(entry["count"]) + 1  # type: ignore[call-overload]
+        entry["count"] += 1
         detected_at = ev.get("detected_at")
         if isinstance(detected_at, str):
             current = entry["last_seen"]

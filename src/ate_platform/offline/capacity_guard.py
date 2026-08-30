@@ -217,7 +217,12 @@ class CapacityGuard:
             )
             for kind, level, value, threshold in checks:
                 key = (kind, level)
-                breached = value is not None and value > threshold
+                if value is None:
+                    # age 检查在目录无有效记录时 value 为 None：无观测值即未越线；
+                    # 若此前闩锁过该 (kind, level)，回落重新武装（purge 后恢复语义）
+                    self._latched.discard(key)
+                    continue
+                breached = value > threshold
                 if breached and key not in self._latched:
                     self._latched.add(key)
                     unit = "bytes" if kind == "size" else "seconds"

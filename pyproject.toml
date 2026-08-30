@@ -41,6 +41,11 @@ dev = [
 openhtf = [
     "openhtf>=0.12.0",
 ]
+# IDE-attached remote debugging of edge test executions (debug_executor).
+# Imported optionally — the platform runs without it, only debug sessions need it.
+debug = [
+    "debugpy>=1.8.0",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -90,7 +95,7 @@ strict = true
 warn_return_any = true
 warn_unused_configs = true
 [[tool.mypy.overrides]]
-module = ["pyvisa", "pyvisa.*", "nats", "nats.*", "aiosqlite", "httpx", "sqlalchemy", "sqlalchemy.*", "asyncpg", "git", "git.*", "grpc", "grpc.*", "google.protobuf", "google.protobuf.*"]
+module = ["pyvisa", "pyvisa.*", "nats", "nats.*", "aiosqlite", "httpx", "sqlalchemy", "sqlalchemy.*", "asyncpg", "git", "git.*", "grpc", "grpc.*", "google.protobuf", "google.protobuf.*", "simpleeval", "simpleeval.*"]
 ignore_missing_imports = true
 
 # Dynamic protobuf message classes (built at runtime via descriptor_pool +

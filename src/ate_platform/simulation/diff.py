@@ -307,7 +307,7 @@ def _diff_measurements(
     for key in sorted(set(meas_a) | set(meas_b)):
         a = meas_a.get(key)
         b = meas_b.get(key)
-        if _num(a) and _num(b):
+        if a is not None and b is not None and _num(a) and _num(b):
             fa, fb = float(a), float(b)
             scale = max(abs(fa), abs(fb))
             if abs(fa - fb) <= tolerance * scale:

@@ -28,8 +28,14 @@ ERR_UNKNOWN_CMD = 0xE5
 ERR_BAD_ADDR = 0xE6
 ERR_REQUEST_MISMATCH = 0xE7
 
-_ALL_ROLES = ("addr", "cmd", "len", "data", "checksum")
 FieldRole = Literal["addr", "cmd", "len", "data", "checksum"]
+
+_ALL_ROLES: tuple[FieldRole, ...] = ("addr", "cmd", "len", "data", "checksum")
+_PREFIX_ROLES: tuple[FieldRole, ...] = ("addr", "cmd", "len")
+
+
+def _default_coverage() -> list[FieldRole]:
+    return ["addr", "cmd", "len", "data"]
 
 
 class ProtocolConfigError(ValueError):
@@ -52,7 +58,7 @@ class ChecksumSpec(_FrozenModel):
     """校验算法与覆盖范围（按角色名，依 coverage 顺序拼接计算）。"""
 
     algorithm: Literal["sum", "xor"] = "sum"
-    coverage: list[FieldRole] = Field(default_factory=lambda: ["addr", "cmd", "len", "data"], min_length=1)
+    coverage: list[FieldRole] = Field(default_factory=_default_coverage, min_length=1)
 
 
 class FrameSpec(_FrozenModel):
@@ -82,7 +88,7 @@ class FrameSpec(_FrozenModel):
         for spec in self.fields:
             if spec.name != "data" and spec.size < 1:
                 raise ValueError(f"field {spec.name!r} size must be >= 1 (data is dynamic)")
-        positions = {spec.name: i for i, spec in enumerate(self.fields)}
+        positions: dict[FieldRole, int] = {spec.name: i for i, spec in enumerate(self.fields)}
         ck_pos = positions["checksum"]
         late = [role for role in self.checksum.coverage if positions[role] > ck_pos]
         if late:
@@ -198,15 +204,16 @@ class FrameCodec:
         self._fixed_prefix = len(self.head) + sum(f.size for f in spec.fields[:data_index])
         self._ck_size = self._fields["checksum"].size
 
-    def compute_checksum(self, parts: dict[str, bytes]) -> int:
+    def compute_checksum(self, parts: dict[FieldRole, bytes]) -> int:
         blob = b"".join(parts[role] for role in self._spec.checksum.coverage)
         if self._spec.checksum.algorithm == "sum":
             return sum(blob) & 0xFF
         return reduce(xor, blob, 0)
 
     def encode(self, *, addr: int, cmd: int, data: bytes) -> bytes:
-        parts: dict[str, bytes] = {"data": data}
-        for role, value in (("addr", addr), ("cmd", cmd), ("len", len(data))):
+        parts: dict[FieldRole, bytes] = {"data": data}
+        field_values: dict[FieldRole, int] = {"addr": addr, "cmd": cmd, "len": len(data)}
+        for role, value in field_values.items():
             fspec = self._fields[role]
             parts[role] = value.to_bytes(fspec.size, fspec.endian)
         ckspec = self._fields["checksum"]
@@ -224,7 +231,9 @@ class FrameCodec:
                 fatal=True,
                 resync=True,
             )
-        parts = {role: self._slice(prefix, role) for role in ("addr", "cmd", "len")}
+        parts: dict[FieldRole, bytes] = {
+            role: self._slice(prefix, role) for role in _PREFIX_ROLES
+        }
         declared = int.from_bytes(parts["len"], self._fields["len"].endian)
         if declared > self._spec.max_data_len:
             raise MalformedFrameError(
@@ -250,7 +259,7 @@ class FrameCodec:
             data=data,
         )
 
-    def _slice(self, prefix: bytes, role: str) -> bytes:
+    def _slice(self, prefix: bytes, role: FieldRole) -> bytes:
         offset = len(self.head)
         for fspec in self._spec.fields:
             if fspec.name == "data":

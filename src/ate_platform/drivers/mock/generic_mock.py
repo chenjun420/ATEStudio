@@ -153,7 +153,7 @@ class GenericMockTCP:
         server = self._server
         if server is None or not server.sockets:
             raise RuntimeError("server not started")
-        return server.sockets[0].getsockname()[1]
+        return int(server.sockets[0].getsockname()[1])
 
     @property
     def connection_count(self) -> int:

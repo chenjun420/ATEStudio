@@ -17,8 +17,7 @@ import asyncio
 import time
 from typing import Any, cast
 
-# simpleeval 无 py.typed 标记，import 只能按未类型化第三方库处理
-from simpleeval import SimpleEval  # type: ignore[import-untyped]
+from simpleeval import SimpleEval
 
 from ..exceptions import ConditionTimeoutError
 from ..types import Condition, StepStatus

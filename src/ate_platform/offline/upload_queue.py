@@ -28,6 +28,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import structlog
 
@@ -96,7 +97,11 @@ class UploadRecord:
     retained_until: float | None
 
 
-def _row_to_record(row: tuple) -> UploadRecord:
+#: sqlite 返回行（列见 _RECORD_COLUMNS；动态类型值，与 _RECORD_COLUMNS 顺序一一对应）
+_UploadRow = tuple[Any, ...]
+
+
+def _row_to_record(row: _UploadRow) -> UploadRecord:
     return UploadRecord(
         id=row[0],
         station_id=row[1],

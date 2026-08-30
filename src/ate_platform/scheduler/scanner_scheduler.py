@@ -657,7 +657,9 @@ class ScannerScheduler:
                 # Remove from pending_dispatch since it's done
                 scheduler_self._pending_dispatch.discard(step_id)
                 # T2：终态释放 UUT 占用，等待同 UUT 的 pinned 步骤可就绪
-                scheduler_self._release_uut_claim(step_id)
+                # step_id 来自事件载荷（dict[str, Any]）；缺失/非 str 时无占用可释放
+                if isinstance(step_id, str):
+                    scheduler_self._release_uut_claim(step_id)
 
             logger.debug("Step status changed: %s -> %s — evaluating dependents", step_id, new_status)
             # §6.6 状态变更后原子保存快照（崩溃恢复用）
@@ -1234,6 +1236,7 @@ class ScannerScheduler:
             if uut is None or not uut.busy:
                 idle_ids.append(uid)
 
+        missing: set[str]
         if not idle_ids:
             # 全池皆忙：无人能到达，立即按缺员失败处理（不空等超时窗口）
             missing = set(manager.uut_ids)
@@ -1244,7 +1247,7 @@ class ScannerScheduler:
                     for uid in idle_ids
                 )
             )
-            missing: set[str] = set()
+            missing = set()
             for result in results:
                 missing |= result.missing
 

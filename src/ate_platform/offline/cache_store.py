@@ -275,7 +275,8 @@ class OfflineCacheStore:
                     f"{kind}/{entry_id}@{stored_version}: cached but not cloud-ACKed; "
                     "not usable offline (doc §10.5.4.1)"
                 )
-            return payload
+            # payload 列 DDL 为 TEXT NOT NULL，sqlite 行无静态类型，此处显式收口为 str
+            return str(payload)
 
     # ------------------------------------------------------------------
     # 列表 / 删除 / 清理

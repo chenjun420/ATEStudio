@@ -37,7 +37,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
-from sse_starlette.sse import EventSourceResponse, ServerSentEvent  # type: ignore[import-untyped]
+from sse_starlette import EventSourceResponse, ServerSentEvent
 
 from ate_cloud.nats.sse_bridge import SSEBridge
 from ate_platform.offline import (
@@ -356,7 +356,7 @@ async def list_cache_items(
     service: Annotated[OfflineStatusService, Depends(_get_status_service)],
 ) -> CacheItemsResponse:
     """GET /api/v1/offline/cache/items - cached sequence/topology entries."""
-    items = service.cache_items()
+    items = [CacheItemView.model_validate(d) for d in service.cache_items()]
     return CacheItemsResponse(items=items, total=len(items))
 
 
