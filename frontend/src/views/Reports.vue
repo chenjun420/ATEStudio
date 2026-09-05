@@ -293,7 +293,7 @@ onMounted(() => {
                 size="small"
                 :type="atmlExecutionId === row.id ? 'primary' : 'default'"
                 :loading="atmlLoading && atmlExecutionId === row.id"
-                @click="toggleAtmlPreview(row)"
+                @click="toggleAtmlPreview(row as ExecutionListItem)"
                 data-testid="rp-btn-atml"
               >
                 ATML
@@ -302,7 +302,7 @@ onMounted(() => {
                 size="small"
                 type="success"
                 :loading="isDownloadLoading(row.id, 'csv')"
-                @click="handleDownload(row, 'csv')"
+                @click="handleDownload(row as ExecutionListItem, 'csv')"
                 data-testid="rp-btn-csv"
               >
                 CSV
@@ -311,7 +311,7 @@ onMounted(() => {
                 size="small"
                 type="warning"
                 :loading="isDownloadLoading(row.id, 'parquet')"
-                @click="handleDownload(row, 'parquet')"
+                @click="handleDownload(row as ExecutionListItem, 'parquet')"
                 data-testid="rp-btn-parquet"
               >
                 Parquet

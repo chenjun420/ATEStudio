@@ -16,7 +16,7 @@
  * Route: /scripts
  */
 import { Search } from '@element-plus/icons-vue'
-import axios from 'axios'
+import http from '@/api/interceptor'
 import { computed, onMounted, ref } from 'vue'
 import {
   ElButton,
@@ -41,20 +41,11 @@ import {
   fetchScriptVersions,
   updateScriptContent,
   type Script,
-  type ScriptContentResponse,
   type ScriptVersionInfo,
 } from '@/api/scripts'
 import { useAuth } from '@/composables/useAuth'
 
 const { hasScope } = useAuth()
-
-// ─── Local axios instance for AI generate/refine endpoints ──────────────────
-
-const aiApi = axios.create({
-  baseURL: '/api/v1',
-  timeout: 60000,
-  headers: { 'Content-Type': 'application/json' },
-})
 
 interface AIResult {
   code: string
@@ -193,9 +184,9 @@ async function handleDelete(row: Script): Promise<void> {
   } catch {
     return // user cancelled
   }
-  // Delete via local axios (no dedicated API function needed)
+  // Delete via the shared http client (no dedicated API function needed)
   try {
-    await axios.delete(`/api/v1/scripts/${row.id}`)
+    await http.delete(`/scripts/${row.id}`)
     ElMessage.success('脚本已删除')
     await loadScripts()
   } catch {
@@ -227,10 +218,10 @@ async function runGenerate(): Promise<void> {
   }
   generateLoading.value = true
   try {
-    const resp = await aiApi.post<AIResult>('/scripts/generate', {
+    const resp = await http.post<AIResult>('/scripts/generate', {
       spec_text: generateForm.value.spec_text,
       product_type: generateForm.value.product_type,
-    })
+    }, { timeout: 60000 })
     generateResult.value = resp.data
   } catch {
     ElMessage.error('AI生成失败')
@@ -252,7 +243,7 @@ async function saveGeneratedScript(): Promise<void> {
   }
   // Create the script then set its content
   try {
-    const createResp = await axios.post<Script>('/api/v1/scripts', {
+    const createResp = await http.post<Script>('/scripts', {
       name: generateSaveForm.value.name,
       description: `AI generated for ${generateForm.value.product_type || 'unknown'}`,
       version: '1.0.0',
@@ -294,11 +285,11 @@ async function runRefine(): Promise<void> {
   }
   refineLoading.value = true
   try {
-    const resp = await aiApi.post<AIResult>('/scripts/refine', {
+    const resp = await http.post<AIResult>('/scripts/refine', {
       code: refineForm.value.code,
       feedback: refineForm.value.feedback,
       product_type: refineForm.value.product_type,
-    })
+    }, { timeout: 60000 })
     refineResult.value = resp.data
   } catch {
     ElMessage.error('AI优化失败')
@@ -321,7 +312,7 @@ async function submitCreate(): Promise<void> {
     const tags = createForm.value.tags
       ? createForm.value.tags.split(',').map((t) => t.trim()).filter(Boolean)
       : []
-    await axios.post<Script>('/api/v1/scripts', {
+    await http.post<Script>('/scripts', {
       name: createForm.value.name,
       description: createForm.value.description,
       version: createForm.value.version || '1.0.0',
@@ -451,13 +442,13 @@ onMounted(() => {
 
         <ElTableColumn label="操作" width="340" fixed="right" align="center">
           <template #default="{ row }">
-            <ElButton v-if="hasScope('flow:write')" size="small" type="primary" link @click="openEditDialog(row)">
-              编辑内容
+            <ElButton v-if="hasScope('flow:write')" size="small" type="primary" link @click="openEditDialog(row as Script)">
+              编辑脚本
             </ElButton>
-            <ElButton size="small" type="info" link @click="openVersionDialog(row)">
+            <ElButton size="small" type="info" link @click="openVersionDialog(row as Script)">
               版本历史
             </ElButton>
-            <ElButton v-if="hasScope('flow:write')" size="small" type="danger" link @click="handleDelete(row)">
+            <ElButton v-if="hasScope('flow:write')" size="small" type="danger" link @click="handleDelete(row as Script)">
               删除
             </ElButton>
           </template>

@@ -1,7 +1,7 @@
 from enum import Enum
 
 from pydantic import Field
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class DatabaseType(str, Enum):
@@ -11,6 +11,18 @@ class DatabaseType(str, Enum):
 
 
 class Settings(BaseSettings):
+    # Pydantic v2 settings config (replaces the deprecated class-based
+    # ``Config``). Behavior is identical: ATE_CLOUD_ env prefix, .env file
+    # (utf-8), case-insensitive env var matching (pydantic-settings default),
+    # and extra env vars ignored. Fields declaring an explicit
+    # ``validation_alias`` (e.g. OPENAI_API_KEY) keep reading that exact name.
+    model_config = SettingsConfigDict(
+        env_prefix="ATE_CLOUD_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
     app_name: str = "ATE Cloud API"
     debug: bool = False
     nats_url: str = "nats://localhost:4222"
@@ -114,6 +126,26 @@ class Settings(BaseSettings):
         description="Neo4j database password",
     )
 
+    # FalkorDB configuration (no ATE_CLOUD_ prefix).
+    # FalkorDB speaks the Redis RESP protocol (default port 6379); it is the
+    # default GraphService backend. NEO4J_* fields above are retained for
+    # rollback/reference but the lazy graph factories select FalkorDB.
+    falkordb_url: str = Field(
+        default="redis://localhost:6379",
+        validation_alias="FALKORDB_URL",
+        description="FalkorDB/Redis connection URL (RESP, default port 6379)",
+    )
+    falkordb_graph: str = Field(
+        default="fmea",
+        validation_alias="FALKORDB_GRAPH",
+        description="FalkorDB graph name (key) holding the FMEA knowledge graph",
+    )
+    falkordb_password: str = Field(
+        default="",
+        validation_alias="FALKORDB_PASSWORD",
+        description="FalkorDB/Redis password (empty for no auth)",
+    )
+
     # JWT authentication configuration (no ATE_CLOUD_ prefix)
     jwt_secret: str = Field(
         default="",
@@ -144,12 +176,6 @@ class Settings(BaseSettings):
         validation_alias="ATE_AI_DIAGNOSE_AUTO",
         description="Enable automatic push of AI diagnosis results to operator UI via NATS",
     )
-
-    class Config:
-        env_prefix = "ATE_CLOUD_"
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        extra = "ignore"
 
     def get_database_url(self) -> str:
         """Construct database URL based on database_type."""

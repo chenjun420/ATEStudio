@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { ref, inject, computed, watch, onMounted, onUnmounted } from 'vue'
-import type { Graph } from '@antv/x6'
+import type { Graph, Node } from '@antv/x6'
 import { History } from '@antv/x6'
 import type { ShallowRef } from 'vue'
 import { useSerializer } from '@/composables/useSerializer'
 import { useExecutionStatus } from '@/composables/useExecutionStatus'
-import { ElMessage, ElSelect, ElOption, ElButton } from 'element-plus'
+import { ElMessage, ElSelect, ElOption } from 'element-plus'
 import { fetchSequences, createSequence, updateSequence, type Sequence } from '@/api/sequences'
 import { createExecution, abortExecution } from '@/api/executions'
 import { useAuth } from '@/composables/useAuth'
@@ -52,7 +52,7 @@ const autoLayoutEnabled = ref(true)
 const currentRunId = ref('')
 
 // Use execution status composable
-const { stepStatuses, executionStatus, isRunning, progressText, reset: resetExecution } = useExecutionStatus(currentRunId)
+const { executionStatus, isRunning, progressText } = useExecutionStatus(currentRunId)
 
 // Execution loading state (for button spinner)
 const isStartingExecution = ref(false)
@@ -96,7 +96,6 @@ async function loadSequences() {
 }
 
 async function handleNewSequence() {
-  const timestamp = new Date().toISOString().slice(0, 19).replace('T', ' ')
   const defaultSequence = {
     name: `New Sequence ${sequences.value.length + 1}`,
     description: 'A new test sequence',
@@ -194,7 +193,6 @@ async function handleAbort() {
 }
 
 // Watch for execution completion to emit event
-const wasRunning = ref(false)
 watch(isRunning, (running, prev) => {
   if (prev && !running && currentRunId.value) {
     // Execution just ended
@@ -349,15 +347,22 @@ function handleFitContent() {
 
 // === Layout Operations ===
 
+/** Currently selected X6 nodes (X6 exposes getSelectedCells, not getSelectedNodes). */
+function getSelectedGraphNodes(): Node[] {
+  const g = graphInstance?.value
+  if (!g) return []
+  return g.getSelectedCells().filter((cell): cell is Node => cell.isNode())
+}
+
 function handleAlignLeft() {
   if (!graphInstance?.value) return
-  
-  const nodes = graphInstance.value.getSelectedNodes()
+
+  const nodes = getSelectedGraphNodes()
   if (nodes.length < 2) {
     ElMessage.info('Select at least 2 nodes to align')
     return
   }
-  
+
   const minX = Math.min(...nodes.map(n => n.getPosition().x))
   nodes.forEach(node => {
     node.setPosition(minX, node.getPosition().y)
@@ -366,13 +371,13 @@ function handleAlignLeft() {
 
 function handleAlignCenter() {
   if (!graphInstance?.value) return
-  
-  const nodes = graphInstance.value.getSelectedNodes()
+
+  const nodes = getSelectedGraphNodes()
   if (nodes.length < 2) {
     ElMessage.info('Select at least 2 nodes to align')
     return
   }
-  
+
   const avgX = nodes.reduce((sum, n) => sum + n.getPosition().x, 0) / nodes.length
   nodes.forEach(node => {
     node.setPosition(avgX, node.getPosition().y)
@@ -381,13 +386,13 @@ function handleAlignCenter() {
 
 function handleAlignTop() {
   if (!graphInstance?.value) return
-  
-  const nodes = graphInstance.value.getSelectedNodes()
+
+  const nodes = getSelectedGraphNodes()
   if (nodes.length < 2) {
     ElMessage.info('Select at least 2 nodes to align')
     return
   }
-  
+
   const minY = Math.min(...nodes.map(n => n.getPosition().y))
   nodes.forEach(node => {
     node.setPosition(node.getPosition().x, minY)
@@ -650,7 +655,7 @@ onUnmounted(() => {
       <!-- Run button -->
       <button
         class="tw-px-3 tw-py-1.5 tw-text-sm tw-font-medium tw-text-white tw-bg-green-600 tw-rounded-md hover:tw-bg-green-700 tw-transition-colors tw-flex tw-items-center tw-gap-1.5 disabled:tw-opacity-50 disabled:tw-cursor-not-allowed"
-        :disabled="isRunning || isStartingExecution || !currentSequence?.value?.id"
+        :disabled="isRunning || isStartingExecution || !currentSequence?.id"
         @click="handleRun"
       >
         <svg v-if="!isStartingExecution" class="tw-w-4 tw-h-4" fill="currentColor" viewBox="0 0 24 24">

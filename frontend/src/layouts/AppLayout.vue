@@ -14,6 +14,7 @@ import {
   ArrowLeft,
   User,
   ArrowDown,
+  Share,
 } from '@element-plus/icons-vue'
 
 const router = useRouter()
@@ -47,6 +48,7 @@ const menuIconMap: Record<string, typeof Monitor> = {
   Tools: Setting,
   Switch: Setting,
   Aim: Setting,
+  Share: Share,
 }
 
 // Determine which app is active based on the current route path
@@ -89,9 +91,34 @@ onMounted(async () => {
 })
 
 // Flatten menus for el-menu (handle top-level only, no nesting for now)
+//
+// Frontend-defined menu entries are merged in for routes the backend app-seed
+// has not yet learned (knowledge graph / traceability, tasks 25/26). They are
+// deduped against the DB menus by `route_path`, so once the backend seed ships
+// the same route_path the DB entry (with its server-managed name/permissions)
+// wins automatically — no frontend cleanup needed.
+const staticMenus = computed(() => [
+  {
+    code: 'knowledge-graph',
+    name: '知识图谱',
+    route_path: '/system/knowledge-graph',
+    icon: 'Share',
+  },
+  {
+    code: 'traceability',
+    name: '需求追溯矩阵',
+    route_path: '/system/traceability',
+    icon: 'Link',
+  },
+])
+
 const flatMenus = computed(() => {
-  if (!currentAppMenus.value) return []
-  return currentAppMenus.value.menus
+  const dbMenus = currentAppMenus.value ? currentAppMenus.value.menus : []
+  // Static entries only surface under the system app (their routes live there).
+  if (activeApp.value?.code !== 'system') return dbMenus
+  const known = new Set(dbMenus.map((m) => m.route_path))
+  const extras = staticMenus.value.filter((m) => !known.has(m.route_path))
+  return [...dbMenus, ...extras]
 })
 
 // Active menu based on current route

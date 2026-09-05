@@ -420,33 +420,53 @@ class TestHealthMonitorLifecycle:
         await monitor.stop()
 
     @pytest.mark.asyncio
-    async def test_poll_loop_persists_records(self, test_engine: Any) -> None:
-        """The background poll loop persists heartbeat records."""
-        ts = datetime.now(UTC) - timedelta(seconds=5)
-        entries = {
-            "workers.worker-001": FakeKVEntry(
-                key="workers.worker-001",
-                value=json.dumps(_worker_metadata()).encode(),
-                created=ts,
-            ),
-        }
-        kv = _make_mock_kv(entries=entries)
-        nc = _make_mock_nc(kv=kv)
-        session_factory = _make_session_factory(test_engine)
-        monitor = HealthMonitorService(nc, session_factory, poll_interval=0.05)
+    async def test_poll_loop_persists_records(self, tmp_path: Any) -> None:
+        """The background poll loop persists heartbeat records.
 
-        await monitor.start()
-        # Wait for at least one poll cycle
-        await asyncio.sleep(0.15)
-        await monitor.stop()
+        Uses a temp-FILE SQLite engine so the background poll task — which
+        opens its OWN session/connection (and, under a full-suite run, may run
+        on a reused/changed connection) — reliably sees the committed schema.
+        An in-memory ``StaticPool`` engine shares one connection and works in
+        isolation, but under the full suite that single connection can be
+        recycled by the time the poll task commits, surfacing as
+        "no such table: worker_heartbeats". A file DB has no such coupling.
+        """
+        from sqlalchemy.ext.asyncio import create_async_engine
 
-        async with session_factory() as session:
-            result = await session.execute(select(WorkerHeartbeat))
-            records = result.scalars().all()
+        from ate_cloud.models import Base
 
-        assert len(records) >= 1
-        assert records[0].worker_id == "worker-001"
-        assert records[0].status == "online"
+        db_path = tmp_path / "health_poll.db"
+        engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        session_factory = _make_session_factory(engine)
+        try:
+            ts = datetime.now(UTC) - timedelta(seconds=5)
+            entries = {
+                "workers.worker-001": FakeKVEntry(
+                    key="workers.worker-001",
+                    value=json.dumps(_worker_metadata()).encode(),
+                    created=ts,
+                ),
+            }
+            kv = _make_mock_kv(entries=entries)
+            nc = _make_mock_nc(kv=kv)
+            monitor = HealthMonitorService(nc, session_factory, poll_interval=0.05)
+
+            await monitor.start()
+            # Wait for at least one poll cycle
+            await asyncio.sleep(0.15)
+            await monitor.stop()
+
+            async with session_factory() as session:
+                result = await session.execute(select(WorkerHeartbeat))
+                records = result.scalars().all()
+
+            assert len(records) >= 1
+            assert records[0].worker_id == "worker-001"
+            assert records[0].status == "online"
+        finally:
+            await engine.dispose()
 
 
 # ---------------------------------------------------------------------------

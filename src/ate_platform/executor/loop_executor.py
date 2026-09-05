@@ -36,10 +36,11 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import asdict
 from typing import Any
 
-from shared.dsl import ExecutionMode, LoopType, YamlLoop, YamlStep
+from shared.dsl import ExecutionMode, LoopType, StepType, YamlLoop, YamlStep
 from shared.events import LoopIterationCompletedData, LoopIterationStartedData
 from shared.types import ExecuteTask
 
@@ -49,6 +50,11 @@ from ..types import LoopIterationResult, LoopResult, StepResult, StepStatus
 from .step_executor import StepExecutor
 
 logger = logging.getLogger(__name__)
+
+#: 断点暂停钩子：命中断点（条件为真/缺省）时被 await。交互式运行期注入的
+#: 实现把它接到 ScannerScheduler 的 pause/resume 门控（T39/T40）；无人值守
+#: 时保持 None —— 断点为空操作直通，绝不挂起（任务 18）。
+BreakpointHook = Callable[[YamlStep], Awaitable[None]]
 
 
 class LoopExecutor:
@@ -68,6 +74,7 @@ class LoopExecutor:
         executor: StepExecutor,
         event_bus: EventBus | None = None,
         variable_space: VariableSpace | None = None,
+        breakpoint_hook: BreakpointHook | None = None,
     ) -> None:
         """Initialize the loop executor.
 
@@ -75,10 +82,16 @@ class LoopExecutor:
             executor: StepExecutor for running step scripts (Protocol)
             event_bus: Optional EventBus for publishing loop events
             variable_space: Optional VariableSpace for iteration variables
+            breakpoint_hook: Optional async hook invoked when a BREAKPOINT
+                step is hit and its condition is true/absent. Interactive
+                runs wire it to the ScannerScheduler pause/resume gate;
+                headless/unattended runs leave it None so breakpoints are
+                no-op pass-throughs (never hang).
         """
         self._executor = executor
         self._event_bus = event_bus
         self._variable_space = variable_space or VariableSpace(event_bus=event_bus)
+        self._breakpoint_hook = breakpoint_hook
 
     async def execute_loop(
         self,
@@ -452,6 +465,12 @@ class LoopExecutor:
 
         for step in loop.steps:
             if isinstance(step, YamlStep):
+                if step.type is StepType.BREAKPOINT:
+                    # 断点步骤不是被测脚本：求值可选条件，命中则经暂停门控
+                    # 挂起（无门控时直通），不产生脚本执行结果。
+                    await self._handle_breakpoint(step)
+                    continue
+
                 step_result = await self._executor.execute_async(
                     script_path=step.script,
                     params=step.params,
@@ -477,6 +496,7 @@ class LoopExecutor:
                 # Nested loop — execute recursively
                 nested_executor = LoopExecutor(
                     self._executor, self._event_bus, self._variable_space,
+                    breakpoint_hook=self._breakpoint_hook,
                 )
                 nested_result = await nested_executor.execute_loop(step, run_id=run_id)
 
@@ -528,6 +548,10 @@ class LoopExecutor:
         tasks: list[ExecuteTask] = []
         for step in loop.steps:
             if isinstance(step, YamlStep):
+                if step.type is StepType.BREAKPOINT:
+                    # Parallel batch path cannot suspend; breakpoints are
+                    # pass-through there (serial path honors the pause gate).
+                    continue
                 tasks.append(ExecuteTask(
                     script_path=step.script,
                     params=step.params,
@@ -571,6 +595,29 @@ class LoopExecutor:
             iteration_results=iteration_results,
             status=aggregate_status,
         )
+
+    async def _handle_breakpoint(self, step: YamlStep) -> None:
+        """Handle a BREAKPOINT step: conditional suspend via the pause gate.
+
+        - Optional ``condition`` evaluated over the VariableSpace (mirrors
+          WHILE-loop condition evaluation); false → no suspend.
+        - Unconditional or condition true: await the injected breakpoint hook
+          (wired to ScannerScheduler pause/resume in interactive runs). No hook
+          (headless/unattended) → no-op pass-through, never hangs.
+        """
+        condition = step.condition
+        if condition and not self._evaluate_condition_expr(condition):
+            logger.info("Breakpoint '%s' condition false; not suspended", step.id)
+            return
+
+        if self._breakpoint_hook is not None:
+            logger.info("Breakpoint '%s' hit; suspending via pause gate", step.id)
+            await self._breakpoint_hook(step)
+        else:
+            logger.info(
+                "Breakpoint '%s' hit; no interactive pause gate (headless) — pass-through",
+                step.id,
+            )
 
     def _evaluate_condition_expr(self, expression: str) -> bool:
         """Evaluate a boolean condition expression.

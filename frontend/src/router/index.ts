@@ -190,6 +190,24 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/CalibrationPanel.vue'),
         meta: { title: '校准管理' },
       },
+      {
+        path: 'fmea',
+        name: 'FmeaManagement',
+        component: () => import('@/views/FmeaManagement.vue'),
+        meta: { title: 'FMEA管理' },
+      },
+      {
+        path: 'knowledge-graph',
+        name: 'KnowledgeGraph',
+        component: () => import('@/views/KnowledgeGraph.vue'),
+        meta: { title: '知识图谱' },
+      },
+      {
+        path: 'traceability',
+        name: 'TraceabilityMatrix',
+        component: () => import('@/views/TraceabilityMatrix.vue'),
+        meta: { title: '需求追溯矩阵' },
+      },
     ],
   },
 

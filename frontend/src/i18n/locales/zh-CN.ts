@@ -84,6 +84,7 @@ export default {
     settings: '系统设置',
     productChangeover: '产品切换',
     calibration: '校准管理',
+    fmea: 'FMEA管理',
     userManagement: '用户管理',
   },
   settings: {

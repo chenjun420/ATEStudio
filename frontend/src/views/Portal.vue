@@ -10,12 +10,11 @@ import {
   DataLine,
   Setting,
   ArrowRight,
-  Loading,
 } from '@element-plus/icons-vue'
 
 const router = useRouter()
 const { t } = useI18n()
-const { apps, loading, loadApps, ensureSeed } = useApps()
+const { apps, loading, ensureSeed } = useApps()
 const { user, isAuthenticated, init } = useAuth()
 
 // Icon mapping — maps backend icon names to Element Plus icon components

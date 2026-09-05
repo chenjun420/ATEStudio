@@ -61,6 +61,12 @@ class StepOutcome:
 #: 测试可注入失败执行器以验证 retry/on_failure。
 ScriptExecutor = Callable[[YamlStep], Awaitable[bool]]
 
+#: 断点暂停钩子：命中断点（且条件为真/缺省）时被 await。交互式边缘运行期
+#: 注入的实现负责暂停 ScannerScheduler（``scheduler.pause()``）并阻塞至
+#: 操作员 ``resume()``（复用既有 pause/resume 门控，T39/T40）；无人值守/
+#: 无头仿真保持 None —— 断点为空操作直通，绝不挂起（任务 18）。
+BreakpointHook = Callable[[YamlStep], Awaitable[None]]
+
 
 class V32PlanDispatcher:
     """DSL v3.2 计划执行器。
@@ -82,12 +88,14 @@ class V32PlanDispatcher:
         uut_timeout: float = 60.0,
         script_executor: ScriptExecutor | None = None,
         missing_uuts: set[str] | None = None,
+        breakpoint_hook: BreakpointHook | None = None,
     ) -> None:
         self._plan = plan
         self._simulation = simulation
         self._uut_timeout = uut_timeout
         self._script_executor = script_executor
         self._missing_uuts = missing_uuts or set()
+        self._breakpoint_hook = breakpoint_hook
         self.fixtures: dict[str, FixtureController] = {}
         self.uut_manager = UUTManager(count=plan.uut_count)
         self._aborted = False
@@ -189,6 +197,8 @@ class V32PlanDispatcher:
             outcome = await self._dispatch_fixture(step)
         elif step_type is StepType.BARRIER:
             outcome = await self._dispatch_barrier(step)
+        elif step_type is StepType.BREAKPOINT:
+            outcome = await self._dispatch_breakpoint(step)
         elif step_type is StepType.LOOP:
             outcome = StepOutcome(
                 step_id=step.id,
@@ -337,6 +347,71 @@ class V32PlanDispatcher:
             status="PASS",
             detail=f"Barrier '{barrier_name}' reached by all UUTs",
         )
+
+    async def _dispatch_breakpoint(self, step: YamlStep) -> StepOutcome:
+        """分派 breakpoint 步骤（任务 18）。
+
+        语义：
+        - 可选 ``condition``（沙箱布尔表达式）。为假则断点不暂停，按
+          PASS 直通继续。
+        - 无条件或条件为真：若注入了 :attr:`_breakpoint_hook`（交互式
+          边缘运行期把它接到 ScannerScheduler 的 pause/resume 门控，
+          T39/T40），await 该钩子——钩子内部暂停调度并阻塞直到操作员
+          resume；钩子缺失（无头/无人值守仿真）则断点为空操作直通，
+          绝不挂起。
+        - 断点步骤本身恒为 PASS（它不是被测动作）。
+        """
+        condition = step.condition
+        if condition:
+            try:
+                hit = self._eval_breakpoint_condition(condition)
+            except Exception as e:  # noqa: BLE001 — 条件求值失败保守判定为命中
+                logger.warning(
+                    "Breakpoint '%s' condition failed to evaluate (%s); treating as hit",
+                    step.id,
+                    e,
+                )
+                hit = True
+            if not hit:
+                return StepOutcome(
+                    step_id=step.id,
+                    step_type="breakpoint",
+                    status="PASS",
+                    detail=f"Breakpoint '{step.id}' condition false; not suspended",
+                )
+
+        if self._breakpoint_hook is not None:
+            await self._breakpoint_hook(step)
+            detail = f"Breakpoint '{step.id}' hit; suspended then resumed"
+        else:
+            detail = (
+                f"Breakpoint '{step.id}' hit; no interactive pause gate "
+                f"(headless/unattended) — pass-through"
+            )
+
+        return StepOutcome(
+            step_id=step.id,
+            step_type="breakpoint",
+            status="PASS",
+            detail=detail,
+        )
+
+    @staticmethod
+    def _eval_breakpoint_condition(expression: str) -> bool:
+        """沙箱求值断点条件（镜像 loop_executor._evaluate_condition_expr）。
+
+        v32 仿真器不持有 VariableSpace；条件在此处仅支持字面布尔/比较
+        常量表达式（True/False/true/false）。依赖运行期变量的复杂条件由
+        生产路径（loop_executor / 调度器）经 VariableSpace.resolve 求值。
+        """
+        allowed_names: dict[str, object] = {
+            "True": True,
+            "False": False,
+            "true": True,
+            "false": False,
+        }
+        result = eval(expression, {"__builtins__": {}}, allowed_names)  # noqa: S307
+        return bool(result)
 
     async def _dispatch_script(self, step: YamlStep) -> StepOutcome:
         """分派 action/script 步骤，honor retry 与 on_failure。

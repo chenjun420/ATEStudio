@@ -21,7 +21,7 @@
  * sequence or modifying step definitions. It only submits operator responses.
  */
 import { ref, watch, type Ref, type ComputedRef } from 'vue'
-import axios from 'axios'
+import http from '@/api/interceptor'
 import { useOperatorGuidance } from './useOperatorGuidance'
 import type {
   OperatorStep,
@@ -138,18 +138,35 @@ export interface UseOperatorInteractionReturn {
 
 // ─── Checkpoint API client ───────────────────────────────────────────────────
 
-const checkpointApi = axios.create({
-  baseURL: '/api/v1',
-  timeout: 10000,
-  headers: { 'Content-Type': 'application/json' },
-})
+/**
+ * Extract the HTTP status from an error thrown by the shared http client.
+ * Returns undefined for non-HTTP errors (mirrors axios error shape without
+ * importing axios directly).
+ */
+function httpStatus(err: unknown): number | undefined {
+  return (err as { response?: { status?: number } } | null)?.response?.status
+}
+
+/**
+ * Structural type guard mirroring `axios.isAxiosError` for errors rejected by
+ * the shared http client. Axios marks its errors with `isAxiosError === true`
+ * (this also covers network errors that have no `response`, where the status
+ * reads back as 'unknown'). Avoids importing axios directly.
+ */
+function isHttpError(err: unknown): boolean {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    (err as { isAxiosError?: unknown }).isAxiosError === true
+  )
+}
 
 /**
  * Fetch the pending checkpoint for a run.
  * GET /api/v1/executions/{runId}/checkpoint/pending
  */
 async function fetchPendingCheckpoint(runId: string): Promise<PendingCheckpoint> {
-  const resp = await checkpointApi.get<PendingCheckpoint>(
+  const resp = await http.get<PendingCheckpoint>(
     `/executions/${runId}/checkpoint/pending`,
   )
   return resp.data
@@ -165,7 +182,7 @@ async function submitCheckpointResponse(
   response: string,
   reason?: string,
 ): Promise<CheckpointSubmitResponse> {
-  const resp = await checkpointApi.post<CheckpointSubmitResponse>(
+  const resp = await http.post<CheckpointSubmitResponse>(
     `/executions/${runId}/checkpoint`,
     {
       step_id: stepId,
@@ -279,8 +296,8 @@ export function useOperatorInteraction(
         pendingCheckpoint.value = null
         scannerInput.value = ''
       } catch (err: unknown) {
-        if (axios.isAxiosError(err)) {
-          actionError.value = `Scan submit failed (HTTP ${err.response?.status ?? 'unknown'})`
+        if (isHttpError(err)) {
+          actionError.value = `Scan submit failed (HTTP ${httpStatus(err) ?? 'unknown'})`
         } else {
           actionError.value = err instanceof Error ? err.message : 'Scan submit failed'
         }
@@ -377,8 +394,8 @@ export function useOperatorInteraction(
         }
       }
     } catch (err: unknown) {
-      if (axios.isAxiosError(err)) {
-        actionError.value = `Action "${action}" failed (HTTP ${err.response?.status ?? 'unknown'})`
+      if (isHttpError(err)) {
+        actionError.value = `Action "${action}" failed (HTTP ${httpStatus(err) ?? 'unknown'})`
       } else {
         actionError.value = err instanceof Error ? err.message : `Action "${action}" failed`
       }

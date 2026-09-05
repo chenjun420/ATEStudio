@@ -15,11 +15,18 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import yaml
-from syrupy.extensions.json import JSONSnapshotExtension
 
-from ate_platform.dsl.parser import YamlParser
-from shared.dsl import YamlLoop, YamlPlan, YamlStep
+# Syrupy is an optional snapshot-testing dependency. When it is not installed
+# (e.g. a minimal venv without the snapshot extra) skip this module cleanly at
+# collection instead of raising ModuleNotFoundError (which would ERROR the
+# whole suite). The tests collect and run normally wherever syrupy is present.
+pytest.importorskip("syrupy")
+
+import yaml  # noqa: E402
+from syrupy.extensions.json import JSONSnapshotExtension  # noqa: E402
+
+from ate_platform.dsl.parser import YamlParser  # noqa: E402
+from shared.dsl import YamlLoop, YamlPlan, YamlStep  # noqa: E402
 
 pytestmark = pytest.mark.snapshot
 

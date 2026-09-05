@@ -60,6 +60,10 @@ class TestTraceService:
     per request or reuse a single instance - there is no internal state.
     """
 
+    # Not a pytest test class — the name starts with "Test" so tell pytest not
+    # to collect it (suppresses PytestCollectionWarning "cannot collect").
+    __test__ = False
+
     def __init__(self, db: AsyncSession) -> None:
         """Initialize the service with a database session.
 

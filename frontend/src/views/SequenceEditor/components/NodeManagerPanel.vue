@@ -1,17 +1,18 @@
 <script setup lang="ts">
-import { inject, ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { inject, ref, shallowRef, computed, onMounted, onUnmounted, watch } from 'vue'
 import type { Ref, ShallowRef } from 'vue'
 import type { Graph, Node } from '@antv/x6'
 import { RecycleScroller } from 'vue-virtual-scroller'
 import { ElInput, ElEmpty, ElButton, ElDropdown, ElDropdownMenu, ElDropdownItem, ElDialog, ElIcon } from 'element-plus'
 import { Search, Plus, Folder, FolderOpened, MoreFilled, Edit, Delete } from '@element-plus/icons-vue'
 import { v4 as uuidv4 } from 'uuid'
-import { isScriptStepData, isVariableData, type ScriptStepData, type VariableData, type NodeGroup } from '@/models/nodes/types'
+import { isScriptStepData, isVariableData, type NodeGroup } from '@/models/nodes/types'
 import 'vue-virtual-scroller/dist/vue-virtual-scroller.css'
 
-// Get selected node ID and graph instance from parent
-const selectedNodeId = inject<Ref<string | null>>('selectedNodeId')
-const graphInstance = inject<ShallowRef<Graph | null>>('graphInstance')
+// Get selected node ID and graph instance from parent.
+// Default refs keep the panel defined when mounted standalone.
+const selectedNodeId = inject<Ref<string | null>>('selectedNodeId', ref<string | null>(null))
+const graphInstance = inject<ShallowRef<Graph | null>>('graphInstance', shallowRef<Graph | null>(null))
 
 // ============================================
 // Node List Management
@@ -207,6 +208,13 @@ function editGroup(group: NodeGroup) {
   showGroupDialog.value = true
 }
 
+// Update the color of the group currently being edited (color picker in dialog)
+function setEditingGroupColor(color: string) {
+  if (editingGroup.value) {
+    editingGroup.value = { ...editingGroup.value, color }
+  }
+}
+
 // Save group (create or update)
 function saveGroup() {
   if (!newGroupName.value.trim()) return
@@ -280,11 +288,6 @@ function updateNodeGroupId(nodeId: string, groupId: string | undefined) {
   }
 
   updateNodeList()
-}
-
-// Get group by ID
-function getGroupById(groupId: string): NodeGroup | undefined {
-  return groups.value.find(g => g.id === groupId)
 }
 
 // Check if node is being dragged over a group
@@ -554,7 +557,7 @@ onUnmounted(() => {
               :key="color"
               class="color-option"
               :style="{ backgroundColor: color }"
-              @click="editingGroup = editingGroup ? { ...editingGroup, color } : null"
+              @click="setEditingGroupColor(color)"
             />
           </div>
         </div>

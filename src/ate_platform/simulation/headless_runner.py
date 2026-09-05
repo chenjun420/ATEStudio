@@ -7,7 +7,7 @@
     python -m ate_platform.simulation.headless_runner plan.yaml \\
         [--tier dry_run|full|v32] [--junit|--junit-output out.xml] \\
         [--fault-config rules.yaml] [--uut-count N] [--profile sim.yaml] \\
-        [--html-report out.html]
+        [--html-report out.html] [--allow-breakpoints]
 
 §7.10 CI 契约新增旗标（T15）：
 - --uut-count N：覆盖计划级 uut_count（驱动 v32 UUTManager 规模）
@@ -28,15 +28,17 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import html
 import sys
 import time
 import xml.etree.ElementTree as ET
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
 from ate_platform.dsl.parser import YamlParser
-from shared.dsl import YamlPlan
+from shared.dsl import YamlPlan, YamlStep
 
 from .coverage import SimulationCoverage
 from .dry_run_scheduler import DryRunScheduler
@@ -63,6 +65,23 @@ def _escape_xml(text: str) -> str:
 def _safe_text(value: Any) -> str:
     """Convert a value to a safe text string."""
     return _escape_xml("" if value is None else str(value))
+
+
+async def _interactive_breakpoint_hook(step: YamlStep) -> None:
+    """Attended-mode breakpoint gate (``--allow-breakpoints``).
+
+    Blocks the v32 dispatcher at a hit ``type: breakpoint`` step until the
+    operator presses Enter to resume, mirroring the edge pause/resume gate
+    (T39/T40) on a CLI surface. Only armed when explicitly opted in; the
+    default unattended run passes breakpoints straight through.
+    """
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(
+        None,
+        lambda: input(  # noqa: T201 - interactive prompt is the resume gate
+            f"[headless] breakpoint '{step.id}' hit — press Enter to resume... "
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -432,6 +451,7 @@ def run_headless(
     uut_count: int | None = None,
     profile_path: Path | None = None,
     html_report_path: Path | None = None,
+    allow_breakpoints: bool = False,
 ) -> int:
     """Run a headless simulation and optionally write JUnit/HTML reports.
 
@@ -445,6 +465,10 @@ def run_headless(
         profile_path: Optional simulation profile YAML (§7.10). Validated
             for every tier; the noise section feeds the full tier.
         html_report_path: Optional self-contained HTML summary output path.
+        allow_breakpoints: Opt-in attended mode. When False (default), DSL
+            ``type: breakpoint`` steps are no-op pass-throughs and the run
+            never suspends. When True, an interactive pause gate is armed so
+            a hit breakpoint blocks until the operator resumes.
 
     Returns:
         Process exit code (0 = all steps passed, 1 = any step failed).
@@ -497,11 +521,19 @@ def run_headless(
     if tier == "v32":
         # v3.2 语义仿真：按 step.type 分发到 FixtureController / UUTManager，
         # 端到端验证 barrier 同步 + 夹具动作 + retry/on_failure（§6.5.4）。
-        import asyncio
-
         from ate_platform.executor.v32_dispatcher import V32PlanDispatcher
 
-        dispatcher = V32PlanDispatcher(plan, simulation=True)
+        # 断点策略（任务 21）：默认无人值守 —— breakpoint_hook=None，DSL
+        # ``type: breakpoint`` 步骤为空操作直通，运行绝不挂起。仅当显式
+        # ``--allow-breakpoints``（attended/交互）时武装暂停门。
+        breakpoint_hook: Callable[[YamlStep], Awaitable[None]] | None = (
+            _interactive_breakpoint_hook if allow_breakpoints else None
+        )
+        dispatcher = V32PlanDispatcher(
+            plan,
+            simulation=True,
+            breakpoint_hook=breakpoint_hook,
+        )
         outcomes = asyncio.run(dispatcher.run())
         passed = sum(1 for o in outcomes if o.status == "PASS")
         failed = sum(1 for o in outcomes if o.status in ("FAIL", "BLOCKED"))
@@ -662,6 +694,17 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="fault-injection rules YAML (list or {rules: [...]})",
     )
+    parser.add_argument(
+        "--allow-breakpoints",
+        action="store_true",
+        default=False,
+        help=(
+            "attended/interactive mode: arm breakpoint suspension so a DSL "
+            "'type: breakpoint' step pauses until resumed. By DEFAULT (flag "
+            "absent) breakpoints are no-op pass-throughs and the run completes "
+            "without suspending — safe for unattended/CI runs."
+        ),
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -673,6 +716,7 @@ def main(argv: list[str] | None = None) -> int:
             uut_count=args.uut_count,
             profile_path=args.profile,
             html_report_path=args.html_report,
+            allow_breakpoints=args.allow_breakpoints,
         )
     except FileNotFoundError as exc:
         print(f"[headless] error: {exc}", file=sys.stderr)

@@ -29,6 +29,7 @@ import {
   matrixCellName,
   matrixSize,
   resizeMatrixContacts,
+  type RelayLike,
 } from '@/utils/relayContacts'
 
 // ─── Props / Emits ───────────────────────────────────────────────────────────
@@ -88,7 +89,7 @@ function gridStyle(): Record<string, string> {
 
 // ─── 动作（全部经纯函数变换后整体上抛）─────────────────────────────────────
 
-function emitChange(next: Array<Record<string, unknown>>) {
+function emitChange(next: RelayLike[]) {
   lastError.value = ''
   pendingContact.value = ''
   emit('relays-change', next as unknown as Relay[])

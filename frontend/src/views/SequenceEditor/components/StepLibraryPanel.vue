@@ -324,7 +324,7 @@ function getCategoryIcon(categoryName: string): string {
     </div>
     
     <!-- Error state -->
-    <ElEmpty v-else-if="error" :description="error" />
+    <ElEmpty v-else-if="scriptsError" :description="scriptsError" />
     
     <!-- Empty state -->
     <ElEmpty v-else-if="scriptCategories.length === 0" description="No scripts found">

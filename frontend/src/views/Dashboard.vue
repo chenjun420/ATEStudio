@@ -15,7 +15,7 @@
  * Route: /dashboard
  */
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { ElCard, ElRow, ElCol, ElStatistic, ElSkeleton, ElAlert, ElEmpty, ElTag, ElButton, ElTable, ElTableColumn } from 'element-plus'
+import { ElCard, ElRow, ElCol, ElStatistic, ElSkeleton, ElAlert, ElEmpty, ElTag, ElButton } from 'element-plus'
 import { useDashboard } from '@/composables/useDashboard'
 import SPCCharts from '@/components/SPCCharts.vue'
 import { getSPCStatistics, getSPCChart, getSPCAlerts, type SPCStatistics, type SPCChart, type SPCAlert } from '@/api/spc'
@@ -75,7 +75,6 @@ const barCanvas = ref<HTMLCanvasElement | null>(null)
 const activeWorkerCount = computed(() => summary.value?.active_workers ?? 0)
 const todayExecutionTotal = computed(() => summary.value?.total_executions_today ?? 0)
 const passRate = computed(() => summary.value?.pass_rate ?? 0)
-const totalFaults = computed(() => summary.value?.total_faults ?? 0)
 
 const stationList = computed(() => stations.value?.stations ?? [])
 const faultTrend = computed(() => faults.value?.trend ?? [])

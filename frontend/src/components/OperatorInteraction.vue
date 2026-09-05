@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
-import { ElDialog, ElInput, ElButton, ElIcon, ElTag } from 'element-plus'
-import axios from 'axios'
+import { ElDialog, ElInput, ElButton, ElTag } from 'element-plus'
+import http from '@/api/interceptor'
 
 /**
  * OperatorInteraction - modal dialog for operator checkpoints.
@@ -67,7 +67,6 @@ const emit = defineEmits<{
 // --- State ---------------------------------------------------------------
 
 const visible = ref(false)
-const loading = ref(false)
 const submitting = ref(false)
 const inputValue = ref('')
 const failReason = ref('')
@@ -133,8 +132,8 @@ function isValidInput(): boolean {
 async function pollPending(): Promise<void> {
   if (!props.runId || visible.value || submitting.value) return
   try {
-    const res = await axios.get<PendingCheckpointResponse>(
-      `/api/v1/executions/${props.runId}/checkpoint/pending`,
+    const res = await http.get<PendingCheckpointResponse>(
+      `/executions/${props.runId}/checkpoint/pending`,
     )
     if (res.data.pending && res.data.checkpoint && res.data.step_id) {
       pending.value = res.data
@@ -221,7 +220,7 @@ async function doSubmit(response: string, reason: string | null): Promise<void> 
   submitting.value = true
   errorMessage.value = ''
   try {
-    await axios.post(`/api/v1/executions/${props.runId}/checkpoint`, {
+    await http.post(`/executions/${props.runId}/checkpoint`, {
       step_id: stepId.value,
       response,
       reason,

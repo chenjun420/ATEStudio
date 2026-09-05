@@ -381,8 +381,8 @@ onMounted(() => {
         <ElTableColumn prop="notes" label="Notes" min-width="160" show-overflow-tooltip />
         <ElTableColumn label="Actions" width="160" fixed="right">
           <template #default="{ row }">
-            <ElButton v-if="hasScope('system:write')" size="small" link @click="openEditDialog(row)">Edit</ElButton>
-            <ElButton v-if="hasScope('system:write')" size="small" link type="danger" @click="handleDelete(row)">Delete</ElButton>
+            <ElButton v-if="hasScope('system:write')" size="small" link @click="openEditDialog(row as CalibrationRecord)">Edit</ElButton>
+            <ElButton v-if="hasScope('system:write')" size="small" link type="danger" @click="handleDelete(row as CalibrationRecord)">Delete</ElButton>
           </template>
         </ElTableColumn>
       </ElTable>

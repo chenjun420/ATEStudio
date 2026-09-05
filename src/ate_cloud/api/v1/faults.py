@@ -1,7 +1,7 @@
 """Faults API endpoints — FMEA knowledge graph seeding and diagnosis.
 
 Provides:
-- ``POST /api/v1/faults/seed`` — seed the Neo4j FMEA knowledge graph with
+- ``POST /api/v1/faults/seed`` — seed the FalkorDB FMEA knowledge graph with
   100+ electronics fault records.
 - ``POST /api/v1/faults/evolve`` — evolve the knowledge graph from new
   diagnosis feedback (synonym detection + entity creation + edge degradation).
@@ -18,47 +18,50 @@ from pydantic import BaseModel
 
 from ate_cloud.config import settings
 from ate_cloud.services.embedding_service import EmbeddingService
+from ate_cloud.services.falkordb_graph_service import (
+    CircuitBreakerOpenError,
+    FalkorDBGraphService,
+)
+from ate_cloud.services.graph_service import GraphService
 from ate_cloud.services.kg_evolution import KGEvolution
 from ate_cloud.services.kg_seeder import KGSeeder
-from ate_cloud.services.neo4j_graph_service import (
-    CircuitBreakerOpenError,
-    Neo4jGraphService,
-)
 
 router = APIRouter(prefix="/faults", tags=["faults"])
 
 
-def _get_graph_service(request: Request) -> Neo4jGraphService:
-    """Dependency: lazily create or retrieve Neo4jGraphService from app state.
+def _get_graph_service(request: Request) -> GraphService:
+    """Dependency: lazily create or retrieve the GraphService from app state.
 
-    The service is constructed from ``settings.neo4j_url`` and
-    ``settings.neo4j_password`` on first access and cached in
-    ``app.state`` for reuse. This avoids modifying ``main.py`` (no
-    lifespan wiring) while still pooling the Neo4j driver.
+    FalkorDB (Redis RESP protocol, default port 6379) is the current
+    GraphService implementation; alternative backends slot in behind the
+    same protocol. The service is constructed from ``settings.falkordb_url``
+    on first access and cached on ``app.state.graph_service`` for reuse —
+    construction is lazy/cheap (the client opens no socket until first
+    graph command), so the app boots fine without a reachable graph.
 
     Raises:
-        HTTPException: 503 if Neo4jGraphService construction fails
-            (invalid credentials, unreachable server).
+        HTTPException: 503 if the graph service construction fails.
     """
-    service: Neo4jGraphService | None = getattr(request.app.state, "neo4j_graph_service", None)
+    service: GraphService | None = getattr(request.app.state, "graph_service", None)
     if service is not None:
         return service
     try:
-        service = Neo4jGraphService(
-            url=settings.neo4j_url,
-            password=settings.neo4j_password,
+        service = FalkorDBGraphService(
+            url=settings.falkordb_url,
+            graph_name=settings.falkordb_graph,
+            password=settings.falkordb_password or None,
         )
     except (ValueError, Exception) as e:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Neo4j graph service unavailable: {e}",
+            detail=f"Graph service unavailable: {e}",
         ) from e
-    request.app.state.neo4j_graph_service = service
+    request.app.state.graph_service = service
     return service
 
 
 def _get_kg_seeder(
-    graph_service: Annotated[Neo4jGraphService, Depends(_get_graph_service)],
+    graph_service: Annotated[GraphService, Depends(_get_graph_service)],
 ) -> KGSeeder:
     """Dependency: create a KGSeeder bound to the graph service."""
     return KGSeeder(graph_service)
@@ -82,6 +85,7 @@ def _get_embedding_service(request: Request) -> EmbeddingService:
         service = EmbeddingService(
             api_key=settings.openai_api_key,
             model=settings.openai_embedding_model,
+            dimensions=settings.embedding_dimensions,
         )
     except (ValueError, Exception) as e:
         raise HTTPException(
@@ -93,11 +97,23 @@ def _get_embedding_service(request: Request) -> EmbeddingService:
 
 
 def _get_kg_evolution(
-    graph_service: Annotated[Neo4jGraphService, Depends(_get_graph_service)],
+    request: Request,
+    graph_service: Annotated[GraphService, Depends(_get_graph_service)],
     embedding_service: Annotated[EmbeddingService, Depends(_get_embedding_service)],
 ) -> KGEvolution:
-    """Dependency: create a KGEvolution bound to graph and embedding services."""
-    return KGEvolution(graph_service, embedding_service)
+    """Dependency: create a KGEvolution bound to graph and embedding services.
+
+    The Qdrant client (set on ``app.state`` by the app lifespan) is passed
+    when available for synonym nearest-neighbor; when Qdrant is not
+    initialized (``app.state.qdrant_client`` absent), ``None`` is passed and
+    KGEvolution degrades dedup gracefully while graph evolution proceeds.
+    """
+    qdrant_client: object | None = getattr(request.app.state, "qdrant_client", None)
+    return KGEvolution(
+        graph_service,
+        embedding_service,
+        qdrant_client=qdrant_client,
+    )
 
 
 @router.post("/seed")
@@ -107,8 +123,8 @@ async def seed_fault_graph(
     """POST /api/v1/faults/seed — seed the FMEA knowledge graph.
 
     Creates uniqueness constraints for all FMEA node types, then MERGEs
-    100+ electronics fault records (nodes + relationships) into the Neo4j
-    graph. Idempotent — re-running updates existing nodes without
+    100+ electronics fault records (nodes + relationships) into the
+    FalkorDB graph. Idempotent — re-running updates existing nodes without
     creating duplicates.
 
     Returns:
@@ -116,16 +132,16 @@ async def seed_fault_graph(
         counts in the graph after seeding).
 
     Raises:
-        HTTPException: 503 if the Neo4j circuit breaker is OPEN or
+        HTTPException: 503 if the graph circuit breaker is OPEN or
             the graph service is unavailable.
-        HTTPException: 502 if a Neo4j operation fails during seeding.
+        HTTPException: 502 if a graph operation fails during seeding.
     """
     try:
         result = await seeder.seed_all()
     except CircuitBreakerOpenError as e:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Neo4j circuit breaker open: {e}",
+            detail=f"Graph circuit breaker open: {e}",
         ) from e
     except Exception as e:
         raise HTTPException(
@@ -167,16 +183,16 @@ async def evolve_fault_graph(
         and ``edges_created``.
 
     Raises:
-        HTTPException: 503 if the Neo4j circuit breaker is OPEN or
+        HTTPException: 503 if the graph circuit breaker is OPEN or
             the embedding/graph service is unavailable.
-        HTTPException: 502 if a Neo4j operation fails during evolution.
+        HTTPException: 502 if a graph operation fails during evolution.
     """
     try:
         result = await evolution.process_feedback(request.model_dump())
     except CircuitBreakerOpenError as e:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Neo4j circuit breaker open: {e}",
+            detail=f"Graph circuit breaker open: {e}",
         ) from e
     except Exception as e:
         raise HTTPException(

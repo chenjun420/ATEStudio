@@ -68,7 +68,7 @@
 | **完全开源** | 零商业授权费用，全 Python 技术栈 |
 | **轻量化部署** | 最小生产部署约 9 核 / 16GB（不含端侧工位） |
 | **生产稳定性** | 超时熔断、进程隔离、离线容灾、断点续传、崩溃恢复 |
-| **AI 赋能** | DeepAgents + Qdrant RAG 实现需求识别、脚本生成与序列辅助生成；Qdrant + Neo4j 知识图谱实现 AI 故障诊断 |
+| **AI 赋能** | DeepAgents + Qdrant RAG 实现需求识别、脚本生成与序列辅助生成；Qdrant + FalkorDB 知识图谱实现 AI 故障诊断 |
 | **可视化编排** | AntV X6 3.x + Vue 3 + TypeScript，以依赖连线代替流程块 |
 
 ### 1.3 范围界定
@@ -222,7 +222,7 @@ flowchart TB
         S1[FastAPI 应用<br/>REST + SSE]:::cloud
         S2[(PostgreSQL 16)]:::cloud
         S3[(Qdrant 向量库)]:::cloud
-        S4[(Neo4j 知识图谱)]:::cloud
+        S4[(FalkorDB 知识图谱)]:::cloud
         S5[脚本库 / 序列库 / 工装配置库]:::cloud
     end
 
@@ -338,7 +338,7 @@ ATEStudio/
 | 数据库迁移 | Alembic | 1.13+ | MIT |
 | 关系数据库 | PostgreSQL（生产）/ SQLite（默认开发） | 16.x+ | PostgreSQL License |
 | 向量数据库 | Qdrant | v1.18.0+ | Apache 2.0 |
-| 图数据库 | Neo4j（Community） | 5.x | GPL-3.0 |
+| 图数据库 | FalkorDB（Redis 8 + falkordb.so，RESP/6379） | 4.x | SSPL v1 |
 | 消息中间件 | NATS Server（含 JetStream） | v2.12.0+ | Apache 2.0 |
 | AI 框架 | DeepAgents | 最新稳定版 | MIT |
 | 大语言模型 | DeepSeek / Qwen（开源） | — | 开源 |
@@ -3089,7 +3089,7 @@ flowchart LR
 
     SVC1 & SVC2 & SVC4 --> PG[(PostgreSQL/SQLite)]:::store
     SVC3 --> QD[(Qdrant)]:::store
-    SVC3 --> N4[(Neo4j FMEA)]:::store
+    SVC3 --> N4[(FalkorDB FMEA)]:::store
     SSE --> NT[NATS JetStream]:::store
 ```
 
@@ -3143,7 +3143,7 @@ POST   /api/v1/executions/{id}/fault-injection  # 运行时注入故障
 |------|------|------|
 | 脚本生成/润色 | DeepAgents + LLM（DeepSeek/Qwen 开源模型） | POST /scripts/generate、/refine |
 | 序列辅助生成 | RAG 检索相似依赖模式 | 依赖驱动模型下 AI 只需预测步骤间依赖，DSL 生成更简单可靠 |
-| 故障诊断 | Qdrant 向量检索 + Neo4j FMEA 知识图谱混合检索 | 100+ 种子故障记录，知识图谱持续演化 |
+| 故障诊断 | Qdrant 向量检索 + FalkorDB FMEA 知识图谱混合检索 | 100+ 种子故障记录，知识图谱持续演化 |
 | Embedding | BAAI/bge-m3 等，维度 1536（可配置） | — |
 
 Qdrant 选型依据见 4.4.4（p95 延迟优 39%，QPS 优 291%）。
@@ -3233,7 +3233,7 @@ flowchart TB
     subgraph CLOUD[云侧 · 192.168.5.24（物理部署 / 或 Docker Compose cloud profile）]
         N1[NATS JetStream<br/>4222 / 8222]:::cloud
         Q1[Qdrant<br/>6333]:::cloud
-        N4[Neo4j<br/>7474 / 7687]:::cloud
+        N4[FalkorDB 图数据库<br/>Redis RESP 6379 / Browser 3000]:::cloud
         API1[ate-cloud FastAPI<br/>8000]:::cloud
         PG1[(PostgreSQL 16<br/>生产)]:::cloud
         NG[Nginx<br/>前端静态资源]:::cloud
@@ -3266,8 +3266,8 @@ flowchart TB
 
 | 模式 | 状态 | 说明 |
 |------|------|------|
-| Docker Compose（dev profile） | ✅ 可用 | 全栈本地开发：nats + qdrant + neo4j + ate-cloud + ate-platform |
-| Docker Compose（cloud profile） | ✅ 可用 | 云侧部署：nats + qdrant + neo4j + ate-cloud |
+| Docker Compose（dev profile） | ✅ 可用 | 全栈本地开发：nats + qdrant + falkordb + ate-cloud + ate-platform |
+| Docker Compose（cloud profile） | ✅ 可用 | 云侧部署：nats + qdrant + falkordb + ate-cloud |
 | Podman Compose | ✅ 兼容 | 与 Docker Compose 命令兼容，已在 192.168.5.24 验证 |
 | 物理部署（Bare Metal） | ✅ 生产 | 云侧服务器 systemd/nohup 直跑，无容器开销 |
 | 虚拟设备仿真 | ✅ 可用 | `ATE_SIMULATION_MODE=true` 或 API 触发 |
@@ -3304,7 +3304,7 @@ flowchart TB
 | `ATE_CLOUD_QDRANT_URL` | `http://localhost:6333` | Qdrant 连接 |
 | `ATE_SIMULATION_MODE` | `false` | 启用仿真驱动（Docker dev 默认 true） |
 | `ATE_DEV_MODE` | `false` | 调试特性 |
-| `NEO4J_URL` / `NEO4J_PASSWORD` | `bolt://localhost:7687` / `atestudio` | Neo4j 连接 |
+| `FALKORDB_URL` / `FALKORDB_GRAPH` / `FALKORDB_PASSWORD` | `redis://localhost:6379` / `fmea` / _(空)_ | FalkorDB 图数据库连接（Redis RESP，端口 6379；密码留空为无认证） |
 | `JWT_SECRET` / `JWT_ALGORITHM` / `JWT_EXPIRE_MINUTES` | — / RS256 / 30 | 认证 |
 | `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL` | — | LLM（OpenAI/DashScope Qwen） |
 | `OPENAI_EMBEDDING_MODEL` / `ATE_CLOUD_EMBEDDING_DIMENSIONS` | text-embedding-3-small / 1536 | Embedding |
@@ -3373,7 +3373,7 @@ flowchart TB
 | 断点续跑/崩溃恢复 | ✅ | 本地状态快照（6.6 节） |
 | 操作员面板本地视图 | ✅ | 端侧本地服务提供 |
 | 新序列/脚本下发 | ❌ | 需联网下发并 ACK 后才可离线使用 |
-| AI 诊断/脚本生成 | ❌ | 依赖云侧 Qdrant/Neo4j/LLM |
+| AI 诊断/脚本生成 | ❌ | 依赖云侧 Qdrant/FalkorDB/LLM |
 | SPC/追溯/看板查询 | ❌（部分） | 端侧可查本地记录；全量历史需联网 |
 | 跨工位工作流 | ❌ | 依赖云侧编排 |
 
@@ -3539,7 +3539,7 @@ AI 生成代码时严格按以下顺序，先底座后上层；每个模块都�
 
 ### 13.4 超出原设计的增强功能（已实现）
 
-三层仿真系统、MockDriverFactory、AI 故障诊断（Qdrant + Neo4j FMEA）、SPC、校准管理、可追溯性、多工位工作流、录制/回放、操作员检查点、故障预测、换型优化（CP-SAT）、人力资源分配、自适应跳过、ATML 导出、gRPC 驱动接口、OpenTelemetry 可观测性、NATS Leafnode 边缘自治、Alembic 迁移、CI/CD 流水线。
+三层仿真系统、MockDriverFactory、AI 故障诊断（Qdrant + FalkorDB FMEA）、SPC、校准管理、可追溯性、多工位工作流、录制/回放、操作员检查点、故障预测、换型优化（CP-SAT）、人力资源分配、自适应跳过、ATML 导出、gRPC 驱动接口、OpenTelemetry 可观测性、NATS Leafnode 边缘自治、Alembic 迁移、CI/CD 流水线。
 
 ### 13.5 待完成项
 

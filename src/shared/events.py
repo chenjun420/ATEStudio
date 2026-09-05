@@ -54,6 +54,7 @@ class EventType(Enum):
         EXECUTION_STARTED: Plan execution has started (EVENT)
         EXECUTION_COMPLETED: Plan execution has completed (EVENT)
         EXECUTION_PAUSED: Plan execution has been paused (EVENT)
+        BREAKPOINT_HIT: An edge-evaluated breakpoint suspended the run (EVENT)
         DEADLOCK_DETECTED: A deadlock was detected (ALARM)
         WORKER_EXHAUSTED: A worker pool is exhausted (ALARM)
         HEARTBEAT_LOST: The scan loop heartbeat was lost (ALARM)
@@ -70,6 +71,7 @@ class EventType(Enum):
     EXECUTION_STARTED = "EXECUTION_STARTED"
     EXECUTION_COMPLETED = "EXECUTION_COMPLETED"
     EXECUTION_PAUSED = "EXECUTION_PAUSED"
+    BREAKPOINT_HIT = "BREAKPOINT_HIT"
     RESOURCE_RELEASED = "RESOURCE_RELEASED"
     TIMER_EXPIRED = "TIMER_EXPIRED"
     EXTERNAL_CMD = "EXTERNAL_CMD"
@@ -111,6 +113,7 @@ EVENT_TYPE_CATEGORIES: dict[EventType, EventCategory] = {
     EventType.EXECUTION_STARTED: EventCategory.EVENT,
     EventType.EXECUTION_COMPLETED: EventCategory.EVENT,
     EventType.EXECUTION_PAUSED: EventCategory.EVENT,
+    EventType.BREAKPOINT_HIT: EventCategory.EVENT,
     EventType.RESOURCE_RELEASED: EventCategory.EVENT,
     EventType.TIMER_EXPIRED: EventCategory.EVENT,
     EventType.EXTERNAL_CMD: EventCategory.EVENT,
@@ -412,6 +415,31 @@ class ExecutionPausedData:
     reason: str | None = None
 
 
+@dataclass
+class BreakpointHitData:
+    """Data for BREAKPOINT_HIT events (edge-evaluated breakpoints, T39/T40).
+
+    Emitted by the edge scheduler when an armed breakpoint suspends a run,
+    carrying the variable/step snapshot captured at the hit for inspection.
+
+    Attributes:
+        breakpoint_id: Identifier of the breakpoint that fired.
+        kind: Breakpoint kind (step / instrument_call / variable_change /
+            condition).
+        target: Match target (step id / resource.method / scope.key / "*").
+        step_id: The step about to dispatch when the breakpoint fired.
+        variables: Snapshot of the current variable space for inspection.
+        run_id: Execution run identifier.
+    """
+
+    breakpoint_id: str
+    kind: str
+    target: str
+    step_id: str
+    variables: dict[str, Any] = field(default_factory=dict)
+    run_id: str | None = None
+
+
 # ---------------------------------------------------------------------------
 # Alarm data classes — severity + recoverable fields
 # ---------------------------------------------------------------------------
@@ -595,6 +623,7 @@ EVENT_DATA_CLASSES: dict[EventType, type] = {
     EventType.EXECUTION_STARTED: ExecutionStartedData,
     EventType.EXECUTION_COMPLETED: ExecutionCompletedData,
     EventType.EXECUTION_PAUSED: ExecutionPausedData,
+    EventType.BREAKPOINT_HIT: BreakpointHitData,
     # MEASUREMENT category
     EventType.MEASUREMENT_RECORDED: MeasurementRecordedData,
     EventType.VARIABLE_CHANGED: MeasurementRecordedData,

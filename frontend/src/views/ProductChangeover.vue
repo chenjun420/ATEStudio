@@ -27,8 +27,6 @@ import {
   ElFormItem,
   ElInput,
   ElInputNumber,
-  ElSelect,
-  ElOption,
   ElMessage,
   ElEmpty,
   ElSkeleton,
@@ -36,19 +34,12 @@ import {
   ElTimeline,
   ElTimelineItem,
   ElStatistic,
-  ElIcon,
 } from 'element-plus'
 import { Refresh, Plus, Delete, Aim as OptimizeIcon } from '@element-plus/icons-vue'
-import axios from 'axios'
+import http from '@/api/interceptor'
 import { useAuth } from '@/composables/useAuth'
 
 const { hasScope } = useAuth()
-
-const api = axios.create({
-  baseURL: '/api/v1',
-  timeout: 30000,
-  headers: { 'Content-Type': 'application/json' },
-})
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -158,7 +149,7 @@ async function fetchMatrix() {
   loading.value = true
   error.value = null
   try {
-    const response = await api.get<MatrixResponse>('/changeover/matrix')
+    const response = await http.get<MatrixResponse>('/changeover/matrix', { timeout: 30000 })
     products.value = response.data.products
     entries.value = response.data.entries
   } catch (e: unknown) {
@@ -200,10 +191,10 @@ async function saveCost() {
   }
   dialogLoading.value = true
   try {
-    await api.put(`/changeover/${form.value.product_a}/${form.value.product_b}`, {
+    await http.put(`/changeover/${form.value.product_a}/${form.value.product_b}`, {
       cost: form.value.cost,
       time_minutes: form.value.time_minutes,
-    })
+    }, { timeout: 30000 })
     ElMessage.success('Changeover cost saved')
     dialogVisible.value = false
     await fetchMatrix()
@@ -217,7 +208,7 @@ async function saveCost() {
 
 async function deleteCost(fromP: string, toP: string) {
   try {
-    await api.delete(`/changeover/${fromP}/${toP}`)
+    await http.delete(`/changeover/${fromP}/${toP}`, { timeout: 30000 })
     ElMessage.success(`Removed ${fromP}→${toP}`)
     await fetchMatrix()
   } catch (e: unknown) {
@@ -246,7 +237,7 @@ async function runOptimize() {
     if (startProduct.value.trim()) {
       payload.start_product = startProduct.value.trim()
     }
-    const response = await api.post<OptimizeResult>('/changeover/optimize', payload)
+    const response = await http.post<OptimizeResult>('/changeover/optimize', payload, { timeout: 30000 })
     optimizeResult.value = response.data
     ElMessage.success('Optimization complete')
   } catch (e: unknown) {
@@ -257,14 +248,6 @@ async function runOptimize() {
     optimizeLoading.value = false
   }
 }
-
-/** Parse optimize products for preview */
-const optimizeProductList = computed(() => {
-  return optimizeProducts.value
-    .split(/[,\s\n]+/)
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0)
-})
 
 // ─── Lifecycle ───────────────────────────────────────────────────────────────
 

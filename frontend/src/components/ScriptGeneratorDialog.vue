@@ -2,7 +2,7 @@
 import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus'
 import MonacoEditor from '@/components/MonacoEditor.vue'
-import axios from 'axios'
+import http from '@/api/interceptor'
 
 // Props
 interface Props {
@@ -26,13 +26,6 @@ const emit = defineEmits<{
 const dialogVisible = computed({
   get: () => props.visible,
   set: (value) => emit('update:visible', value),
-})
-
-// API client
-const api = axios.create({
-  baseURL: '/api/v1',
-  timeout: 60000,
-  headers: { 'Content-Type': 'application/json' },
 })
 
 // ─── State ───────────────────────────────────────────────────────────────
@@ -83,10 +76,10 @@ async function handleGenerate(): Promise<void> {
   isGenerating.value = true
   chatMessages.value = []
   try {
-    const response = await api.post<ScriptGenerateResponse>('/scripts/generate', {
+    const response = await http.post<ScriptGenerateResponse>('/scripts/generate', {
       spec_text: specText.value,
       product_type: productTypeInput.value,
-    })
+    }, { timeout: 60000 })
     const data = response.data
     generatedCode.value = data.code
     confidence.value = data.confidence
@@ -144,11 +137,11 @@ async function handleRefine(): Promise<void> {
   })
 
   try {
-    const response = await api.post<ScriptGenerateResponse>('/scripts/refine', {
+    const response = await http.post<ScriptGenerateResponse>('/scripts/refine', {
       code: generatedCode.value,
       feedback: feedback,
       product_type: productTypeInput.value,
-    })
+    }, { timeout: 60000 })
     const data = response.data
     generatedCode.value = data.code
     confidence.value = data.confidence
@@ -247,7 +240,7 @@ onBeforeUnmount(() => {
           :loading="isGenerating"
           @click="handleGenerate"
         >
-          {{ isGenerating ? 'Generating...'' : 'Generate Script' }}
+          {{ isGenerating ? 'Generating...' : 'Generate Script' }}
         </el-button>
       </div>
       <el-input

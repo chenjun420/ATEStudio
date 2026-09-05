@@ -5,19 +5,23 @@
  * Child nodes are extracted from the parent loop container node in the main graph.
  * Changes are synced back to the main graph when exiting the sub-graph view.
  */
-import { onMounted, onUnmounted, ref, inject, watch } from 'vue'
-import { Graph, History, Keyboard, Clipboard, Snapline } from '@antv/x6'
+import { onMounted, onUnmounted, ref, inject, watch, computed } from 'vue'
+import { Graph, History, Keyboard, Clipboard, Snapline, Selection } from '@antv/x6'
 import type { Ref, ShallowRef } from 'vue'
-import type { Node, Edge } from '@antv/x6'
+import type { Node } from '@antv/x6'
 import type { ScriptStepData, NodeData } from '@/models/nodes/types'
 import { isScriptStepData, isLoopContainerData } from '@/models/nodes/types'
 import { validateConnection } from '@/composables/useDependencyCheck'
+import { useNodeBreakpoints, NODE_BREAKPOINTS_KEY } from '@/composables/useNodeBreakpoints'
+import { setBreakpointBadge, setBreakpointHitHalo } from '../breakpointMarkers'
 import { ElMessage } from 'element-plus'
 
 // Props
 interface Props {
   /** The loop container node from the main graph whose children we display */
   containerNodeId: string
+  /** Active execution run ID (enables breakpoint toggles; empty = not running) */
+  runId?: string
 }
 
 const props = defineProps<Props>()
@@ -31,6 +35,20 @@ const emit = defineEmits<{
 const selectedNodeId = inject<Ref<string | null>>('selectedNodeId')
 const graphInstance = inject<ShallowRef<Graph | null>>('graphInstance')
 
+// Shared step-breakpoint composable (task 23) — injected from index.vue;
+// fallback local instance keeps the component mountable standalone/tests.
+const breakpoints =
+  inject<ReturnType<typeof useNodeBreakpoints> | null>(NODE_BREAKPOINTS_KEY, null) ??
+  useNodeBreakpoints((m, t) =>
+    t === 'success'
+      ? ElMessage.success(m)
+      : t === 'warning'
+        ? ElMessage.warning(m)
+        : t === 'error'
+          ? ElMessage.error(m)
+          : ElMessage.info(m),
+  )
+
 // Local state
 const containerRef = ref<HTMLDivElement | null>(null)
 let subGraph: Graph | null = null
@@ -39,6 +57,58 @@ let subGraph: Graph | null = null
 const quickEditVisible = ref(false)
 const quickEditNode = ref<Node | null>(null)
 const quickEditPosition = ref<{ x: number; y: number } | null>(null)
+
+// ============================================
+// Step Breakpoint Integration (task 23)
+// ============================================
+
+const breakpointMenuVisible = ref(false)
+const breakpointMenuPosition = ref({ x: 0, y: 0 })
+const breakpointMenuData = ref<ScriptStepData | null>(null)
+
+/** Paint breakpoint badge + hit halo for every script-step node in the sub-graph. */
+function refreshBreakpointMarkers() {
+  if (!subGraph) return
+  for (const node of subGraph.getNodes()) {
+    const data = node.getData() as NodeData
+    if (!isScriptStepData(data)) continue
+    setBreakpointBadge(node, breakpoints.isArmed(data.stepId))
+    setBreakpointHitHalo(node, breakpoints.hitStep.value === data.stepId)
+  }
+}
+
+// Repaint when the shared armed set / hit target changes.
+watch(
+  () => ({ ...breakpoints.armedSteps, hit: breakpoints.hitStep.value }),
+  () => refreshBreakpointMarkers(),
+  { deep: true },
+)
+
+function showBreakpointMenu(e: MenuTriggerEvent, data: ScriptStepData) {
+  breakpointMenuPosition.value = { x: e.clientX, y: e.clientY }
+  breakpointMenuData.value = data
+  breakpointMenuVisible.value = true
+}
+
+function closeBreakpointMenu() {
+  breakpointMenuVisible.value = false
+  breakpointMenuData.value = null
+}
+
+const breakpointMenuHasBreakpoint = computed(() =>
+  breakpointMenuData.value ? breakpoints.isArmed(breakpointMenuData.value.stepId) : false,
+)
+
+async function handleToggleBreakpoint() {
+  const data = breakpointMenuData.value
+  closeBreakpointMenu()
+  if (!data || !props.runId) {
+    ElMessage.warning('请先启动一次仿真运行（断点属于运行），再为步骤设置断点')
+    return
+  }
+  await breakpoints.toggleStep(props.runId, data.stepId)
+  refreshBreakpointMarkers()
+}
 
 // Script drop data interface (same as GraphContainer)
 interface ScriptDropData {
@@ -53,6 +123,16 @@ interface ScriptDropData {
     default?: unknown
     required?: boolean
   }>
+}
+
+/**
+ * Minimal shape of the X6 context-menu DOM event we rely on (clientX/Y +
+ * preventDefault). Avoids coupling to @antv/x6 DOM event types.
+ */
+interface MenuTriggerEvent {
+  clientX: number
+  clientY: number
+  preventDefault: () => void
 }
 
 /**
@@ -107,10 +187,11 @@ function populateSubGraph() {
       label = `${data.loopType} loop\n${data.loopId.slice(0, 8)}`
     }
 
-    // Build ports
-    const ports: { items: Array<{ id: string; group: string }> } = { items: [] }
+    // Build ports (X6 PortMetadata.group is optional)
+    const ports: { items: Array<{ id: string; group?: string }> } = { items: [] }
     const existingPorts = childNode.getPorts()
     for (const port of existingPorts) {
+      if (!port.id) continue
       ports.items.push({ id: port.id, group: port.group })
     }
 
@@ -182,16 +263,17 @@ function syncBackToMainGraph() {
     if (mainNode && mainNode.isNode()) {
       const mainNodeAsNode = mainNode as Node
       // Update position
-      mainNodeAsNode.position(subNode.position())
+      const subPos = subNode.position()
+      mainNodeAsNode.position(subPos.x, subPos.y)
       // Update data
       const subData = subNode.getData()
       if (subData) {
         mainNodeAsNode.setData(subData, { silent: true })
       }
-      // Update label
-      const label = subNode.getAttrByPath('text/text') || subNode.getLabels()
+      // Update label via X6 attrs (X6 Node has no getLabels/setLabel)
+      const label = subNode.getAttrByPath<string>('label/text')
       if (typeof label === 'string') {
-        mainNodeAsNode.setLabel(label)
+        mainNodeAsNode.attr('label/text', label)
       }
     }
   }
@@ -219,9 +301,10 @@ function syncBackToMainGraph() {
         label = `${data.loopType} loop\n${data.loopId.slice(0, 8)}`
       }
 
-      const ports: { items: Array<{ id: string; group: string }> } = { items: [] }
+      const ports: { items: Array<{ id: string; group?: string }> } = { items: [] }
       const existingPorts = subNode.getPorts()
       for (const port of existingPorts) {
+        if (!port.id) continue
         ports.items.push({ id: port.id, group: port.group })
       }
 
@@ -305,17 +388,13 @@ onMounted(() => {
       enabled: true,
       modifiers: [],
     },
-    zooming: {
+    // X6 3.x configures wheel-zoom via the `mousewheel` option (no `zooming`
+    // Graph option exists); plain wheel zooms the sub-graph canvas.
+    mousewheel: {
       enabled: true,
       minScale: 0.25,
       maxScale: 2,
-    },
-    selecting: {
-      enabled: true,
-      multiple: true,
-      rubberband: true,
-      movable: true,
-      showNodeSelectionBox: true,
+      modifiers: [],
     },
     connecting: {
       anchor: 'center',
@@ -340,7 +419,15 @@ onMounted(() => {
     },
   })
 
-  // Enable plugins
+  // Enable plugins. X6 3.x: selection is a plugin (the v2 `selecting`
+  // Graph option no longer exists).
+  subGraph.use(new Selection({
+    enabled: true,
+    multiple: true,
+    rubberband: true,
+    movable: true,
+    showNodeSelectionBox: true,
+  }))
   subGraph.use(new History({ enabled: true }))
   subGraph.use(new Keyboard({ enabled: true, global: true }))
   subGraph.use(new Clipboard({ enabled: true }))
@@ -360,16 +447,33 @@ onMounted(() => {
   })
 
   // Handle node double-click
-  subGraph.on('node:dblclick', ({ node, e }) => {
-    const data = node.getData()
+  subGraph.on('node:dblclick', ({ node }) => {
     // For loop containers inside sub-graph, we could support nested navigation
     // but for now, open quick edit for all nodes in sub-graph
-    openQuickEdit(node, e)
+    openQuickEdit(node)
+  })
+
+  // Right-click context menu on script step nodes (task 23: breakpoint toggle)
+  subGraph.on('node:contextmenu', ({ node, e }) => {
+    const data = node.getData() as NodeData
+    if (isScriptStepData(data)) {
+      e.preventDefault()
+      showBreakpointMenu(e as MenuTriggerEvent, data)
+    }
+  })
+
+  // Paint breakpoint markers on nodes added after populate.
+  subGraph.on('node:added', ({ node }) => {
+    const data = node.getData() as NodeData
+    if (!isScriptStepData(data)) return
+    setBreakpointBadge(node, breakpoints.isArmed(data.stepId))
+    setBreakpointHitHalo(node, breakpoints.hitStep.value === data.stepId)
   })
 
   // Handle blank area click
   subGraph.on('blank:click', () => {
     closeQuickEdit()
+    closeBreakpointMenu()
   })
 
   // Handle window resize
@@ -386,6 +490,9 @@ onMounted(() => {
 
   // Populate with child nodes from the main graph
   populateSubGraph()
+
+  // Initial breakpoint marker paint.
+  refreshBreakpointMarkers()
 })
 
 onUnmounted(() => {
@@ -496,7 +603,7 @@ function createScriptStepNode(scriptData: ScriptDropData, x: number, y: number) 
 /**
  * Open quick edit form for a node in the sub-graph
  */
-function openQuickEdit(node: Node, e: MouseEvent) {
+function openQuickEdit(node: Node) {
   if (quickEditVisible.value) {
     closeQuickEdit()
   }
@@ -521,19 +628,6 @@ function closeQuickEdit() {
   quickEditPosition.value = null
 }
 
-/**
- * Handle quick edit update
- */
-function handleQuickEditUpdate(data: ScriptStepData) {
-  if (!quickEditNode.value) return
-
-  quickEditNode.value.setData(data, { silent: false })
-  const label = `${data.scriptName}\n${data.stepId.slice(0, 8)}`
-  quickEditNode.value.setLabel(label)
-
-  console.log('Updated node data in sub-graph:', data.stepId)
-}
-
 // Expose for parent
 defineExpose({
   subGraph,
@@ -542,12 +636,34 @@ defineExpose({
 </script>
 
 <template>
-  <div ref="containerRef" class="sub-graph-container">
+  <div ref="containerRef" class="sub-graph-container" @click="closeBreakpointMenu">
     <!-- Sub-graph indicator overlay -->
     <div class="sub-graph-indicator">
       <span class="indicator-icon">&#x21A9;</span>
       <span class="indicator-text">Sub-graph view</span>
     </div>
+
+    <!-- Breakpoint context menu (task 23) -->
+    <Teleport to="body">
+      <div
+        v-if="breakpointMenuVisible"
+        class="bp-context-menu"
+        :style="{ left: `${breakpointMenuPosition.x}px`, top: `${breakpointMenuPosition.y}px` }"
+        @click.stop
+      >
+        <button
+          class="bp-context-menu-item"
+          data-testid="subgraph-context-menu-toggle-breakpoint"
+          :disabled="breakpoints.busy.value"
+          @click="handleToggleBreakpoint"
+        >
+          <svg class="tw-w-4 tw-h-4" fill="currentColor" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="6" />
+          </svg>
+          {{ breakpointMenuHasBreakpoint ? '移除断点' : '切换断点' }}
+        </button>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -583,5 +699,42 @@ defineExpose({
 
 .indicator-text {
   font-weight: 500;
+}
+
+/* Breakpoint context menu (mirrors GraphContainer's .context-menu styles) */
+.bp-context-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 160px;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-default);
+  border-radius: 8px;
+  box-shadow: var(--shadow-lg);
+  padding: 4px;
+}
+
+.bp-context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--color-text-primary);
+  background: none;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 150ms ease;
+}
+
+.bp-context-menu-item:hover:not(:disabled) {
+  background: var(--color-bg-tertiary);
+  color: var(--color-primary);
+}
+
+.bp-context-menu-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 </style>

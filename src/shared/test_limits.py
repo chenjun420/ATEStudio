@@ -50,6 +50,10 @@ class TestLimit(BaseModel):
             (no expiry).
     """
 
+    # Not a pytest test class — the name starts with "Test" so tell pytest not
+    # to collect it (suppresses PytestCollectionWarning "cannot collect").
+    __test__ = False
+
     model_config = ConfigDict(extra="forbid")
 
     limit_id: str = Field(..., min_length=1, description="Unique limit identifier")
@@ -101,6 +105,10 @@ class TestLimitList(BaseModel):
     Attributes:
         limits: List of TestLimit entries.
     """
+
+    # Not a pytest test class — the name starts with "Test" so tell pytest not
+    # to collect it (suppresses PytestCollectionWarning "cannot collect").
+    __test__ = False
 
     model_config = ConfigDict(extra="forbid")
 

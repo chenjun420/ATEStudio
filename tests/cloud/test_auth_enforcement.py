@@ -100,14 +100,20 @@ ROUTER_MATRIX = [
     ("scripts", "GET", "/api/v1/scripts", 200),
     ("sequences", "GET", "/api/v1/sequences", 200),
     ("executions", "GET", "/api/v1/executions", 200),
-    ("debug", "GET", "/api/v1/debug/breakpoints", 200),
     ("changeover", "GET", "/api/v1/changeover/products", 200),
     ("dashboard", "GET", "/api/v1/dashboard/summary", 200),
     ("resources", "GET", "/api/v1/resources/humans", 200),
     ("reports", "GET", "/api/v1/reports/atml/nonexistent-id", 404),
+    # atml import: valid token passes auth; empty body -> 400 (non-401 proves
+    # the mount-level JWT gate passed).
+    ("atml", "POST", "/api/v1/atml/import-test-description", 400),
     ("node_flow_bindings", "GET", "/api/v1/node-flow-bindings", 200),
     ("calibrations", "GET", "/api/v1/calibrations", 200),
     ("fixtures", "GET", "/api/v1/fixtures", 200),
+    ("fmea", "GET", "/api/v1/fmea", 200),
+    # knowledge extract: valid token passes auth; empty body -> 422 (non-401
+    # proves the mount-level JWT gate passed).
+    ("knowledge", "POST", "/api/v1/knowledge/extract", 422),
     ("limits", "GET", "/api/v1/limits", 200),
     # offline status: valid token passes auth; provider unconfigured in test
     # app -> honest 503 (non-401 proves the mount-level JWT gate passed).
@@ -412,12 +418,16 @@ def test_all_protected_mounts_carry_security_dependency() -> None:
     protected = [m for m in mounts if "get_current_user" in _dep_names(m)]
     anonymous = [m for m in mounts if not _dep_names(m)]
 
-    # 25 protected mounts vs 5 exempt/already-protected mounts
-    # (health, auth, users, rbac, apps). The 25th is the RH-6 checkpoint-id
-    # ack alias router (POST /checkpoints/{checkpoint_id}/ack), mounted with
-    # the same get_current_user guard; its anonymous-401 is also covered in
-    # test_checkpoint_id_ack.py.
-    assert len(protected) == 25
+    # 27 protected mounts vs 5 exempt/already-protected mounts
+    # (health, auth, users, rbac, apps). The debugpy debug-CRUD router was
+    # retired (task 21); the 24th is the RH-6 checkpoint-id ack alias router
+    # (POST /checkpoints/{checkpoint_id}/ack), mounted with the same
+    # get_current_user guard; its anonymous-401 is also covered in
+    # test_checkpoint_id_ack.py. The 25th is the task-13 FMEA CRUD router
+    # (/api/v1/fmea), the 26th is the task-11 ATML TestDescription import
+    # router (/api/v1/atml), and the 27th is the task-12 knowledge extraction
+    # trigger router (/api/v1/knowledge), all mount-level JWT-guarded.
+    assert len(protected) == 27
     assert len(anonymous) == 5
 
     anonymous_routers = [_mounted(m) for m in anonymous]

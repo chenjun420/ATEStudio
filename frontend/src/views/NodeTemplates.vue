@@ -417,7 +417,7 @@ onMounted(() => {
                 v-if="hasScope('flow:write')"
                 size="small"
                 type="primary"
-                @click="openEditDialog(row)"
+                @click="openEditDialog(row as NodeTemplate)"
                 data-testid="nt-btn-edit"
               >
                 编辑
@@ -426,7 +426,7 @@ onMounted(() => {
                 v-if="hasScope('flow:write')"
                 size="small"
                 type="danger"
-                @click="handleDelete(row)"
+                @click="handleDelete(row as NodeTemplate)"
                 data-testid="nt-btn-delete"
               >
                 删除

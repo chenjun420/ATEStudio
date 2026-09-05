@@ -217,6 +217,24 @@ Graph.registerNode('script-step-node', {
   inherit: Shape.Rect,
   width: 180,
   height: 80,
+  // Explicit markup: body + label plus two breakpoint marker sub-elements
+  // (task 23). `bpHalo` (amber ring, BREAKPOINT_HIT) and `bpBadge` (red dot,
+  // armed step breakpoint) are hidden by default via display:'none' and
+  // toggled through attrs by views/SequenceEditor/breakpointMarkers.ts.
+  markup: [
+    { tagName: 'rect', selector: 'body' },
+    { tagName: 'text', selector: 'label' },
+    {
+      tagName: 'rect',
+      selector: 'bpHalo',
+      attrs: { display: 'none' },
+    },
+    {
+      tagName: 'circle',
+      selector: 'bpBadge',
+      attrs: { display: 'none' },
+    },
+  ],
   attrs: {
     body: {
       fill: '#ffffff',

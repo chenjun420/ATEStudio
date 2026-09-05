@@ -32,7 +32,7 @@ import {
   ElTooltip,
 } from 'element-plus'
 import { useOperatorGuidance } from '@/composables/useOperatorGuidance'
-import type { OperatorStep, ResourceHealth, DiagnosisResult } from '@/composables/useOperatorGuidance'
+import type { ResourceHealth } from '@/composables/useOperatorGuidance'
 import type { StepStatus } from '@/composables/useExecutionStatus'
 
 // ─── Props ───────────────────────────────────────────────────────────────────
@@ -58,9 +58,7 @@ const {
   currentStepIndex,
   currentStep,
   totalSteps,
-  stepStatuses,
   executionStatus,
-  isRunning,
   progressText,
   completedSteps,
   latestAlarm,

@@ -99,6 +99,8 @@ class YamlParser:
             return self._parse_loop_v32(data)
         if step_type == "branch":
             return self._parse_branch(data)
+        if step_type == "breakpoint":
+            return self._parse_breakpoint(data)
         if step_type == "subsequence":
             return self._parse_subsequence(data)
         if "loop_type" in data:
@@ -327,6 +329,50 @@ class YamlParser:
             uut_affinity=data.get("uut_affinity"),
             skip_if=data.get("skip_if"),
             skip_reason=data.get("skip_reason"),
+        )
+
+    def _parse_breakpoint(self, data: dict[str, Any]) -> YamlStep:
+        """Parse a v3.2 ``type: breakpoint`` step (任务 18, 断点/FMEA 架构).
+
+        断点编译为单一 YamlStep（type=BREAKPOINT）。``condition`` 可选：
+        存在时，运行期表达式为 False 则断点不暂停（直通）；缺省视为
+        无条件命中。``id`` 必填——缺 id 的断点是畸形步骤，抛 ValueError
+        而非静默跳过。
+
+        Args:
+            data: Dictionary containing breakpoint data.
+
+        Returns:
+            A YamlStep of type BREAKPOINT.
+
+        Raises:
+            ValueError: If the required field ``id`` is missing.
+        """
+        bp_id = data.get("id")
+        if not bp_id:
+            raise ValueError("Breakpoint missing required field: 'id'")
+
+        condition = data.get("condition")
+        if condition is not None and not isinstance(condition, str):
+            raise ValueError(
+                f"Breakpoint '{bp_id}' field 'condition' must be a string expression"
+            )
+
+        return YamlStep(
+            id=bp_id,
+            type=StepType.BREAKPOINT,
+            script=data.get("script", ""),
+            params=data.get("params", {}),
+            preconditions=data.get("preconditions", []),
+            depends_on=data.get("depends_on", []),
+            resources=data.get("resources", {}),
+            timeout=data.get("timeout", 60),
+            retry=data.get("retry", 0),
+            on_failure=data.get("on_failure", data.get("on_fail")),
+            uut_affinity=data.get("uut_affinity"),
+            skip_if=data.get("skip_if"),
+            skip_reason=data.get("skip_reason"),
+            condition=condition,
         )
 
     def _parse_subsequence(self, data: dict[str, Any]) -> YamlStep:

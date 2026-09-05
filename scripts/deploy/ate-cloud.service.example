@@ -1,0 +1,77 @@
+# =============================================================================
+# ate-cloud.service — systemd unit TEMPLATE for the ATE Studio cloud app
+# =============================================================================
+# Target: 192.168.5.24 (Debian 12, bare metal). The old unit ran
+#   /home/rpdzkj/ATEStudio/.venv/bin/python -m uvicorn ate_cloud.main:app
+# This template launches the SAME app through `uv run` (uv 0.12.1 at
+# ~/.local/bin/uv), so `uv sync` in ~/ATEStudio owns the interpreter/venv.
+#
+# INSTALL (on the target host, after deploy_cloud.sh has rsync'd the tree):
+#   1. Copy this file to /etc/systemd/system/ate-cloud.service and replace
+#      every __CHANGEME__ placeholder:
+#        sudo cp scripts/deploy/ate-cloud.service.example /etc/systemd/system/ate-cloud.service
+#        sudo sed -i 's/__CHANGEME_USER__/rpdzkj/g' /etc/systemd/system/ate-cloud.service
+#   2. Place the operator-filled environment file (PLACEHOLDERS only live in
+#      config/cloud.env.example; the real .env.deploy stays OFF the repo):
+#        sudo install -o rpdzkj -g rpdzkj -m 600 /path/from/operator/cloud.env \
+#             /home/rpdzkj/ATEStudio/.env.deploy
+#   3. Reload and (re)start:
+#        sudo systemctl daemon-reload
+#        sudo systemctl enable --now ate-cloud
+#        sudo systemctl status ate-cloud
+#        journalctl -u ate-cloud -f
+#
+# deploy_cloud.sh performs steps 1-3 automatically; this file documents the
+# unit and can be installed manually. NEVER put real secrets in this file —
+# they belong in the EnvironmentFile (.env.deploy, mode 600), which is
+# operator-supplied and never committed.
+# =============================================================================
+
+[Unit]
+Description=ATE Studio cloud service (FastAPI / uvicorn, ate_cloud.main:app)
+# Start after the network and every local dependency the app talks to:
+#   nats.service      NATS JetStream      (.24 bare binary under systemd)
+#   qdrant.service    Qdrant vector DB
+#   falkordb.service  FalkorDB graph DB   (Redis 8 + falkordb.so, provision_falkordb.sh)
+#   nginx.service     reverse proxy       (unit may be enabled independently)
+After=network-online.target nats.service qdrant.service falkordb.service nginx.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__CHANGEME_USER__
+Group=__CHANGEME_USER__
+
+# Project checkout (non-git rsync target on .24). %h = the service user's
+# home directory (/home/rpdzkj for User=rpdzkj).
+WorkingDirectory=%h/ATEStudio
+Environment=HOME=%h
+# uv is installed at ~/.local/bin/uv (NOT on the default non-login PATH).
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+# App imports the package as `ate_cloud` from the src/ layout.
+Environment=PYTHONPATH=src
+
+# All secrets/endpoint settings come from the operator-supplied env file.
+# The leading "-" makes systemd tolerate the file being absent at boot.
+# Expected contents: copy config/cloud.env.example -> fill in -> place here.
+EnvironmentFile=-%h/ATEStudio/.env.deploy
+
+# uv run resolves the project venv (.venv, created by `uv sync` in
+# WorkingDirectory) and runs uvicorn. Runtime-only deps are the default;
+# deploy_cloud.sh uses `uv sync` (--extra dev only when WITH_DEV=1).
+ExecStart=%h/.local/bin/uv run uvicorn ate_cloud.main:app --host 0.0.0.0 --port 8000
+
+Restart=on-failure
+RestartSec=5
+# Give the app time to boot / drain on restart.
+TimeoutStartSec=60
+TimeoutStopSec=30
+
+# --- Basic hardening (debug LAN; tighten further for production) ------------
+NoNewPrivileges=true
+PrivateTmp=true
+# The app needs network egress (NATS/Qdrant/FalkorDB/LLM) and the project
+# tree + data dir; do NOT over-restrict on the first bring-up.
+
+[Install]
+WantedBy=multi-user.target

@@ -25,8 +25,17 @@ dependencies = [
     "qdrant-client>=1.12.0",
     "langchain-openai>=0.2.0",
     "langchain-core>=0.3.0",
-    "langchain-neo4j>=0.2.0",
-    "neo4j>=5.0.0",
+    # Knowledge graph backend: FalkorDB (Redis-compatible, RESP/6379).
+    # semantica graph-falkordb extra provides the GraphStore/GraphBuilder
+    # integration used by later KG tasks; falkordb is the async client
+    # (falkordb.asyncio) behind the GraphService protocol. Neo4j drivers
+    # (neo4j, langchain-neo4j) were removed in favor of FalkorDB.
+    # graph-falkordb: GraphStore/GraphBuilder integration; shacl: pyshacl for
+    # ontology SHACL graph validation (OWL export only needs rdflib, a semantica
+    # core dep). pyshacl is imported lazily inside the ontology service — the
+    # app boots without it; validation degrades to OntologyServiceUnavailable.
+    "semantica[graph-falkordb,shacl]>=0.6.7",
+    "falkordb>=1.7.1",
     "pyjwt>=2.8.0",
     "pwdlib[argon2]>=0.0.1",
     "cryptography>=42.0.0",
@@ -36,16 +45,13 @@ dependencies = [
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
+    "syrupy>=4.6.0",
+    "hypothesis>=6.100.0",
     "ruff>=0.4.0",
     "mypy>=1.10.0",
 ]
 openhtf = [
     "openhtf>=0.12.0",
-]
-# IDE-attached remote debugging of edge test executions (debug_executor).
-# Imported optionally — the platform runs without it, only debug sessions need it.
-debug = [
-    "debugpy>=1.8.0",
 ]
 
 [build-system]
@@ -67,6 +73,7 @@ ignore = ["B024"]  # Abstract class without abstract methods is intentional
 # strings over JSON/NATS payloads and renaming the mixin risks contract drift.
 [tool.ruff.lint.per-file-ignores]
 "src/shared/fixture_topology.py" = ["UP042"]
+"src/ate_cloud/services/ontology/vocab.py" = ["UP042"]
 "src/ate_cloud/config.py" = ["UP042"]
 "src/shared/measurement.py" = ["UP042"]
 # Intentional re-export barrel: imports follow package init code and are the
@@ -96,7 +103,7 @@ strict = true
 warn_return_any = true
 warn_unused_configs = true
 [[tool.mypy.overrides]]
-module = ["pyvisa", "pyvisa.*", "nats", "nats.*", "aiosqlite", "httpx", "sqlalchemy", "sqlalchemy.*", "asyncpg", "git", "git.*", "grpc", "grpc.*", "google.protobuf", "google.protobuf.*", "simpleeval", "simpleeval.*"]
+module = ["pyvisa", "pyvisa.*", "nats", "nats.*", "aiosqlite", "httpx", "sqlalchemy", "sqlalchemy.*", "asyncpg", "git", "git.*", "grpc", "grpc.*", "google.protobuf", "google.protobuf.*", "simpleeval", "simpleeval.*", "falkordb", "falkordb.*", "semantica", "semantica.*"]
 ignore_missing_imports = true
 
 # Dynamic protobuf message classes (built at runtime via descriptor_pool +
@@ -112,3 +119,13 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 asyncio_mode = "auto"
+# Real remote-service integration tests (tests/integration/test_* real-service
+# modules) carry the `integration` marker. They are SKIPPED BY DEFAULT by the
+# env gate in tests/integration/conftest.py: they only run when
+# ATE_RUN_INTEGRATION is truthy, and even then each test skips cleanly when its
+# specific remote service (NATS/Qdrant/FalkorDB/nginx on 192.168.5.24 or
+# ATE_INTEGRATION_HOST) is unreachable. The marker is registered here so
+# pytest emits no unknown-marker warning.
+markers = [
+    "integration: real remote-service integration test against the debug server (gated by ATE_RUN_INTEGRATION; skipped by default)",
+]

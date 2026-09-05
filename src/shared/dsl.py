@@ -58,6 +58,8 @@ class StepType(Enum):
         FIXTURE_CONTROL: 夹具控制步骤（type: fixture_control，action+fixture_id）
         CALL: 调用子序列/子计划（type: call）
         SUBSEQUENCE: 内联子序列容器（type: subsequence）
+        BREAKPOINT: 调试断点（type: breakpoint，可选 condition；命中时暂停
+            调度，无人值守/无暂停门控时为空操作直通）
     """
 
     SCRIPT = "script"
@@ -68,6 +70,7 @@ class StepType(Enum):
     FIXTURE_CONTROL = "fixture_control"
     CALL = "call"
     SUBSEQUENCE = "subsequence"
+    BREAKPOINT = "breakpoint"
 
 
 @dataclass
@@ -98,7 +101,10 @@ class YamlStep:
         fixture_id: fixture_control 步骤的目标夹具 ID
         export_outputs: Whether to export step outputs to plan-level scope
         skip_if: Expression that, if True, causes this step to be skipped
-        skip_reason: Human-readable reason logged when step is skipped
+        skip_reason: Human-readable reason logged when the step is skipped
+        condition: Optional boolean expression for BREAKPOINT steps (and
+            BRANCH steps, which also mirror it into params); when present and
+            false at run time the breakpoint does not suspend.
     """
 
     id: str
@@ -119,6 +125,7 @@ class YamlStep:
     export_outputs: bool = False
     skip_if: str | None = None
     skip_reason: str | None = None
+    condition: str | None = None
 
 
 @dataclass

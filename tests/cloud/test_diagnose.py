@@ -1,7 +1,12 @@
 """Tests for DiagnosisService and POST /api/v1/diagnose API endpoints.
 
-Uses mocked HybridRetriever and LLM - no real Qdrant/Neo4j/OpenAI required.
+Uses mocked HybridRetriever and LLM - no real Qdrant/FalkorDB/OpenAI required.
 The autouse ``_dev_mode_bypass`` fixture from conftest.py bypasses auth.
+
+Persistence and feedback-on-row behavior (task 15) lives in
+``test_diagnosis_persistence.py``; this file covers the service pipeline and
+request/response contracts. Feedback now updates the persisted Diagnosis
+row, so the feedback endpoint tests first create a diagnosis.
 """
 
 from collections.abc import AsyncGenerator
@@ -11,8 +16,11 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from ate_cloud.api.v1.diagnose import _get_diagnosis_service, _get_hybrid_retriever
+from ate_cloud.db import get_db
+from ate_cloud.models import Base
 from ate_cloud.services.diagnosis_service import DiagnosisRequest, DiagnosisService
 from ate_cloud.services.hybrid_retriever import HybridRetriever
 
@@ -50,15 +58,40 @@ async def app_with_diagnose(
     mock_retriever: MagicMock,
     diagnosis_service: DiagnosisService,
 ) -> AsyncGenerator[FastAPI, None]:
-    """Create a FastAPI app with diagnose_router and mocked dependencies."""
+    """Create a FastAPI app with diagnose_router and mocked dependencies.
+
+    A private in-memory SQLite session backs the ``get_db`` dependency so
+    diagnosis/feedback persistence (task 15) works without a real database.
+    """
     from ate_cloud.main import create_app
 
     app = create_app()
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(
+        engine, class_=AsyncSession, expire_on_commit=False, autoflush=False
+    )
+
+    async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
+        async with session_factory() as session:
+            try:
+                yield session
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+
     # Override dependencies to use mocked services
+    app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[_get_hybrid_retriever] = lambda: mock_retriever
     app.dependency_overrides[_get_diagnosis_service] = lambda: diagnosis_service
-    yield app
-    app.dependency_overrides.clear()
+    try:
+        yield app
+    finally:
+        app.dependency_overrides.clear()
+        await engine.dispose()
 
 
 @pytest.fixture
@@ -84,8 +117,8 @@ def _sample_retrieved_cases() -> list[dict[str, Any]]:
             "failed_step_name": "test_i2c_comm",
         },
         {
-            "id": "neo4j-001",
-            "source": "neo4j",
+            "id": "fault:i2c_timeout",
+            "source": "graph",
             "rrf_score": 0.0159,
             "symptom": "I2C communication timeout",
             "cause": "Pull-up resistor missing on SDA line",
@@ -101,7 +134,7 @@ def _sample_llm_response() -> str:
         '{"root_cause": "Missing pull-up resistor on I2C SDA line causes '
         'communication timeout", "confidence": 0.92, '
         '"evidence_citations": ["Case qdrant-001: I2C communication timeout", '
-        '"Case neo4j-001: Pull-up resistor missing on SDA line"], '
+        '"Case fault:i2c_timeout: Pull-up resistor missing on SDA line"], '
         '"repair_steps": ["Check SDA line for pull-up resistor", '
         '"Add 4.7kΩ pull-up resistor if missing", "Re-run I2C communication test"]}'
     )
@@ -262,36 +295,19 @@ class TestDiagnosisService:
         assert result["evidence_citations"] == []
         assert result["repair_steps"] == []
 
-    def test_record_feedback_confirmed(
+    @pytest.mark.asyncio
+    async def test_diagnosis_result_carries_model_and_retrieval_flag(
         self,
-        diagnosis_service: DiagnosisService,
+        diagnosis_service_no_key: DiagnosisService,
+        mock_retriever: MagicMock,
     ) -> None:
-        """Recording 'confirmed' feedback stores it in the feedback store."""
-        result = diagnosis_service.record_feedback(
-            diagnosis_id="diag-001",
-            feedback="confirmed",
+        """Retrieval-only results are flagged and carry no llm_model."""
+        mock_retriever.search.return_value = []
+        result = await diagnosis_service_no_key.diagnose(
+            product_type="P", failed_test="t"
         )
-        assert result["diagnosis_id"] == "diag-001"
-        assert result["feedback"] == "confirmed"
-        assert result["correction"] == ""
-        assert result["recorded"] is True
-        assert "diag-001" in diagnosis_service.feedback_store
-
-    def test_record_feedback_rejected_with_correction(
-        self,
-        diagnosis_service: DiagnosisService,
-    ) -> None:
-        """Recording 'rejected' feedback with correction stores both."""
-        result = diagnosis_service.record_feedback(
-            diagnosis_id="diag-002",
-            feedback="rejected",
-            correction="Actual root cause: cold solder joint on J5",
-        )
-        assert result["feedback"] == "rejected"
-        assert result["correction"] == "Actual root cause: cold solder joint on J5"
-        assert diagnosis_service.feedback_store["diag-002"]["correction"] == (
-            "Actual root cause: cold solder joint on J5"
-        )
+        assert result["retrieval_only"] is True
+        assert result["llm_model"] is None
 
     def test_diagnosis_request_to_query_text(self) -> None:
         """DiagnosisRequest.to_query_text combines all fields."""
@@ -451,15 +467,26 @@ class TestDiagnoseAPI:
         self,
         diagnose_client: AsyncClient,
         diagnosis_service: DiagnosisService,
+        mock_retriever: MagicMock,
     ) -> None:
-        """POST /api/v1/diagnose/{id}/feedback with 'confirmed' returns 200."""
+        """POST /diagnose/{id}/feedback with 'confirmed' updates the row (200)."""
+        # Persist a diagnosis first (retrieval-only: no LLM network call).
+        diagnosis_service._api_key = ""
+        mock_retriever.search.return_value = []
+        created = await diagnose_client.post(
+            "/api/v1/diagnose",
+            json={"product_type": "P", "failed_test": "t"},
+        )
+        assert created.status_code == 200, created.text
+        diagnosis_id = created.json()["diagnosis_id"]
+
         response = await diagnose_client.post(
-            "/api/v1/diagnose/diag-123/feedback",
+            f"/api/v1/diagnose/{diagnosis_id}/feedback",
             json={"feedback": "confirmed"},
         )
         assert response.status_code == 200
         data = response.json()
-        assert data["diagnosis_id"] == "diag-123"
+        assert data["diagnosis_id"] == diagnosis_id
         assert data["feedback"] == "confirmed"
         assert data["correction"] == ""
         assert data["recorded"] is True
@@ -468,10 +495,21 @@ class TestDiagnoseAPI:
     async def test_feedback_endpoint_rejected_with_correction(
         self,
         diagnose_client: AsyncClient,
+        diagnosis_service: DiagnosisService,
+        mock_retriever: MagicMock,
     ) -> None:
-        """POST /api/v1/diagnose/{id}/feedback with 'rejected' + correction."""
+        """POST feedback 'rejected' + correction on a persisted diagnosis."""
+        diagnosis_service._api_key = ""
+        mock_retriever.search.return_value = []
+        created = await diagnose_client.post(
+            "/api/v1/diagnose",
+            json={"product_type": "P", "failed_test": "t"},
+        )
+        assert created.status_code == 200, created.text
+        diagnosis_id = created.json()["diagnosis_id"]
+
         response = await diagnose_client.post(
-            "/api/v1/diagnose/diag-456/feedback",
+            f"/api/v1/diagnose/{diagnosis_id}/feedback",
             json={
                 "feedback": "rejected",
                 "correction": "Actual cause: broken trace on PCB",
@@ -481,6 +519,18 @@ class TestDiagnoseAPI:
         data = response.json()
         assert data["feedback"] == "rejected"
         assert data["correction"] == "Actual cause: broken trace on PCB"
+
+    @pytest.mark.asyncio
+    async def test_feedback_endpoint_unknown_diagnosis_returns_404(
+        self,
+        diagnose_client: AsyncClient,
+    ) -> None:
+        """Feedback for an id that was never persisted returns 404."""
+        response = await diagnose_client.post(
+            "/api/v1/diagnose/never-persisted/feedback",
+            json={"feedback": "confirmed"},
+        )
+        assert response.status_code == 404
 
     @pytest.mark.asyncio
     async def test_feedback_endpoint_invalid_feedback(

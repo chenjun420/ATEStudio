@@ -318,9 +318,9 @@ onMounted(() => {
         </ElTableColumn>
         <ElTableColumn label="操作" width="220" align="center" fixed="right">
           <template #default="{ row }">
-            <ElButton v-if="hasScope('flow:write')" size="small" @click="openEditDialog(row)">编辑</ElButton>
-            <ElButton v-if="hasScope('flow:write')" size="small" type="danger" @click="handleDelete(row)">删除</ElButton>
-            <ElButton v-if="hasScope('exec:run')" size="small" type="success" @click="handleExecute(row)">执行</ElButton>
+            <ElButton v-if="hasScope('flow:write')" size="small" @click="openEditDialog(row as NodeFlowBinding)">编辑</ElButton>
+            <ElButton v-if="hasScope('flow:write')" size="small" type="danger" @click="handleDelete(row as NodeFlowBinding)">删除</ElButton>
+            <ElButton v-if="hasScope('exec:run')" size="small" type="success" @click="handleExecute(row as NodeFlowBinding)">执行</ElButton>
           </template>
         </ElTableColumn>
       </ElTable>

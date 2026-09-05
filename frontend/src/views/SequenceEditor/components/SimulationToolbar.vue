@@ -26,7 +26,7 @@
  * injected via props so tests can mock them. When `simulation` or `replay`
  * props are omitted, the component creates its own instances.
  */
-import { computed, ref, toRef, watch } from 'vue'
+import { computed, toRef, watch } from 'vue'
 import {
   ElButton,
   ElButtonGroup,
@@ -35,7 +35,7 @@ import {
   ElDropdownMenu,
   ElIcon,
   ElSelect,
-  ElSelectOption,
+  ElOption,
   ElTooltip,
 } from 'element-plus'
 import { useSimulation } from '@/composables/useSimulation'
@@ -215,7 +215,7 @@ watch(
         class="noise-select"
         data-testid="noise-model-select"
       >
-        <ElSelectOption
+        <ElOption
           v-for="m in sim.noiseModels"
           :key="m.value"
           :label="m.label"
@@ -270,7 +270,7 @@ watch(
         title="回放倍速"
         data-testid="speed-select"
       >
-        <ElSelectOption
+        <ElOption
           v-for="s in rep.speeds"
           :key="s.value"
           :label="s.label"

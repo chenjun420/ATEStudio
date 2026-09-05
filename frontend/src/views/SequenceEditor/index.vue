@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { provide, ref, shallowRef, watch, computed } from 'vue'
 import type { Graph, Node } from '@antv/x6'
+import { ElMessage } from 'element-plus'
 import GraphContainer from './components/GraphContainer.vue'
 import SubGraphContainer from './components/SubGraphContainer.vue'
 import BreadcrumbNav from './components/BreadcrumbNav.vue'
@@ -12,9 +13,23 @@ import SequenceTabs from './components/SequenceTabs.vue'
 import SequenceListPanel from './components/SequenceListPanel.vue'
 import ScriptEditorDialog from '@/components/ScriptEditorDialog.vue'
 import { useSerializer } from '@/composables/useSerializer'
+import { useNodeBreakpoints, NODE_BREAKPOINTS_KEY } from '@/composables/useNodeBreakpoints'
 import { useTabsStore } from '@/stores/tabs'
 import { createSequence, type Sequence } from '@/api/sequences'
 import { isLoopContainerData } from '@/models/nodes/types'
+
+// Step-breakpoint composable shared by the main graph and sub-graph views
+// (task 23). Single instance => one SSE stream, one armed-step truth source.
+const nodeBreakpoints = useNodeBreakpoints((m, t) =>
+  t === 'success'
+    ? ElMessage.success(m)
+    : t === 'warning'
+      ? ElMessage.warning(m)
+      : t === 'error'
+        ? ElMessage.error(m)
+        : ElMessage.info(m),
+)
+provide(NODE_BREAKPOINTS_KEY, nodeBreakpoints)
 
 // Provide selected node ID for child components
 const selectedNodeId = ref<string | null>(null)
@@ -44,9 +59,6 @@ const tabsStore = useTabsStore()
 /** The ID of the loop container node currently being viewed in sub-graph, or null for main graph */
 const activeSubGraphContainerId = ref<string | null>(null)
 
-/** Ref to the SubGraphContainer component for calling syncBackToMainGraph */
-const subGraphRef = ref<InstanceType<typeof SubGraphContainer> | null>(null)
-
 // ============================================
 // Script Editor Dialog state
 // ============================================
@@ -67,13 +79,6 @@ function handleEditScript(payload: { scriptId: string; scriptName: string }) {
   scriptEditorScriptId.value = payload.scriptId
   scriptEditorScriptName.value = payload.scriptName
   scriptEditorVisible.value = true
-}
-
-/**
- * Handle script editor dialog close
- */
-function handleScriptEditorClose() {
-  scriptEditorVisible.value = false
 }
 
 /**
@@ -172,10 +177,6 @@ function handleSequenceCreated(sequence: Sequence) {
 
 // Left sidebar tab state
 const leftSidebarTab = ref<'library' | 'nodes' | 'sequences'>('library')
-const activeLeftTab = computed({
-  get: () => leftSidebarTab.value,
-  set: (val) => { leftSidebarTab.value = val }
-})
 
 // Handle tab selection
 function handleTabSelect(tabId: string) {
@@ -194,7 +195,6 @@ function handleTabClose(tabId: string) {
 
 // Handle new sequence creation from tabs
 async function handleTabNew() {
-  const timestamp = new Date().toISOString().slice(0, 19).replace('T', ' ')
   const defaultSequence = {
     name: `New Sequence ${tabsStore.tabCount + 1}`,
     description: 'A new test sequence',
@@ -303,8 +303,8 @@ function handleExecutionEnded() {
         <!-- Sub-graph (shown when viewing a loop container's children) -->
         <SubGraphContainer
           v-if="isInSubGraph"
-          ref="subGraphRef"
           :container-node-id="activeSubGraphContainerId!"
+          :run-id="currentRunId"
         />
       </div>
     </main>

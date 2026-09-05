@@ -11,11 +11,11 @@
  *    SSE composable. Provides per-step status (idle/running/passed/failed/...),
  *    execution-level status, progress text, the latest alarm, and the latest
  *    measurements.
- * 3. **AI diagnosis** - fetched on demand from the (forthcoming) diagnosis API
- *    endpoint `GET /api/v1/faults/diagnose`. When the backend is unreachable
- *    (T20 not yet deployed) the composable surfaces a clear "no diagnosis
- *    available" state rather than crashing - this is a UI affordance, not a
- *    backend silent-degradation.
+ * 3. **AI diagnosis** - fetched on demand from the diagnosis API endpoint
+ *    `POST /api/v1/diagnose` (hybrid RAG + LLM; see src/ate_cloud/api/v1/
+ *    diagnose.py). When the backend is unreachable or returns 503/502 the
+ *    composable surfaces a clear "no diagnosis available" state rather than
+ *    crashing - this is a UI affordance, not a backend silent-degradation.
  *
  * The composable is intentionally self-contained: it owns the runId ref so the
  * caller does not need to manage SSE lifecycle, and it watches the execution
@@ -23,11 +23,12 @@
  */
 import { ref, computed, watch, type Ref, type ComputedRef } from 'vue'
 import * as yaml from 'js-yaml'
-import axios from 'axios'
 import { useExecutionStatus } from './useExecutionStatus'
 import type { StepStatus } from './useExecutionStatus'
 import type { YamlSequence, YamlStep, YamlLoop } from '@/types/dsl'
 import { getExecution } from '@/api/executions'
+import { diagnoseFault } from '@/api/diagnosis'
+import type { DiagnoseResponse } from '@/api/diagnosis'
 
 // ─── Diagnosis domain types ──────────────────────────────────────────────────
 
@@ -58,8 +59,11 @@ export interface PossibleCause {
 /**
  * Full AI diagnosis result for a failed step or execution.
  *
- * Mirrors the shape the T20 backend will expose at
- * `GET /api/v1/faults/diagnose?run_id=...&step_id=...`.
+ * The operator view consumes `root_cause`, `confidence` and `repair_steps`
+ * from the backend `POST /api/v1/diagnose` response (DiagnoseResponse). The
+ * extra UI-shaping fields (`step_id`, `possible_causes`, `notes`) are populated
+ * client-side so the existing operator panels keep rendering when the backend
+ * omits them.
  */
 export interface DiagnosisResult {
   /** The step this diagnosis applies to, or null for execution-level. */
@@ -163,6 +167,25 @@ export interface UseOperatorGuidanceReturn {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /**
+ * Structural type guard mirroring `axios.isAxiosError` for errors rejected by
+ * the shared http client (`@/api/interceptor`). Axios tags its errors with
+ * `isAxiosError === true`; this keeps the 503/404 handling below without
+ * importing axios directly.
+ */
+function isAxiosLikeError(err: unknown): boolean {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    (err as { isAxiosError?: unknown }).isAxiosError === true
+  )
+}
+
+/** Read the HTTP status off an axios-like rejection (undefined when absent). */
+function httpStatus(err: unknown): number | undefined {
+  return (err as { response?: { status?: number } } | null)?.response?.status
+}
+
+/**
  * Type guard distinguishing a YamlStep from a YamlLoop.
  * Loops have `loop_type`; steps have `script`.
  */
@@ -243,27 +266,52 @@ function findCurrentStepIndex(
 
 // ─── Diagnosis API client ────────────────────────────────────────────────────
 
-const diagnosisApi = axios.create({
-  baseURL: '/api/v1',
-  timeout: 15000,
-  headers: { 'Content-Type': 'application/json' },
-})
+/** Default product type used when no product context is available on the run. */
+const DEFAULT_PRODUCT_TYPE = 'unknown'
 
 /**
- * Fetch a diagnosis for a given run (and optionally a specific step).
+ * Map a backend `POST /diagnose` response into the UI's DiagnosisResult.
  *
- * Calls `GET /api/v1/faults/diagnose?run_id=...&step_id=...`.
- * This endpoint is provided by T20 (not yet deployed). When the endpoint is
- * unavailable, the error is surfaced to the caller - no silent fallback.
+ * The backend returns plain-string `repair_steps`; the operator panel expects
+ * ordered `{ order, action }` entries, so they are numbered here. Ranked
+ * `possible_causes` are not part of the backend contract — a single entry
+ * carrying the root cause keeps the "possible causes" panel populated.
+ */
+function mapDiagnosisResponse(
+  data: DiagnoseResponse,
+  stepId: string | null,
+): DiagnosisResult {
+  return {
+    step_id: stepId,
+    root_cause: data.root_cause,
+    confidence: data.confidence,
+    possible_causes: [{ label: data.root_cause, confidence: data.confidence }],
+    repair_steps: data.repair_steps.map((action, index) => ({
+      order: index + 1,
+      action,
+    })),
+    notes: data.evidence_citations.length > 0 ? data.evidence_citations.join('\n') : undefined,
+  }
+}
+
+/**
+ * Request a diagnosis for a given run (and optionally a specific step).
+ *
+ * Calls `POST /api/v1/diagnose` through the shared http client (JWT + 401
+ * refresh). `failedTest` names the failing test (the step script/id, or a
+ * run-level label); the run id links the persisted diagnosis server-side.
  */
 async function fetchDiagnosisFromApi(
   runId: string,
   stepId: string | null,
+  failedTest: string,
 ): Promise<DiagnosisResult> {
-  const params: Record<string, string> = { run_id: runId }
-  if (stepId) params.step_id = stepId
-  const resp = await diagnosisApi.get<DiagnosisResult>('/faults/diagnose', { params })
-  return resp.data
+  const response = await diagnoseFault({
+    product_type: DEFAULT_PRODUCT_TYPE,
+    failed_test: failedTest,
+    run_id: runId,
+  })
+  return mapDiagnosisResponse(response, stepId)
 }
 
 // ─── Composable ──────────────────────────────────────────────────────────────
@@ -326,15 +374,22 @@ export function useOperatorGuidance(
     diagnosisError.value = null
     diagnosis.value = null
     try {
-      diagnosis.value = await fetchDiagnosisFromApi(runId.value, stepId)
+      // Name the failing test: the failed step's script/id, or a run-level
+      // label when diagnosing the whole execution.
+      const failedStep = stepId ? rawSteps.value.find((s) => s.id === stepId) : undefined
+      const failedTest = failedStep?.script || stepId || `run ${runId.value}`
+      diagnosis.value = await fetchDiagnosisFromApi(runId.value, stepId, failedTest)
     } catch (err: unknown) {
-      // T20 backend not yet deployed - surface the error to the UI.
-      // This is a UI affordance (operator sees "no diagnosis"), NOT a
-      // backend silent-degradation: the backend itself never fakes success.
-      if (axios.isAxiosError(err)) {
-        const code = err.response?.status
-        if (code === 404) {
-          diagnosisError.value = 'Diagnosis endpoint not available yet (T20 pending).'
+      // Diagnosis backend (POST /diagnose) failure or outage — surface the
+      // error to the UI. This is a UI affordance (operator sees "no
+      // diagnosis"), NOT a backend silent-degradation: the backend never fakes
+      // success.
+      if (isAxiosLikeError(err)) {
+        const code = httpStatus(err)
+        if (code === 503) {
+          diagnosisError.value = 'Diagnosis service unavailable (LLM/retrieval offline).'
+        } else if (code === 404) {
+          diagnosisError.value = 'Diagnosis endpoint not available.'
         } else if (code) {
           diagnosisError.value = `Diagnosis request failed (HTTP ${code}).`
         } else {

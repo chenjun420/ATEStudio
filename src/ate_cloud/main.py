@@ -81,34 +81,83 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         except Exception as e:
             print(f"Worker registry KV bucket creation failed ({type(e).__name__}: {e})")  # noqa: T201
 
-    # Initialize Qdrant client and failure indexer (optional — graceful degradation)
+    # Initialize Qdrant client and failure indexer (optional — graceful degradation).
+    # The Qdrant client is ALWAYS stored on app.state when constructed (the
+    # diagnose endpoint's lazy _get_qdrant_client reads it; absent client →
+    # 503 on vector paths). The failure indexer embeds via the real
+    # EmbeddingService when an OpenAI-compatible key is configured; with no
+    # key it still indexes (zero vectors) so the non-ontology Qdrant failure
+    # index keeps working and vector search degrades to no semantic results.
+    failure_indexer = None
     try:
         from qdrant_client import QdrantClient
 
         qdrant_client = QdrantClient(url=settings.qdrant_url)
-        # Simple embedding function — production should use DeepAgents or similar
-        def _embed_text(text: str) -> list[float]:
-            """Placeholder embedding: returns a deterministic hash-based vector.
+        app.state.qdrant_client = qdrant_client
 
-            In production, replace with DeepAgents embedding API call.
-            """
-            import hashlib
+        embedding_service = None
+        if settings.openai_api_key:
+            from ate_cloud.services.embedding_service import EmbeddingService
 
-            seed = hashlib.sha256(text.encode()).digest()
-            vec = [0.0] * settings.embedding_dimensions
-            for i in range(min(settings.embedding_dimensions, len(seed) * 8)):
-                byte_idx = i // 8
-                bit_idx = i % 8
-                vec[i] = 1.0 if (seed[byte_idx] >> bit_idx) & 1 else -1.0
-            return vec
+            embedding_service = EmbeddingService(
+                api_key=settings.openai_api_key,
+                model=settings.openai_embedding_model,
+                dimensions=settings.embedding_dimensions,
+            )
+            app.state.embedding_service = embedding_service
+        else:
+            print(  # noqa: T201
+                "No OPENAI_API_KEY configured; failure indexer runs without "
+                "embeddings (vector search degraded, graph paths unaffected)"
+            )
 
         failure_indexer = FailureIndexer(
             qdrant_client=qdrant_client,
-            embedding_model=_embed_text,
+            embedding_service=embedding_service,
+            embedding_dim=settings.embedding_dimensions,
         )
         await failure_indexer.ensure_collection()
         failure_indexer.subscribe_to_events(bridge)
         app.state.failure_indexer = failure_indexer
+
+        # Automatic failure→KG evolution (task 16): after a failure is
+        # indexed, evolve the ontology KG via the task-7 pipeline. The
+        # pipeline is built lazily on first failure and cached on app.state;
+        # any construction failure (no graph / Semantica unusable) degrades
+        # to a logged skip — it never blocks failure indexing.
+        from ate_cloud.services.failure_evolution import FailureEvolutionTrigger
+
+        def _resolve_failure_pipeline() -> object | None:
+            cached: object | None = getattr(app.state, "failure_kg_pipeline", None)
+            if cached is not None:
+                return cached
+            try:
+                from ate_cloud.services.falkordb_graph_service import FalkorDBGraphService
+                from ate_cloud.services.kg_pipeline import build_pipeline
+
+                graph_service = FalkorDBGraphService(
+                    url=settings.falkordb_url,
+                    graph_name=settings.falkordb_graph,
+                    password=settings.falkordb_password or None,
+                )
+                pipeline = build_pipeline(
+                    graph_service=graph_service,
+                    embedding_service=embedding_service,
+                    qdrant_client=qdrant_client,
+                )
+            except Exception as exc:  # noqa: BLE001 — graph/key absent is a benign skip
+                print(  # noqa: T201
+                    "Auto KG evolution disabled (pipeline unavailable: "
+                    f"{type(exc).__name__}: {exc}); failures still indexed"
+                )
+                return None
+            app.state.failure_kg_pipeline = pipeline
+            app.state.graph_service = graph_service
+            return pipeline
+
+        failure_indexer.set_evolution_trigger(
+            FailureEvolutionTrigger(resolve=_resolve_failure_pipeline).evolve_from_failure
+        )
         print(f"Failure indexer initialized with Qdrant at {settings.qdrant_url}")  # noqa: T201
     except ImportError:
         print("qdrant-client not installed; failure indexing disabled")  # noqa: T201
@@ -135,6 +184,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             sse_bridge=bridge,
             async_session_factory=async_session_factory,
             breakpoint_registry=app.state.breakpoint_registry,
+            failure_indexer=failure_indexer,
         )
         app.state.status_relay = status_relay
         app.state.status_relay_task = asyncio.create_task(status_relay.start())

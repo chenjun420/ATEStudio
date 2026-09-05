@@ -237,6 +237,15 @@ default_apps: list[dict[str, Any]] = [
                 "sort_order": 3,
                 "required_permissions": ["system:read"],
             },
+            {
+                "code": "fmea",
+                "name": "FMEA管理",
+                "route_path": "/system/fmea",
+                "route_name": "FmeaManagement",
+                "icon": "Tickets",
+                "sort_order": 4,
+                "required_permissions": ["system:read"],
+            },
         ],
     },
 ]

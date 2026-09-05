@@ -2,15 +2,15 @@
 # ATE Studio - Docker Compose Deployment
 #
 # Profiles:
-#   dev   — All services (ate-cloud + ate-platform + nats + qdrant + neo4j)
-#   cloud — Cloud only (ate-cloud + nats + qdrant + neo4j, no ate-platform)
+#   dev   — All services (ate-cloud + ate-platform + nats + qdrant + falkordb)
+#   cloud — Cloud only (ate-cloud + nats + qdrant + falkordb, no ate-platform)
 #
 # Usage:
 #   docker compose --profile dev up -d       # Full stack (development)
 #   docker compose --profile cloud up -d     # Cloud-only deployment
 #
 # Environment variables (set in .env file or shell):
-#   NEO4J_PASSWORD               Neo4j password (default: atestudio)
+#   FALKORDB_PASSWORD            FalkorDB/Redis password (default: empty = no auth)
 #   ATE_CLOUD_DATABASE_TYPE      sqlite | postgresql | mysql (default: sqlite)
 #   ATE_CLOUD_EMBEDDING_DIMENSIONS  Embedding vector size (default: 1536)
 #   ATE_SIMULATION_MODE          true | false (default: true for Docker)
@@ -79,27 +79,30 @@ services:
       - ate-network
 
   # ---------------------------------------------------------------------------
-  # Neo4j 5 — Knowledge graph for FMEA diagnostics (required)
+  # FalkorDB — Knowledge graph for FMEA diagnostics (Redis RESP / 6379)
+  # Image `falkordb/falkordb` bundles the graph server (RESP, 6379) and the
+  # FalkorDB Browser UI (3000). Data dir is /data; persistence/auth are passed
+  # through REDIS_ARGS. Health = Redis PING (same probe as the bare-metal run).
   # ---------------------------------------------------------------------------
-  neo4j:
+  falkordb:
     profiles: [dev, cloud]
-    image: neo4j:5-community
+    image: falkordb/falkordb:latest
     ports:
-      - "7474:7474"
-      - "7687:7687"
+      - "6379:6379"   # Redis RESP (graph queries via Cypher GRAPH.* commands)
+      - "3000:3000"   # FalkorDB Browser UI
     volumes:
-      - neo4j-data:/data
+      - falkordb-data:/data
     environment:
-      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-atestudio}
-      NEO4J_PLUGINS: '["apoc"]'
-      NEO4J_server_memory_heap_max__size: 512M
-      NEO4J_server_memory_pagecache_size: 256M
+      # AOF persistence passed through to the Redis server. To enable auth,
+      # add `--requirepass <pw>` here AND set FALKORDB_PASSWORD in .env (the
+      # cloud reads it via FALKORDB_URL/FALKORDB_PASSWORD); dev default = none.
+      REDIS_ARGS: "--appendonly yes --appendfsync everysec"
     healthcheck:
-      test: ["CMD-SHELL", "cypher-shell -u neo4j -p '${NEO4J_PASSWORD:-atestudio}' 'RETURN 1'"]
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
       interval: 15s
       timeout: 10s
       retries: 10
-      start_period: 30s
+      start_period: 20s
     restart: unless-stopped
     deploy:
       resources:
@@ -126,6 +129,11 @@ services:
       ATE_CLOUD_SQLITE_DB_PATH: /app/data/ate_platform.db
       ATE_CLOUD_NATS_URL: nats://nats:4222
       ATE_CLOUD_QDRANT_URL: http://qdrant:6333
+      # FalkorDB graph DB (Redis RESP). Service name `falkordb`, port 6379;
+      # graph key `fmea` matches FALKORDB_GRAPH default in src/ate_cloud/config.py.
+      FALKORDB_URL: redis://falkordb:6379
+      FALKORDB_GRAPH: fmea
+      FALKORDB_PASSWORD: ${FALKORDB_PASSWORD:-}
       ATE_CLOUD_EMBEDDING_DIMENSIONS: ${ATE_CLOUD_EMBEDDING_DIMENSIONS:-1536}
       ATE_SIMULATION_MODE: ${ATE_SIMULATION_MODE:-true}
       SCRIPTS_ROOT_DIR: /app/scripts
@@ -134,7 +142,7 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_healthy
-      neo4j:
+      falkordb:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8000/api/v1/health/db"]
@@ -211,7 +219,7 @@ services:
 volumes:
   nats-jetstream-data:  # NATS JetStream file storage (RH-2, /var/lib/nats/jetstream)
   qdrant-data:     # Qdrant vector index storage
-  neo4j-data:      # Neo4j graph database storage
+  falkordb-data:   # FalkorDB graph database storage (Redis AOF/RDB, /data)
   ate-scripts:     # Shared test scripts (ate-cloud writes, ate-platform reads)
   ate-data:        # SQLite database + worker ID
 

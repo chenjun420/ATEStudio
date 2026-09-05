@@ -87,5 +87,9 @@ class TestTraceResult(BaseModel):
         steps: Chronologically ordered execution steps (oldest first).
     """
 
+    # Not a pytest test class — the name starts with "Test" so tell pytest not
+    # to collect it (suppresses PytestCollectionWarning "cannot collect").
+    __test__ = False
+
     dut_serial: str
     steps: list[TraceStep] = Field(default_factory=list)

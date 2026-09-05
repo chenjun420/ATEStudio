@@ -232,7 +232,7 @@ function typeLabel(type: string): string {
   return TYPE_LABELS[type] ?? type
 }
 
-function formatTime(iso: string | undefined): string {
+function formatTime(iso: string | null | undefined): string {
   if (!iso) return '—'
   const t = Date.parse(iso)
   return Number.isNaN(t) ? iso : new Date(t).toLocaleString()

@@ -23,6 +23,7 @@ import pytest
 from shared.events import (
     EVENT_DATA_CLASSES,
     EVENT_TYPE_CATEGORIES,
+    BreakpointHitData,
     ConditionTimeoutData,
     DeadlockDetectedData,
     Event,
@@ -459,6 +460,12 @@ class TestEventDataClassesCompleteness:
             ExecutionStartedData: {"run_id": "t"},
             ExecutionCompletedData: {"run_id": "t"},
             ExecutionPausedData: {"run_id": "t"},
+            BreakpointHitData: {
+                "breakpoint_id": "t",
+                "kind": "step",
+                "target": "t",
+                "step_id": "t",
+            },
             StepTimeoutData: {"step_id": "t"},
             ConditionTimeoutData: {"step_id": "t"},
             ResourceTimeoutData: {"resource_id": "t"},

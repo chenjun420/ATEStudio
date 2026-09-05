@@ -16,7 +16,7 @@ ATE Studio is an end-to-end production test engineering platform for communicati
 - **Event-driven scheduler** — state-machine scanner scheduling with precondition evaluation, resource management, adaptive skip, and live config reload.
 - **YAML DSL + scripting** — declarative test plans (v3.0/v3.2) with loops, branches, barriers, fixture control, and multi-UUT dispatch; inline Python scripting.
 - **Three-tier simulation** — instrument-level noise injection, scheduler dry-run, and full-chain simulation, so plans can be validated without any hardware.
-- **AI-assisted diagnosis** — hybrid retrieval (RAG vector search + Neo4j FMEA knowledge graph) for fault localization and diagnosis.
+- **AI-assisted diagnosis** — hybrid retrieval (RAG vector search in Qdrant + FalkorDB ontology knowledge graph) for fault localization and diagnosis.
 - **SPC & traceability** — real-time control charts, process-capability analysis (Cpk/Ppk), end-to-end execution trace, and ATML report export.
 - **Multi-station workflows** — NATS JetStream KV-based station handoff with upstream-dependency orchestration.
 - **Visual sequence editor** — AntV X6 drag-and-drop flow editing with Monaco Editor for inline YAML.
@@ -33,7 +33,7 @@ ATE Studio follows a cloud–edge architecture.
 ┌─────────────────────────────────────────────────────────────────────┐
 │                         CLOUD  (ate_cloud)                          │
 │  FastAPI (port 8000)  ·  SQLAlchemy (SQLite/PostgreSQL/MySQL)       │
-│  NATS JetStream  ·  Qdrant vector DB  ·  Neo4j graph DB             │
+│  NATS JetStream  ·  Qdrant vector DB  ·  FalkorDB graph (Redis/6379)│
 │                                                                     │
 │  REST API + SSE  ·  script versioning  ·  failure indexing         │
 │  AI diagnosis  ·  SPC analytics  ·  ATML export  ·  config push     │
@@ -43,7 +43,7 @@ ATE Studio follows a cloud–edge architecture.
 │                         EDGE  (ate_platform)                        │
 │  ScannerScheduler (event-driven)  ·  Executor (Context Proxy)       │
 │  Drivers (HAL/MAL, gRPC, Mock)  ·  Simulation (driver/dry-run/full) │
-│  Recorder (record/replay)  ·  Debug (breakpoints, debugpy)          │
+│  Recorder (record/replay)  ·  Debug (step/edge breakpoints)         │
 │  DSL parser  ·  OpenHTF adapter (optional)                          │
 └─────────────────────────────────────────────────────────────────────┘
                                    │
@@ -71,7 +71,7 @@ src/
 │   ├── drivers/        # HAL/MAL drivers, gRPC, MockDriverFactory
 │   ├── simulation/     # 3-tier simulation (instrument / dry-run / full-chain)
 │   ├── recorder/       # Record & replay
-│   ├── debug/          # Breakpoint manager, debugpy executor
+│   ├── scheduler/      # Scanner scheduler + step/edge breakpoint pause gate
 │   ├── dsl/            # YAML DSL parser
 │   └── openhtf/        # OpenHTF adapter (optional extra)
 ├── shared/             # Shared types: DSL, events, measurements, multi-station
@@ -91,14 +91,14 @@ docs/                   # Design documents (Chinese)
 |------|------------|
 | Runtime / package manager | Python 3.12+, [uv](https://docs.astral.sh/uv/) |
 | Web framework / ORM | FastAPI, SQLAlchemy 2.0 (async), Alembic, Pydantic v2 |
-| Messaging / data | NATS JetStream, Qdrant, Neo4j 5 |
+| Messaging / data | NATS JetStream, Qdrant (vectors), FalkorDB (graph, Redis/6379) |
 | Quality tools | ruff, mypy (strict), pytest + pytest-asyncio |
 | Frontend | Vue 3.5, TypeScript, Vite, Pinia, Vue Router, vue-i18n |
 | Editor / UI | AntV X6, Element Plus, Monaco Editor, Tailwind CSS 4 |
 | Frontend tests | Vitest, Vue Test Utils |
 | Containers / CI | Docker Compose, GitHub Actions |
 
-Optional extras: `openhtf` (OpenHTF integration), `debug` (debugpy for IDE-attached edge debugging).
+Optional extras: `openhtf` (OpenHTF integration). Breakpoints are step/edge-level pause gates in the scheduler (no IDE-attached debugger).
 
 ---
 
@@ -126,7 +126,7 @@ docker exec -it ate-studio-ate-cloud-1 alembic upgrade head
 Then open:
 
 - API docs (Swagger UI): http://localhost:8000/docs
-- Neo4j browser: http://localhost:7474
+- FalkorDB browser: http://localhost:3000
 - NATS monitor: http://localhost:8222
 
 ### Without Docker
@@ -185,7 +185,7 @@ Key environment variables (see [`env.template`](env.template) for the full list)
 | `ATE_CLOUD_QDRANT_URL` | `http://localhost:6333` | Qdrant vector DB URL |
 | `ATE_SIMULATION_MODE` | `false` | Use simulation drivers (no hardware) |
 | `ATE_DEV_MODE` | `false` | Enable debug features / relaxed checks |
-| `NEO4J_URL` / `NEO4J_PASSWORD` | `bolt://localhost:7687` / `atestudio` | Neo4j connection |
+| `FALKORDB_URL` / `FALKORDB_GRAPH` / `FALKORDB_PASSWORD` | `redis://localhost:6379` / `fmea` / _(empty)_ | FalkorDB graph DB (Redis RESP, port 6379); password empty = no auth |
 | `JWT_SECRET` / `JWT_ALGORITHM` | — / `RS256` | JWT signing key and algorithm |
 | `OPENAI_API_KEY` / `OPENAI_BASE_URL` | — | LLM credentials (OpenAI, DashScope/Qwen, …) |
 | `OPENAI_MODEL` / `OPENAI_EMBEDDING_MODEL` | `gpt-4o-mini` / `text-embedding-3-small` | Chat & embedding models |
@@ -198,7 +198,7 @@ Key environment variables (see [`env.template`](env.template) for the full list)
 ```bash
 # Backend dependencies (include the optional extras when needed)
 uv sync --group dev
-uv sync --extra openhtf --extra debug     # optional: OpenHTF, debugpy
+uv sync --extra openhtf                   # optional: OpenHTF adapter
 
 # Database migrations
 uv run alembic upgrade head
@@ -222,10 +222,10 @@ npm run generate:types                    # regenerate DSL TS types from shared/
 
 | Profile | Services | Use case |
 |---------|----------|----------|
-| `dev` | nats + qdrant + neo4j + ate-cloud + ate-platform | Full-stack development |
-| `cloud` | nats + qdrant + neo4j + ate-cloud | Cloud-only deployment |
+| `dev` | nats + qdrant + falkordb + ate-cloud + ate-platform | Full-stack development |
+| `cloud` | nats + qdrant + falkordb + ate-cloud | Cloud-only deployment |
 
-For bare-metal deployment, run the same services (NATS, Qdrant, Neo4j, `ate_cloud`) via systemd/nohup on the target host; set `PYTHONPATH=src` when launching uvicorn.
+For bare-metal deployment, run the same services (NATS, Qdrant, FalkorDB, `ate_cloud`) via systemd/nohup on the target host; set `PYTHONPATH=src` when launching uvicorn. FalkorDB runs as a Redis 8 server with the `falkordb.so` module loaded on port 6379 (see [`docs/部署手册-192.168.5.24调试服务器.md`](docs/部署手册-192.168.5.24调试服务器.md)).
 
 ---
 

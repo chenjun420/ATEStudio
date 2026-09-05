@@ -32,6 +32,7 @@ from ..simulation.fault_injector import SchedulerFaultError
 from ..types import Condition, LoopResult, StepStatus
 from .adaptive_skip import AdaptiveConditionEvaluator, SkipConditions
 from .condition_evaluator import ConditionEvaluator
+from .edge_breakpoints import EdgeBreakpointEngine, build_variable_snapshot
 from .event_bus import Event, EventBus, EventType
 from .resource_manager import ResourceManager
 from .step_registry import StepRegistry
@@ -141,6 +142,7 @@ class ScannerScheduler:
         instrument_reset_callback: Callable[[], Awaitable[None]] | None = None,
         fault_injector: FaultInjector | None = None,
         uut_manager: UUTManager | None = None,
+        breakpoint_engine: EdgeBreakpointEngine | None = None,
     ) -> None:
         """Initialize the scanner scheduler.
 
@@ -267,6 +269,11 @@ class ScannerScheduler:
         self._step_mode_origin: str | None = None
         self._last_dispatched_step: str | None = None
         self._step_positions: dict[str, StepPosition] = {}
+
+        # T39/T40 边缘自评估断点（task 20）：持有云端下发的断点定义，
+        # 在步骤派发门处与步进模式共用同一个 pause/resume 门控。
+        # None 表示本次运行未武装边缘断点（无头/无交互路径直通，不挂起）。
+        self._breakpoint_engine: EdgeBreakpointEngine | None = breakpoint_engine
 
         # §6.6 状态快照与崩溃恢复
         self._instrument_reset_callback: Callable[[], Awaitable[None]] | None = (
@@ -746,6 +753,12 @@ class ScannerScheduler:
         """
         from shared.events import StepStartedData
 
+        # 暂停（断点命中 / 单步挂起 / 操作员 pause）时看门狗绝不派发——
+        # 否则暂停期间独立就绪的步骤会绕过 pause 门跑飞。保持心跳/扫描
+        # 活性（本方法立即返回，scan loop 继续 tick），只是不分发。
+        if self._paused:
+            return
+
         # Get all steps that are ready to execute
         ready_steps = self._registry.get_ready_steps(
             variable_space=self._variable_space,
@@ -763,13 +776,6 @@ class ScannerScheduler:
                 await self._handle_step_skipped(step_id, reason)
                 continue
 
-            # Get condition for the step (if any)
-            condition = self._registry.get_condition(step_id)
-
-            # Verify condition is actually met (double-check)
-            if condition is not None and not self._check_condition(condition):
-                continue
-
             # T2 UUT 亲和门：specific 亲和的步骤等所指 UUT 槽位空闲
             # （在故障注入之前 —— 注入计数应反映真实派发尝试）
             if not self._can_schedule(step_id):
@@ -778,6 +784,26 @@ class ScannerScheduler:
             # §7.7 调度层故障注入：命中则按失败处理，跳过本次派发
             if await self._check_scheduler_fault(step_id):
                 continue
+
+            # 共享派发门（与反应式 _dispatch_step 同一个）：暂停或命中
+            # 步骤/边缘(条件)断点时绝不派发。看门狗是周期性安全网而非
+            # 派发任务，命中只发 BREAKPOINT_HIT 并 arm pause() 后立即结束
+            # 本次扫描（不阻塞看门狗——心跳仍要继续）；后续扫描见顶端
+            # is_paused 即整体短路，resume() 放行后下一轮扫描正常派发。
+            # 命中/暂停时不标记 notified/pending，故放行后同一步骤可被重评。
+            if await self._gate_before_dispatch(step_id) != "dispatch":
+                break
+
+            # Get condition for the step (if any) — used for the STEP_STARTED
+            # event below. Readiness was already established by
+            # get_ready_steps() above, which builds a FRESH ConditionEvaluator
+            # from current step statuses on every call; do NOT re-check here
+            # with self._evaluator — that evaluator is built once with an empty
+            # step map and never refreshed, so its evaluate() is permanently
+            # False for step-status conditions (it would stall every
+            # condition-gated step that only the watchdog reaches, e.g. the
+            # step re-dispatched after an edge-breakpoint resume).
+            condition = self._registry.get_condition(step_id)
 
             # Mark as pending to prevent double-dispatch
             self._pending_dispatch.add(step_id)
@@ -865,15 +891,28 @@ class ScannerScheduler:
         try:
             from shared.events import StepStartedData
 
-            # 暂停时阻塞直到 resume()（F5）
+            # 暂停时阻塞直到 resume()（F5）。反应式派发是专用派发任务，
+            # 可以/必须在暂停门处挂起；看门狗 _emergency_scan 走同一个
+            # _gate_before_dispatch 判定但不阻塞（它必须保持心跳）。
             await self._pause_event.wait()
 
-            # T40 步进模式门：武装了步进模式时，先判定本步骤是否是
-            # 该模式的停靠点 —— 是则消费模式并重新暂停（不派发）。
-            if self._step_mode is not None and self._should_pause_for_step_mode(step_id):
-                self._consume_step_mode()
-                self.pause()
+            # 共享派发门（与 _emergency_scan 同一个，两条路径永不分叉）：
+            # T40 步进模式停靠 + T39 步骤/边缘(条件)断点。门内只判定并
+            # arm pause()（断点还发 BREAKPOINT_HIT），不阻塞。
+            gated = await self._gate_before_dispatch(step_id)
+            if gated == "step-mode-stop":
+                # 步进停靠：门已消费模式并 re-pause。反应式任务直接放弃
+                # 本次派发（不挂起）；resume/下一次 arm 后由扫描重新驱动。
                 logger.debug("Step mode stop before %s — re-paused", step_id)
+                return
+            if gated == "paused-at-breakpoint":
+                # 断点命中：门已发 BREAKPOINT_HIT 并 arm pause()。作为派发
+                # 任务挂起直到 resume()，随后放弃本次派发——断点已发射不
+                # 重复命中，resume 后由下一次派发/看门狗驱动该步骤。
+                await self._pause_event.wait()
+                return
+            if gated != "dispatch":
+                # 门判定为已暂停（"paused"）——不放行任何派发。
                 return
 
             # Verify step is still pending (status might have changed)
@@ -1430,11 +1469,21 @@ class ScannerScheduler:
         """
         from ..executor.loop_executor import LoopExecutor
 
+        async def _breakpoint_hook(step: Any) -> None:
+            # 断点命中：复用既有 pause/step 门控（T39/T40）。arm pause()
+            # 清除 _pause_event，随后阻塞至操作员 resume() 置位放行——不
+            # 新造门控。无人值守路径不经过本调度器（无头仿真用
+            # V32PlanDispatcher 且不注入钩子），故不会挂起。
+            logger.info("Breakpoint '%s' hit; pausing scheduler until resume", step.id)
+            self.pause()
+            await self._pause_event.wait()
+
         # Create a LoopExecutor with the scheduler's step executor
         loop_executor = LoopExecutor(
             executor=self._step_executor,
             event_bus=self._event_bus,
             variable_space=self._variable_space,
+            breakpoint_hook=_breakpoint_hook,
         )
 
         # Mark the loop step as RUNNING in the registry
@@ -1568,6 +1617,76 @@ class ScannerScheduler:
         if mode == "out":
             return candidate.depth < origin.depth
         return False
+
+    async def _gate_before_dispatch(self, step_id: str) -> str:
+        """共享的步骤派发前门控 —— 反应式 ``_dispatch_step`` 与看门狗
+        ``_emergency_scan`` 派发任何步骤前都必须调用本方法，保证两条路径
+        对暂停/步进/断点的判定永不分叉。
+
+        本方法只做**判定与状态武装**，绝不阻塞：
+        - 暂停（断点/单步/操作员 pause）→ 返回 ``"paused"``，不分发。
+        - T40 步进模式停靠点 → 消费模式并 re-pause，返回 ``"step-mode-stop"``。
+        - T39 步骤/边缘(条件)断点命中 → 发布携带变量快照的 BREAKPOINT_HIT
+          并 ``pause()``，返回 ``"paused-at-breakpoint"``。
+        - 其余 → 返回 ``"dispatch"``。
+
+        反应式派发任务在 ``"paused-at-breakpoint"`` 时另外阻塞在
+        ``_pause_event`` 上直到 resume()（它本就是挂起等待的派发协程）；
+        看门狗周期扫描不能阻塞（心跳/WatchDog 依赖它继续 tick），故命中即
+        立即返回、由后续扫描在暂停时短路、resume 后再派发。
+
+        Args:
+            step_id: 即将派发的步骤 id。
+
+        Returns:
+            ``"dispatch"`` | ``"paused"`` | ``"step-mode-stop"`` |
+            ``"paused-at-breakpoint"``。
+        """
+        # (a) 调度器已暂停（断点活动 / 单步挂起 / 操作员 pause）→ 不分发。
+        if self._paused:
+            return "paused"
+
+        # T40 步进模式门：武装了步进模式时，先判定本步骤是否是该模式的
+        # 停靠点 —— 是则消费模式并重新暂停（不派发）。
+        if self._step_mode is not None and self._should_pause_for_step_mode(step_id):
+            self._consume_step_mode()
+            self.pause()
+            return "step-mode-stop"
+
+        # T39 步骤/边缘(条件)断点：命中则发 BREAKPOINT_HIT（携带变量快照）
+        # 并 arm 同一个 pause 门 —— 与 T40 步进模式、DSL BREAKPOINT 步骤
+        # 共用 pause()/_pause_event/resume()，不新造门控。未武装/未命中直通。
+        engine = self._breakpoint_engine
+        if engine is not None:
+            snapshot = build_variable_snapshot(self._variable_space)
+            bp = engine.check_step(step_id, snapshot)
+            if bp is not None:
+                logger.info(
+                    "Edge breakpoint %s (%s=%s) hit before step %s — suspending on the "
+                    "pause gate until resume",
+                    bp.id, bp.kind, bp.target, step_id,
+                )
+
+                from shared.events import BreakpointHitData
+
+                await self._event_bus.publish(
+                    EventType.BREAKPOINT_HIT,
+                    asdict(BreakpointHitData(
+                        breakpoint_id=bp.id,
+                        kind=bp.kind,
+                        target=bp.target,
+                        step_id=step_id,
+                        variables=snapshot,
+                    )),
+                )
+
+                # Arm the existing pause gate (clears _pause_event). The
+                # reactive dispatch task blocks on it; the periodic watchdog
+                # scan returns immediately and skips dispatch until resume().
+                self.pause()
+                return "paused-at-breakpoint"
+
+        return "dispatch"
 
     async def handle_step_result(self, step_id: str, status: StepStatus) -> bool:
         """根据步骤结果决策是否重试/重复（F5，§6.4 决策矩阵）。

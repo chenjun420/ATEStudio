@@ -32,7 +32,6 @@ import {
   ElTable,
   ElTableColumn,
   ElTag,
-  type TableColumnCtx,
 } from 'element-plus'
 import { useStations, type WorkerStatus } from '@/composables/useStations'
 import {
@@ -243,8 +242,12 @@ const filterHandler: FilterHandler = handleFilterChange
 
 // ─── Expand row ─────────────────────────────────────────────────────────────
 
-async function handleExpandChange(row: WorkerInfo, expanded: WorkerInfo[]): void {
-  const isExpanded = expanded.some((r) => r.worker_id === row.worker_id)
+// el-table emits expand-change with either the expanded-rows array or a
+// boolean depending on the trigger; accept both and narrow here.
+async function handleExpandChange(row: WorkerInfo, expanded: WorkerInfo[] | boolean): Promise<void> {
+  const isExpanded = Array.isArray(expanded)
+    ? expanded.some((r) => r.worker_id === row.worker_id)
+    : expanded
   if (isExpanded) {
     await fetchWorkerDetail(row.worker_id)
     // Draw chart after data loads and DOM updates
@@ -571,13 +574,6 @@ watch(workerDetails, () => {
 onMounted(() => {
   void loadAllBindings()
 })
-
-// ─── Type for table column scope ────────────────────────────────────────────
-
-type Scope = {
-  row: WorkerInfo
-  $index: number
-}
 </script>
 
 <template>
@@ -672,7 +668,7 @@ type Scope = {
       >
         <!-- Expand column -->
         <ElTableColumn type="expand" data-testid="col-expand">
-          <template #default="{ row }: Scope">
+          <template #default="{ row }">
             <div class="sm-expand-panel" :data-testid="`expand-${row.worker_id}`">
               <!-- Heartbeat history chart -->
               <div class="sm-expand-section">
@@ -750,7 +746,7 @@ type Scope = {
           width="180"
           data-testid="col-worker-id"
         >
-          <template #default="{ row }: Scope">
+          <template #default="{ row }">
             <span class="sm-worker-id">{{ row.worker_id }}</span>
           </template>
         </ElTableColumn>
@@ -771,7 +767,7 @@ type Scope = {
           :sort-method="sortByStatus"
           data-testid="col-status"
         >
-          <template #default="{ row }: Scope">
+          <template #default="{ row }">
             <ElTag :type="statusTagType(computeStatus(row))" size="small">
               {{ statusLabel(computeStatus(row)) }}
             </ElTag>
@@ -784,7 +780,7 @@ type Scope = {
           width="180"
           data-testid="col-binding"
         >
-          <template #default="{ row }: Scope">
+          <template #default="{ row }">
             <ElTag :type="bindingTagType(row.worker_id)" size="small">
               {{ bindingStatusLabel(row.worker_id) }}
             </ElTag>
@@ -797,8 +793,8 @@ type Scope = {
           width="140"
           data-testid="col-current-task"
         >
-          <template #default="{ row }: Scope">
-            <span class="sm-task-info">{{ formatCurrentTask(row) }}</span>
+          <template #default="{ row }">
+            <span class="sm-task-info">{{ formatCurrentTask(row as WorkerInfo) }}</span>
           </template>
         </ElTableColumn>
 
@@ -808,8 +804,8 @@ type Scope = {
           width="140"
           data-testid="col-version"
         >
-          <template #default="{ row }: Scope">
-            <span class="sm-version">{{ formatVersion(row) }}</span>
+          <template #default="{ row }">
+            <span class="sm-version">{{ formatVersion(row as WorkerInfo) }}</span>
           </template>
         </ElTableColumn>
 
@@ -821,7 +817,7 @@ type Scope = {
           :sort-method="sortByHeartbeat"
           data-testid="col-heartbeat"
         >
-          <template #default="{ row }: Scope">
+          <template #default="{ row }">
             <span class="sm-heartbeat">{{ formatHeartbeat(row.last_heartbeat) }}</span>
           </template>
         </ElTableColumn>
@@ -833,12 +829,12 @@ type Scope = {
           fixed="right"
           data-testid="col-actions"
         >
-          <template #default="{ row }: Scope">
+          <template #default="{ row }">
             <div class="sm-actions">
               <ElButton
                 v-if="hasScope('node:write')"
                 size="small"
-                @click="openConfigDialog(row)"
+                @click="openConfigDialog(row as WorkerInfo)"
                 data-testid="btn-config"
               >
                 配置
@@ -848,7 +844,7 @@ type Scope = {
                 size="small"
                 type="warning"
                 :loading="actionLoading.get(row.worker_id) === 'restart'"
-                @click="handleRestart(row)"
+                @click="handleRestart(row as WorkerInfo)"
                 data-testid="btn-restart"
               >
                 重启
@@ -858,7 +854,7 @@ type Scope = {
                 size="small"
                 type="primary"
                 :loading="actionLoading.get(row.worker_id) === 'sync'"
-                @click="handleSync(row)"
+                @click="handleSync(row as WorkerInfo)"
                 data-testid="btn-sync"
               >
                 同步
@@ -867,7 +863,7 @@ type Scope = {
                 v-if="hasScope('flow:write')"
                 size="small"
                 type="info"
-                @click="openBindDialog(row)"
+                @click="openBindDialog(row as WorkerInfo)"
                 data-testid="btn-bind-flow"
               >
                 绑定流程
@@ -878,7 +874,7 @@ type Scope = {
                 type="success"
                 :disabled="!hasActiveBinding(row.worker_id)"
                 :loading="actionLoading.get(row.worker_id) === 'execute'"
-                @click="handleExecute(row)"
+                @click="handleExecute(row as WorkerInfo)"
                 data-testid="btn-execute"
               >
                 执行
@@ -888,7 +884,7 @@ type Scope = {
                 size="small"
                 type="danger"
                 :loading="actionLoading.get(row.worker_id) === 'delete'"
-                @click="handleDelete(row)"
+                @click="handleDelete(row as WorkerInfo)"
                 data-testid="btn-delete"
               >
                 删除

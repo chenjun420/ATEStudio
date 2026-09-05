@@ -1,8 +1,10 @@
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref, shallowRef, onMounted, onBeforeUnmount } from 'vue'
 import { Graph, Scroller, Selection, Keyboard, History, Clipboard, Snapline } from '@antv/x6'
 
 export function useGraph(containerId: string) {
-  const graph = ref<Graph | null>(null)
+  // X6 Graph holds class instances; shallowRef prevents Vue's deep UnwrapRef
+  // from stripping protected members and breaking method signatures.
+  const graph = shallowRef<Graph | null>(null)
   const container = ref<HTMLElement | null>(null)
 
   const initGraph = () => {

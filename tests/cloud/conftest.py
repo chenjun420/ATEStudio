@@ -10,11 +10,21 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import StaticPool
 
 from ate_cloud.main import create_app
 from ate_cloud.models import Base
 
-# Test database URL - SQLite in-memory with async driver
+# Test database URL - SQLite in-memory with async driver.
+#
+# StaticPool + a single shared connection is REQUIRED for in-memory SQLite:
+# each connection to ``sqlite+aiosqlite:///:memory:`` otherwise gets its own
+# private, empty database. Most tests use one connection, but tests that run
+# the real background poll loop (e.g. HealthMonitorService) open a SECOND,
+# concurrent session/connection from the same engine — without StaticPool that
+# connection cannot see the tables created here ("no such table") and the
+# worker-heartbeat records never persist. StaticPool pins the engine to one
+# underlying connection so all sessions share the in-memory schema and data.
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 
 
@@ -49,6 +59,7 @@ async def test_engine() -> AsyncGenerator[AsyncEngine, None]:
     engine = create_async_engine(
         TEST_DATABASE_URL,
         echo=False,
+        poolclass=StaticPool,
     )
 
     # Create all tables

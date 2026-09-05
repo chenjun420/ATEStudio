@@ -84,6 +84,7 @@ export default {
     settings: 'Settings',
     productChangeover: 'Product Changeover',
     calibration: 'Calibration',
+    fmea: 'FMEA Management',
     userManagement: 'User Management',
   },
   settings: {

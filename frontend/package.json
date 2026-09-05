@@ -7,6 +7,8 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
+    "typecheck": "vue-tsc --noEmit",
+    "test": "vitest run",
     "generate:types": "python ../scripts/generate_dsl_types.py"
   },
   "devDependencies": {
@@ -22,7 +24,8 @@
     "typescript": "~6.0.2",
     "vite": "^8.1.1",
     "vite-plugin-monaco-editor": "^1.1.0",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.10",
+    "vue-tsc": "^3.3.11"
   },
   "dependencies": {
     "@antv/x6": "^3.1.7",

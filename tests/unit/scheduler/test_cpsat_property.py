@@ -18,10 +18,18 @@ hold for *any* valid input:
 from __future__ import annotations
 
 import pytest
-from hypothesis import given, settings
-from hypothesis import strategies as st
 
-from shared.dsl import YamlStep
+# Hypothesis is an optional test dependency. When it is not installed (minimal
+# venv) skip this module cleanly at collection instead of raising
+# ModuleNotFoundError (which would ERROR the whole suite). The property tests
+# collect and run normally wherever hypothesis (and OR-Tools, guarded below)
+# are present.
+pytest.importorskip("hypothesis")
+
+from hypothesis import given, settings  # noqa: E402
+from hypothesis import strategies as st  # noqa: E402
+
+from shared.dsl import YamlStep  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Skip if OR-Tools is not installed (mirrors tests/scheduler/test_cpsat.py)

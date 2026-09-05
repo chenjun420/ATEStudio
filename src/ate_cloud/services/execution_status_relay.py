@@ -70,6 +70,7 @@ class ExecutionStatusRelay:
         sse_bridge: SSEBridge,
         async_session_factory: Callable[[], AsyncSession],
         breakpoint_registry: Any | None = None,
+        failure_indexer: Any | None = None,
     ) -> None:
         """Initialize the relay.
 
@@ -83,11 +84,21 @@ class ExecutionStatusRelay:
                 When provided, every status event is matched against the run's
                 breakpoints; hits publish a SSE BREAKPOINT_HIT event and reuse
                 the existing pause control contract.
+            failure_indexer: Optional FailureIndexer. When provided, every
+                consumed status event is handed to
+                ``failure_indexer.handle_status_event()`` AFTER the durable DB
+                update and SSE push succeed. This is how real edge failures
+                (STEP_FAILED, EXECUTION_COMPLETED(FAILED)) and SPC
+                ALARM_RAISED events reach the Qdrant failure index — the
+                indexer wraps ``publish_event`` (cloud-originated events),
+                but edge events arrive via this relay's pull consumer.
+                Indexing is fire-and-forget and never affects ack/nak.
         """
         self._nc = nats_client
         self._sse_bridge = sse_bridge
         self._session_factory = async_session_factory
         self._breakpoints = breakpoint_registry
+        self._failure_indexer = failure_indexer
         self._psub: JetStreamContext.PullSubscription | None = None
         self._running = False
 
@@ -192,6 +203,17 @@ class ExecutionStatusRelay:
                 event.get("run_id"), e,
             )
             await msg.nak()
+            return
+
+        # Post-ack side channel: hand the event to the failure indexer.
+        # This MUST stay outside the ack/nak try/except — indexing is
+        # non-durable, fire-and-forget (it schedules its own background task)
+        # and must never trigger a redelivery or duplicate DB work.
+        if self._failure_indexer is not None:
+            try:
+                self._failure_indexer.handle_status_event(event)
+            except Exception as e:
+                logger.warning("Failure indexer rejected status event: %s", e)
 
     async def _update_db(self, event: dict[str, Any]) -> None:
         """Update the Execution DB record with the status event.

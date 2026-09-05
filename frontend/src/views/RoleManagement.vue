@@ -15,7 +15,6 @@ import {
   ElSwitch,
   ElMessage,
   ElMessageBox,
-  ElAlert,
 } from 'element-plus'
 import {
   listRoles,
@@ -204,7 +203,7 @@ onMounted(() => {
       </el-table-column>
       <el-table-column :label="t('common.actions')" width="160">
         <template #default="{ row }">
-          <el-button v-if="hasScope('admin')" size="small" @click="openEditDialog(row)">
+          <el-button v-if="hasScope('admin')" size="small" @click="openEditDialog(row as Role)">
             {{ t('common.edit') }}
           </el-button>
           <el-button
@@ -212,7 +211,7 @@ onMounted(() => {
             size="small"
             type="danger"
             :disabled="row.is_system"
-            @click="handleDelete(row)"
+                @click="handleDelete(row as Role)"
           >
             {{ t('common.delete') }}
           </el-button>

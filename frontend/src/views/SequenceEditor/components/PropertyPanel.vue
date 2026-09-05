@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { inject, computed, watch, ref, provide } from 'vue'
+import { inject, computed, watch, ref, shallowRef } from 'vue'
 import type { Ref, ShallowRef } from 'vue'
 import type { Graph, Node } from '@antv/x6'
 import { isScriptStepData, isVariableData, isLoopContainerData, type ScriptStepData, type VariableData, type LoopContainerData } from '@/models/nodes/types'
@@ -15,21 +15,19 @@ const emit = defineEmits<{
   'edit-script': [payload: { scriptId: string; scriptName: string }]
 }>()
 
-// Get selected node ID and graph instance from parent
-const selectedNodeId = inject<Ref<string | null>>('selectedNodeId')
-const graphInstance = inject<ShallowRef<Graph | null>>('graphInstance')
+// Get selected node ID and graph instance from parent.
+// Default refs keep these defined when the panel is mounted standalone.
+const selectedNodeId = inject<Ref<string | null>>('selectedNodeId', ref<string | null>(null))
+const graphInstance = inject<ShallowRef<Graph | null>>('graphInstance', shallowRef<Graph | null>(null))
 
 // Batch edit mode state (injected from parent or managed locally)
-const batchNodeIds = inject<Ref<string[]>>('batchNodeIds', ref([]))
+const batchNodeIds = inject<Ref<string[]>>('batchNodeIds', ref<string[]>([]))
 
 // Template dialog state
 const showTemplateDialog = ref(false)
 
 // Batch edit composable
 const {
-  isBatchMode,
-  hasSelection,
-  selectionCount,
   getCommonProperties,
   applyBatchEdits,
   batchDelete,
@@ -112,7 +110,7 @@ const nodeData = computed<unknown>(() => {
 const nodeCategory = computed<'script-step' | 'variable' | 'loop-container' | 'unknown'>(() => {
   if (nodeType.value === 'script-step-node' || isScriptStepData(nodeData.value)) return 'script-step'
   if (nodeType.value === 'variable-node' || isVariableData(nodeData.value)) return 'variable'
-  if (nodeType.value === 'loop-container-node' || (nodeData.value && isLoopContainerData(nodeData.value as any))) return 'loop-container'
+  if (nodeType.value === 'loop-container-node' || isLoopContainerData(nodeData.value)) return 'loop-container'
   return 'unknown'
 })
 
@@ -269,7 +267,7 @@ watch(selectedNodeId, (newId) => {
     scriptPreviewContent.value = ''
     scriptPreviewError.value = null
     resolvedScriptId.value = null
-  } else if (isLoopContainerData(data as any)) {
+  } else if (isLoopContainerData(data)) {
     localLoopData.value = { ...data }
     localScriptData.value = null
     localVariableData.value = null
@@ -291,7 +289,7 @@ watch(nodeData, (newData) => {
     if (JSON.stringify(newData) !== JSON.stringify(localVariableData.value)) {
       localVariableData.value = { ...newData, variables: { ...newData.variables } }
     }
-  } else if (newData && isLoopContainerData(newData as any) && localLoopData.value) {
+  } else if (newData && isLoopContainerData(newData) && localLoopData.value) {
     if (JSON.stringify(newData) !== JSON.stringify(localLoopData.value)) {
       localLoopData.value = { ...newData }
     }

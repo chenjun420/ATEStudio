@@ -1,10 +1,21 @@
 """Failure Indexer — indexes failed test execution events in Qdrant for RAG diagnosis.
 
-Subscribes to STEP_FAILED and EXECUTION_COMPLETED (result=FAILED) events,
-extracts metadata, embeds text via DeepAgents-compatible embedding,
-and stores in Qdrant for similarity search of past failures.
+Subscribes to STEP_FAILED, EXECUTION_COMPLETED (result=FAILED), and SPC
+ALARM_RAISED events, extracts metadata, embeds text via the injected
+EmbeddingService, and stores in Qdrant for similarity search of past failures.
 
-All indexing is non-blocking — failures are logged but never interrupt execution.
+Two entry points feed the indexer:
+
+1. ``handle_status_event(raw_event)`` — the relay/queue path. The edge
+   publishes ``{"type": "<EVENT_TYPE>", "data": {...}}`` envelopes on
+   ate.status.*; ExecutionStatusRelay forwards every consumed status event
+   here after its durable DB update + SSE push. This is the path real edge
+   failures and SPC alarms travel.
+2. ``subscribe_to_events(bridge)`` — wraps ``SSEBridge.publish_event`` for
+   events originated inside the cloud (local mode / API-published events).
+
+All indexing is non-blocking — failures are logged but never interrupt the
+event path.
 """
 
 from __future__ import annotations
@@ -12,7 +23,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
 from ate_cloud.config import settings
@@ -21,7 +32,8 @@ from shared.events import Event, EventType
 
 logger = logging.getLogger(__name__)
 
-# Fields to extract from STEP_FAILED / EXECUTION_COMPLETED event data
+# Fields to extract from STEP_FAILED / EXECUTION_COMPLETED event data,
+# plus SPC ALARM_RAISED payload fields.
 _METADATA_FIELDS: list[str] = [
     "sequence_yaml",
     "failed_step_id",
@@ -32,6 +44,15 @@ _METADATA_FIELDS: list[str] = [
     "run_id",
     "plan_name",
     "status",
+    # SPC ALARM_RAISED payload (see services/spc.py _index_alert_async)
+    "alarm_id",
+    "product_type",
+    "measurement_name",
+    "rule",
+    "severity",
+    "message",
+    "value",
+    "sample_count",
 ]
 
 
@@ -72,6 +93,22 @@ class FailureIndexer:
         self._embedding_service = embedding_service
         self._collection_name = collection_name or settings.qdrant_collection_failures
         self._embedding_dim = embedding_dim or settings.embedding_dimensions
+        # Best-effort automatic KG-evolution hook (task 16). Set via
+        # set_evolution_trigger; when unset, indexing behaves exactly as before.
+        self._evolution_hook: Callable[[dict[str, Any]], Awaitable[bool]] | None = None
+
+    def set_evolution_trigger(
+        self,
+        hook: Callable[[dict[str, Any]], Awaitable[bool]] | None,
+    ) -> None:
+        """Register the best-effort auto KG-evolution hook (or None to disable).
+
+        The hook is awaited AFTER a failure is persisted to the failure index
+        and must return ``True`` on success / ``False`` on a degraded skip.
+        It MUST NOT raise — failures are swallowed here as a backstop so
+        evolution can never break indexing.
+        """
+        self._evolution_hook = hook
 
     async def ensure_collection(self) -> None:
         """Create Qdrant collection if it does not exist."""
@@ -102,8 +139,9 @@ class FailureIndexer:
     def index_failure(self, event: Event) -> None:
         """Index a failure event in Qdrant (non-blocking).
 
-        Extracts metadata from STEP_FAILED or EXECUTION_COMPLETED(result=FAILED)
-        events, computes embedding, and stores in Qdrant.
+        Extracts metadata from STEP_FAILED, EXECUTION_COMPLETED(result=FAILED),
+        or ALARM_RAISED events, computes an embedding, and stores the point in
+        Qdrant.
 
         Runs in the background via asyncio.create_task — errors are logged but
         never raised to the caller.
@@ -116,12 +154,43 @@ class FailureIndexer:
 
         asyncio.create_task(self._index_failure_async(event))
 
+    def handle_status_event(self, raw_event: dict[str, Any]) -> None:
+        """Relay/queue entry point: index failures from a raw status envelope.
+
+        The edge publishes status messages on ate.status.* as
+        ``{"type": "<EVENT_TYPE>", "data": {...}}`` (the same envelope
+        SSEBridge queues). ExecutionStatusRelay calls this for every consumed
+        message AFTER the durable DB update and SSE push, so indexing never
+        affects ack/nak or DB semantics. Only STEP_FAILED,
+        EXECUTION_COMPLETED(FAILED), and ALARM_RAISED are indexed; other
+        event types are a cheap no-op.
+
+        Failures (unknown event type, missing data) are swallowed — indexing
+        must never break the relay path.
+
+        Args:
+            raw_event: Raw status event dict with ``type`` and ``data`` keys.
+        """
+        try:
+            raw_data = raw_event.get("data")
+            data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
+            event = Event(
+                type=EventType(str(raw_event.get("type", ""))),
+                data=data,
+            )
+        except (ValueError, KeyError, TypeError):
+            # Unknown/unparseable event type — not indexable.
+            return
+        if self._should_index(event):
+            self.index_failure(event)
+
     def _should_index(self, event: Event) -> bool:
-        """Check whether this event should be indexed as a failure.
+        """Check whether this event should be indexed as a failure/alarm.
 
         Returns True for:
           - STEP_FAILED events
           - EXECUTION_COMPLETED events with status == "FAILED"
+          - ALARM_RAISED events (SPC process alarms)
         """
         if event.type == EventType.STEP_FAILED:
             return True
@@ -129,6 +198,8 @@ class FailureIndexer:
             data = event.data
             status = str(data.get("status", "")).upper() if isinstance(data, dict) else ""
             return status == "FAILED"
+        if event.type == EventType.ALARM_RAISED:
+            return True
         return False
 
     async def _index_failure_async(self, event: Event) -> None:
@@ -158,8 +229,22 @@ class FailureIndexer:
                 metadata.get("run_id"),
                 metadata.get("failed_step_id"),
             )
+            # Automatic failure→KG evolution (task 16). Best-effort and
+            # awaited-but-non-fatal: the hook swallows its own failures; the
+            # backstop here guarantees evolution can never break indexing.
+            await self._trigger_evolution(metadata)
         except Exception as e:
             logger.error("Failed to index failure event: %s", e, exc_info=True)
+
+    async def _trigger_evolution(self, metadata: dict[str, Any]) -> None:
+        """Invoke the auto KG-evolution hook (best-effort; never raises)."""
+        hook = self._evolution_hook
+        if hook is None:
+            return
+        try:
+            await hook(metadata)
+        except Exception as e:  # noqa: BLE001 — indexing must survive evolution errors
+            logger.warning("Auto KG evolution hook failed (indexing unaffected): %s", e)
 
     def _extract_metadata(self, event: Event) -> dict[str, Any]:
         """Extract metadata from event data.
@@ -184,13 +269,26 @@ class FailureIndexer:
     def _build_embed_text(self, metadata: dict[str, Any]) -> str:
         """Build text to embed from extracted metadata.
 
-        Concatenates: failed_step_name + error_message + variable_snapshot.
+        Concatenates: failed_step_name + error_message + variable_snapshot
+        for execution failures; for SPC alarms (ALARM_RAISED) it uses the
+        measurement name, rule, and alarm message.
         """
         parts: list[str] = []
         step_name = metadata.get("failed_step_name") or metadata.get("failed_step_id", "")
         if step_name:
             parts.append(str(step_name))
-        error_msg = metadata.get("error_message") or metadata.get("error", "")
+        measurement = metadata.get("measurement_name")
+        if measurement:
+            parts.append(str(measurement))
+        rule = metadata.get("rule")
+        if rule:
+            parts.append(str(rule))
+        error_msg = (
+            metadata.get("error_message")
+            or metadata.get("message")
+            or metadata.get("error")
+            or ""
+        )
         if error_msg:
             parts.append(str(error_msg))
         var_snapshot = metadata.get("variable_snapshot")

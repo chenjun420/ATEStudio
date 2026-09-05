@@ -313,6 +313,25 @@ class BreakpointCreateRequest(BaseModel):
     condition: str | None = None
 
 
+class BreakpointUpdateRequest(BaseModel):
+    """Request body for PUT /api/v1/executions/{run_id}/breakpoints/{bp_id}.
+
+    Partial update of a typed breakpoint (T39). ``kind`` / ``target`` are
+    immutable identity attributes once armed (the breakpoint was registered
+    for a specific match semantics), so only the ``condition`` expression and
+    the ``enabled`` toggle are mutable. All fields optional; at least one must
+    be provided.
+
+    Attributes:
+        condition: New condition expression (only meaningful for the
+            ``condition`` kind; validated when present).
+        enabled: Active-state toggle — a disabled breakpoint never fires.
+    """
+
+    condition: str | None = None
+    enabled: bool | None = None
+
+
 class BreakpointResponse(BaseModel):
     """Response for a single typed breakpoint (T39)."""
 

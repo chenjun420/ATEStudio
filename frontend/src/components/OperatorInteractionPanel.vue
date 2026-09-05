@@ -37,11 +37,10 @@ import {
   ElSkeleton,
   ElDivider,
   ElTooltip,
-  ElIcon,
 } from 'element-plus'
 import { useOperatorInteraction } from '@/composables/useOperatorInteraction'
 import type { OperatorAction } from '@/composables/useOperatorInteraction'
-import type { OperatorStep, ResourceHealth } from '@/composables/useOperatorGuidance'
+import type { ResourceHealth } from '@/composables/useOperatorGuidance'
 import type { StepStatus } from '@/composables/useExecutionStatus'
 
 // ─── Props ───────────────────────────────────────────────────────────────────
@@ -73,7 +72,6 @@ const {
   currentStepIndex,
   currentStep,
   totalSteps,
-  stepStatuses,
   executionStatus,
   isRunning,
   progressText,

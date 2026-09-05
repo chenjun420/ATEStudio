@@ -74,8 +74,9 @@ class CompiledStep:
         fixture_id: Target fixture id for FIXTURE_CONTROL steps.
         then_ids: Branch taken-branch entry ids (BRANCH nodes only).
         else_ids: Branch skipped-branch entry ids (BRANCH nodes only).
-        condition: Branch condition expression (BRANCH) or WHILE condition
-            (deferred LOOP nodes).
+        condition: Branch condition expression (BRANCH), breakpoint suspend
+            condition (BREAKPOINT; None = unconditional hit), or WHILE
+            condition (deferred LOOP nodes).
         source_step_id: Original YamlStep/YamlLoop id this node came from.
         iteration: Innermost enclosing loop iteration index (None outside loops).
         export_outputs: Whether outputs export to plan-level scope.
@@ -326,7 +327,10 @@ class SequenceCompiler:
             else_ids = self._resolve_reference_list(item.params.get("else", []), frames)
         else:
             params = dict(item.params)
-            condition = None
+            # BREAKPOINT carries its optional suspend condition as a field;
+            # other step types have no compiled condition here (WHILE loops
+            # emit their own deferred LOOP node with condition).
+            condition = item.condition if item.type == StepType.BREAKPOINT else None
             then_ids = []
             else_ids = []
 

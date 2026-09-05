@@ -15,7 +15,7 @@ import logging
 import uuid
 from collections.abc import AsyncGenerator
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import ColumnElement, String, func, select
@@ -24,6 +24,7 @@ from sse_starlette import EventSourceResponse, ServerSentEvent
 
 from ate_cloud.config import settings
 from ate_cloud.db import get_db
+from ate_cloud.models.breakpoint import Breakpoint as BreakpointModel
 from ate_cloud.models.execution import Execution
 from ate_cloud.models.fault_event import SOURCE_LINK, SOURCE_MANUAL, FaultEvent
 from ate_cloud.nats.sse_bridge import SSEBridge
@@ -32,6 +33,7 @@ from ate_cloud.schemas.execution import (
     BreakpointDeleteResponse,
     BreakpointListResponse,
     BreakpointResponse,
+    BreakpointUpdateRequest,
     ExecutionAbortResponse,
     ExecutionControlResponse,
     ExecutionCreate,
@@ -1365,35 +1367,67 @@ async def inject_manual_fault(
 
 # ---------------------------------------------------------------------------
 # T39 typed simulation breakpoints (§8.4)
+#
+# Durable persistence: every typed breakpoint is stored in the ``breakpoints``
+# table (session_id == run_id, kind/target populated, legacy debug columns
+# empty). The DB is the source of truth — it survives restarts and is what the
+# edge will later receive (task 20). The in-memory BreakpointRegistry is a
+# write-through cache used ONLY for live in-process hit detection
+# (handle_status_event → SSE BREAKPOINT_HIT + NATS pause); it is never read by
+# the CRUD endpoints below.
 # ---------------------------------------------------------------------------
 
 
-@router.post("/{run_id}/breakpoints", response_model=BreakpointResponse)
-async def create_breakpoint(
+def _model_to_typed(row: BreakpointModel) -> TypedBreakpoint:
+    """Map a persisted T39 breakpoint row to its live registry value."""
+    return TypedBreakpoint(
+        id=row.id,
+        run_id=row.session_id,
+        kind=row.kind or "",
+        target=row.target or "",
+        condition=row.condition,
+        enabled=row.enabled,
+    )
+
+
+def _typed_to_model(bp: TypedBreakpoint) -> BreakpointModel:
+    """Map a T39 breakpoint value to its persisted row (debug columns empty)."""
+    return BreakpointModel(
+        id=bp.id,
+        session_id=bp.run_id,
+        kind=bp.kind,
+        target=bp.target,
+        step_id="",
+        node_id="",
+        line_number=0,
+        condition=bp.condition,
+        enabled=bp.enabled,
+        node_data=None,
+    )
+
+
+async def _get_persisted_breakpoint(
+    db: AsyncSession,
     run_id: str,
-    bp_data: BreakpointCreateRequest,
-    db: DBSession,
-    registry: RegistryDep,
-) -> BreakpointResponse:
-    """Register a typed breakpoint on a running execution (T39, §8.4).
+    bp_id: str,
+) -> BreakpointModel | None:
+    """Fetch a T39 breakpoint row scoped to ``run_id``.
 
-    Four kinds: ``step`` (step id) | ``instrument_call`` (resource.method) |
-    ``variable_change`` (scope.key) | ``condition`` (simpleeval-subset
-    expression evaluated server-side only). Validation errors surface as 422;
-    unknown runs 404; terminal-state runs 409.
-
-    Args:
-        run_id: The execution run identifier.
-        bp_data: kind + target (+ condition for the condition kind).
-        db: Database session.
-        registry: Typed breakpoint registry.
-
-    Returns:
-        BreakpointResponse with the generated breakpoint id.
-
-    Raises:
-        HTTPException: 404 unknown run / 409 terminal state / 422 validation.
+    Legacy debugpy rows (``kind IS NULL``) are excluded so the two breakpoint
+    shapes never collide on the shared table.
     """
+    result = await db.execute(
+        select(BreakpointModel).where(
+            BreakpointModel.id == bp_id,
+            BreakpointModel.session_id == run_id,
+            BreakpointModel.kind.is_not(None),
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def _require_active_execution(db: AsyncSession, run_id: str) -> None:
+    """404 on unknown run, 409 on a terminal-state run (breakpoints need a live run)."""
     result = await db.execute(select(Execution).where(Execution.id == run_id))
     execution = result.scalar_one_or_none()
     if not execution:
@@ -1407,6 +1441,37 @@ async def create_breakpoint(
             ),
         )
 
+
+@router.post("/{run_id}/breakpoints", response_model=BreakpointResponse)
+async def create_breakpoint(
+    run_id: str,
+    bp_data: BreakpointCreateRequest,
+    db: DBSession,
+    registry: RegistryDep,
+) -> BreakpointResponse:
+    """Register a typed breakpoint on a running execution (T39, §8.4).
+
+    Persists to the ``breakpoints`` table (durable) and write-through caches
+    the value in the in-memory registry for live hit detection. Four kinds:
+    ``step`` (step id) | ``instrument_call`` (resource.method) |
+    ``variable_change`` (scope.key) | ``condition`` (simpleeval-subset
+    expression evaluated server-side only). Validation errors surface as 422;
+    unknown runs 404; terminal-state runs 409.
+
+    Args:
+        run_id: The execution run identifier.
+        bp_data: kind + target (+ condition for the condition kind).
+        db: Database session.
+        registry: Typed breakpoint registry (live hit cache).
+
+    Returns:
+        BreakpointResponse with the generated breakpoint id.
+
+    Raises:
+        HTTPException: 404 unknown run / 409 terminal state / 422 validation.
+    """
+    await _require_active_execution(db, run_id)
+
     try:
         validate_breakpoint(bp_data.kind, bp_data.target, bp_data.condition)
     except ValueError as e:
@@ -1419,6 +1484,10 @@ async def create_breakpoint(
         target=bp_data.target.strip(),
         condition=(bp_data.condition or "").strip() or None,
     )
+
+    # Durable store first; only cache for live hits once persisted.
+    db.add(_typed_to_model(bp))
+    await db.commit()
     registry.add(bp)
     return BreakpointResponse(**bp.to_dict())
 
@@ -1426,41 +1495,171 @@ async def create_breakpoint(
 @router.get("/{run_id}/breakpoints", response_model=BreakpointListResponse)
 async def list_breakpoints(
     run_id: str,
-    registry: RegistryDep,
+    db: DBSession,
 ) -> BreakpointListResponse:
-    """List typed breakpoints registered for a run (T39).
+    """List typed breakpoints persisted for a run (T39, durable source of truth).
 
     Args:
         run_id: The execution run identifier.
-        registry: Typed breakpoint registry.
+        db: Database session.
 
     Returns:
         BreakpointListResponse with items + total.
     """
-    items = registry.list_for_run(run_id)
-    return BreakpointListResponse(
-        items=[BreakpointResponse(**bp.to_dict()) for bp in items],
-        total=len(items),
+    result = await db.execute(
+        select(BreakpointModel)
+        .where(
+            BreakpointModel.session_id == run_id,
+            BreakpointModel.kind.is_not(None),
+        )
+        .order_by(BreakpointModel.created_at)
     )
+    rows = result.scalars().all()
+    items = [BreakpointResponse(**_model_to_typed(row).to_dict()) for row in rows]
+    return BreakpointListResponse(items=items, total=len(items))
+
+
+@router.get("/{run_id}/breakpoints/{bp_id}", response_model=BreakpointResponse)
+async def get_breakpoint(
+    run_id: str,
+    bp_id: str,
+    db: DBSession,
+) -> BreakpointResponse:
+    """Get a single typed breakpoint by id (T39).
+
+    Args:
+        run_id: The execution run identifier.
+        bp_id: The breakpoint identifier.
+        db: Database session.
+
+    Returns:
+        BreakpointResponse for the breakpoint.
+
+    Raises:
+        HTTPException: 404 when no such breakpoint exists for the run.
+    """
+    row = await _get_persisted_breakpoint(db, run_id, bp_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Breakpoint not found")
+    return BreakpointResponse(**_model_to_typed(row).to_dict())
+
+
+@router.put("/{run_id}/breakpoints/{bp_id}", response_model=BreakpointResponse)
+async def update_breakpoint(
+    run_id: str,
+    bp_id: str,
+    bp_data: BreakpointUpdateRequest,
+    db: DBSession,
+    registry: RegistryDep,
+) -> BreakpointResponse:
+    """Update a typed breakpoint's condition and/or enabled flag (T39).
+
+    ``kind`` / ``target`` are immutable identity attributes; only the
+    ``condition`` expression and the active toggle may change. A disabled
+    breakpoint never fires. Changes persist to the DB and write-through to the
+    live hit registry.
+
+    Args:
+        run_id: The execution run identifier.
+        bp_id: The breakpoint identifier.
+        bp_data: Partial update (condition and/or enabled).
+        db: Database session.
+        registry: Typed breakpoint registry (live hit cache).
+
+    Returns:
+        BreakpointResponse for the updated breakpoint.
+
+    Raises:
+        HTTPException: 404 unknown breakpoint / 422 invalid condition.
+    """
+    row = await _get_persisted_breakpoint(db, run_id, bp_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Breakpoint not found")
+
+    if bp_data.condition is not None:
+        new_condition = bp_data.condition.strip() or None
+        try:
+            validate_breakpoint(row.kind or "", row.target or "", new_condition)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
+        row.condition = new_condition
+    if bp_data.enabled is not None:
+        row.enabled = bp_data.enabled
+
+    await db.commit()
+    await db.refresh(row)
+    typed = _model_to_typed(row)
+    registry.add(typed)  # replace the cached live value
+    return BreakpointResponse(**typed.to_dict())
+
+
+@router.post(
+    "/{run_id}/breakpoints/{bp_id}/{action}",
+    response_model=BreakpointResponse,
+)
+async def set_breakpoint_enabled(
+    run_id: str,
+    bp_id: str,
+    action: Literal["enable", "disable"],
+    db: DBSession,
+    registry: RegistryDep,
+) -> BreakpointResponse:
+    """Enable or disable a typed breakpoint (T39 enable/disable action).
+
+    ``POST .../disable`` sets ``enabled=False`` — a disabled breakpoint does
+    not fire; ``POST .../enable`` re-arms it. Persisted and write-through to
+    the live hit registry.
+
+    Args:
+        run_id: The execution run identifier.
+        bp_id: The breakpoint identifier.
+        action: ``enable`` or ``disable`` (other values → 422).
+        db: Database session.
+        registry: Typed breakpoint registry (live hit cache).
+
+    Returns:
+        BreakpointResponse for the toggled breakpoint.
+
+    Raises:
+        HTTPException: 404 when no such breakpoint exists for the run.
+    """
+    row = await _get_persisted_breakpoint(db, run_id, bp_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Breakpoint not found")
+
+    row.enabled = action == "enable"
+    await db.commit()
+    await db.refresh(row)
+    typed = _model_to_typed(row)
+    registry.add(typed)  # replace the cached live value
+    return BreakpointResponse(**typed.to_dict())
 
 
 @router.delete("/{run_id}/breakpoints/{bp_id}", response_model=BreakpointDeleteResponse)
 async def delete_breakpoint(
     run_id: str,
     bp_id: str,
+    db: DBSession,
     registry: RegistryDep,
 ) -> BreakpointDeleteResponse:
     """Remove a typed breakpoint — idempotent (T39).
 
-    Deleting an unknown breakpoint still returns 200 with removed=false so
-    client retries never fail.
+    Deletes the durable row (when present) and evicts it from the live hit
+    registry. Deleting an unknown breakpoint still returns 200 with
+    removed=false so client retries never fail.
 
     Args:
         run_id: The execution run identifier.
         bp_id: The breakpoint to remove.
-        registry: Typed breakpoint registry.
+        db: Database session.
+        registry: Typed breakpoint registry (live hit cache).
 
     Returns:
         BreakpointDeleteResponse with removed flag.
     """
-    return BreakpointDeleteResponse(ok=True, removed=registry.remove(run_id, bp_id))
+    row = await _get_persisted_breakpoint(db, run_id, bp_id)
+    if row is not None:
+        await db.delete(row)
+        await db.commit()
+    registry.remove(run_id, bp_id)
+    return BreakpointDeleteResponse(ok=True, removed=row is not None)

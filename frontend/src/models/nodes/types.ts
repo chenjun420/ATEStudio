@@ -71,10 +71,16 @@ export function isVariableData(data: unknown): data is VariableData {
 }
 
 /**
- * Type guard to check if data is LoopContainerData
+ * Type guard to check if data is LoopContainerData.
+ * Accepts `unknown` so it can be used directly on X6 `node.getData()` results.
  */
-export function isLoopContainerData(data: NodeData): data is LoopContainerData {
-  return 'loopId' in data && 'loopType' in data
+export function isLoopContainerData(data: unknown): data is LoopContainerData {
+  return (
+    typeof data === 'object' &&
+    data !== null &&
+    'loopId' in data &&
+    'loopType' in data
+  )
 }
 
 /**

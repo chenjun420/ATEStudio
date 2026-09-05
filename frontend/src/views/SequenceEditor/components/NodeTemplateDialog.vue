@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
-import { ElDialog, ElInput, ElButton, ElFormItem, ElForm } from 'element-plus'
+import { ElDialog, ElInput, ElButton, ElFormItem, ElForm, type FormInstance } from 'element-plus'
 import { useNodeTemplate } from '@/composables/useNodeTemplate'
 import type { Node } from '@antv/x6'
 
@@ -14,9 +14,9 @@ const props = defineProps<Props>()
 
 // Emits
 const emit = defineEmits<{
-  'update:visible': [value: boolean]
-  'saved': [templateId: string]
-}>
+  (e: 'update:visible', value: boolean): void
+  (e: 'saved', templateId: string): void
+}>()
 
 // Composable
 const { createTemplateFromNode, isLoading } = useNodeTemplate()
@@ -24,7 +24,7 @@ const { createTemplateFromNode, isLoading } = useNodeTemplate()
 // Form data
 const templateName = ref('')
 const templateDescription = ref('')
-const formRef = ref()
+const formRef = ref<FormInstance>()
 
 // Dialog visibility computed
 const dialogVisible = computed({

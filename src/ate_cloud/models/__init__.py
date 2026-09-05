@@ -5,6 +5,7 @@ class Base(DeclarativeBase):
     pass
 
 from ate_cloud.models.app_menu import App, AppMenu
+from ate_cloud.models.breakpoint import Breakpoint
 from ate_cloud.models.execution import Execution
 from ate_cloud.models.fault_event import FaultEvent
 from ate_cloud.models.fixture_topology import (
@@ -12,6 +13,7 @@ from ate_cloud.models.fixture_topology import (
     FixtureTopology,
     FixtureVersion,
 )
+from ate_cloud.models.knowledge import FMEA, Diagnosis, TestCase, TestRequirement
 from ate_cloud.models.node_flow_binding import NodeFlowBinding
 from ate_cloud.models.node_template import NodeTemplate
 from ate_cloud.models.rbac import Permission, Role
@@ -23,11 +25,16 @@ __all__ = [
     "Base",
     "App",
     "AppMenu",
+    "Breakpoint",
     "Execution",
     "FaultEvent",
     "FixtureDeviceTemplate",
     "FixtureTopology",
     "FixtureVersion",
+    "Diagnosis",
+    "FMEA",
+    "TestCase",
+    "TestRequirement",
     "NodeFlowBinding",
     "NodeTemplate",
     "Permission",

@@ -29,11 +29,10 @@ import {
   ElSkeleton,
   ElAlert,
   ElDrawer,
-  ElIcon,
   ElRow,
   ElCol,
 } from 'element-plus'
-import { Download, Refresh, Search, Close } from '@element-plus/icons-vue'
+import { Download, Refresh, Search } from '@element-plus/icons-vue'
 import { useExecutionHistory } from '@/composables/useExecutionHistory'
 import type { ExecutionListItem, StepResult, MeasurementData } from '@/api/executions'
 
@@ -44,7 +43,6 @@ const {
   productType,
   statusFilter,
   dateRange,
-  hasActiveFilters,
   currentPage,
   pageSize,
   total,
@@ -118,15 +116,6 @@ function statusTagType(status: string): 'success' | 'warning' | 'danger' | 'info
   }
 }
 
-function outcomeTagType(outcome: string): 'success' | 'warning' | 'danger' | 'info' {
-  switch (outcome) {
-    case 'PASS': return 'success'
-    case 'WARNING': return 'warning'
-    case 'FAIL': return 'danger'
-    default: return 'info'
-  }
-}
-
 function formatDateTime(iso: string | null): string {
   if (!iso) return '-'
   const d = new Date(iso)
@@ -143,10 +132,6 @@ function formatDateTime(iso: string | null): string {
 function formatPassRate(rate: number | null): string {
   if (rate === null) return '-'
   return `${rate.toFixed(1)}%`
-}
-
-function shortId(id: string): string {
-  return id.length > 8 ? id.slice(0, 8) : id
 }
 
 function timelineTagType(status: string): 'success' | 'warning' | 'danger' | 'primary' | 'info' {
@@ -471,7 +456,7 @@ function rowKey(row: ExecutionListItem): string {
               size="small"
               link
               type="primary"
-              @click.stop="openDetail(row)"
+              @click.stop="openDetail(row as ExecutionListItem)"
               data-testid="btn-view-detail"
             >
               Details

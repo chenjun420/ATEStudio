@@ -12,7 +12,8 @@ from datetime import datetime
 
 import pytest
 
-from ate_platform.scheduler.event_bus import Event, EventBus, EventType
+from ate_platform.scheduler.event_bus import Event, EventBus, EventType, get_event_category
+from shared.events import EventCategory
 
 
 class TestEventType:
@@ -44,16 +45,19 @@ class TestEventType:
         assert EventType.WORKER_EXHAUSTED.value == "WORKER_EXHAUSTED"
 
     def test_event_type_count(self) -> None:
-        """EventType should have exactly 21 unique values.
+        """EventType should have exactly 22 unique values.
 
         VARIABLE_CHANGED is a deprecated alias of MEASUREMENT_RECORDED (same
         value), so Python's Enum counts them as one member. The alias is still
         accessible as EventType.VARIABLE_CHANGED. ALARM_RAISED (added with
-        SPC alarm indexing) brings the count to 21.
+        SPC alarm indexing) brought the count to 21; BREAKPOINT_HIT (edge
+        breakpoint hits, task 20) brings it to 22.
         """
-        assert len(EventType) == 21
+        assert len(EventType) == 22
         # Verify the deprecated alias is still accessible
         assert EventType.VARIABLE_CHANGED is EventType.MEASUREMENT_RECORDED
+        # Verify the edge breakpoint-hit event is categorised as an EVENT
+        assert get_event_category(EventType.BREAKPOINT_HIT) == EventCategory.EVENT
 
 
 class TestEvent:
@@ -309,6 +313,61 @@ class TestEventBusIntegration:
 
         assert len(received) == 1
         assert received[0].data["var"] == "x"
+
+    @pytest.mark.asyncio
+    async def test_breakpoint_hit_round_trips_through_event_bus(self) -> None:
+        """A BREAKPOINT_HIT payload survives pub/sub and rebuilds to BreakpointHitData.
+
+        Given: the edge scheduler publishes asdict(BreakpointHitData(...)) with a
+               variable snapshot,
+        When:  the event is delivered over the EventBus and rebuilt via
+               EVENT_DATA_CLASSES,
+        Then:  the subscriber receives the event and the rebuilt object is a
+               BreakpointHitData with every field (including the snapshot) intact.
+        """
+        from dataclasses import asdict
+
+        from shared.events import EVENT_DATA_CLASSES, BreakpointHitData
+
+        bus = EventBus()
+        received: list[Event] = []
+
+        def handler(event: Event) -> None:
+            received.append(event)
+
+        snapshot = {
+            "scope": {"voltage": 3.3, "ok": True},
+            "steps": {"s1": {"result": "passed"}},
+        }
+        payload = asdict(
+            BreakpointHitData(
+                breakpoint_id="bp1",
+                kind="step",
+                target="s2",
+                step_id="s2",
+                variables=snapshot,
+            )
+        )
+
+        bus.subscribe(EventType.BREAKPOINT_HIT, handler)
+        await bus.start()
+
+        await bus.publish(EventType.BREAKPOINT_HIT, payload)
+
+        await asyncio.sleep(0.1)
+        await bus.stop()
+
+        assert len(received) == 1
+        assert received[0].type == EventType.BREAKPOINT_HIT
+
+        rebuilt = EVENT_DATA_CLASSES[EventType.BREAKPOINT_HIT](**received[0].data)
+        assert isinstance(rebuilt, BreakpointHitData)
+        assert rebuilt.breakpoint_id == "bp1"
+        assert rebuilt.kind == "step"
+        assert rebuilt.target == "s2"
+        assert rebuilt.step_id == "s2"
+        assert rebuilt.run_id is None
+        assert rebuilt.variables == snapshot
 
     @pytest.mark.asyncio
     async def test_graceful_stop(self) -> None:

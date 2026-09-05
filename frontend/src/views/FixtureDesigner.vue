@@ -12,22 +12,19 @@
  *
  * Route: /flow/fixture-designer
  */
-import { computed, nextTick, onMounted, ref, shallowRef, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import {
   ElButton,
-  ElCard,
   ElDialog,
   ElForm,
   ElFormItem,
   ElInput,
   ElMessage,
-  ElMessageBox,
   ElOption,
   ElSelect,
   ElTable,
   ElTableColumn,
   ElTag,
-  ElTooltip,
   ElEmpty,
 } from 'element-plus'
 import { ArrowDown } from '@element-plus/icons-vue'
@@ -54,7 +51,9 @@ import {
   type FixtureDeviceTemplate,
   type FixtureTopologyData,
   type FixtureTopologyResponse,
-  type FixtureFaultStatsResponse,
+  type Fixture,
+  type Instrument,
+  type DUT,
   type Relay,
   type Route,
   type ValidationResult,
@@ -113,9 +112,6 @@ const selectedInfo = ref<{
   name: string
   detail: string
 }>({ kind: 'none', id: '', name: '', detail: '' })
-
-// 布局按钮用于重新排布
-const layoutMode = ref('grid')
 
 // 继电器矩阵编辑（T27）：选中夹具节点时在属性面板编辑其 relays
 const selectedFixture = computed<Fixture | null>(() => {
@@ -177,7 +173,6 @@ function renderTopology(data: FixtureTopologyData) {
   g.clearCells()
 
   let idx = 0
-  const gridW = 220
   const gridH = 140
 
   // 仪器 → 左列
@@ -228,23 +223,23 @@ function addTopoNode(
   name: string,
   sub: string,
   pos: { x: number; y: number },
-  entity: Record<string, unknown>,
+  entity: Instrument | Fixture | DUT,
 ) {
   const style = NODE_KIND_STYLES[kind]
   // 为每条链路端点生成端口
   let portEntities: Array<{ id: string; name: string }> = []
   if (kind === 'instrument') {
-    portEntities = ((entity.channels as Array<{ id: string; name?: string }>) ?? []).map((c) => ({
+    portEntities = (entity as Instrument).channels.map((c) => ({
       id: c.id,
       name: c.name ?? c.id,
     }))
   } else if (kind === 'fixture') {
-    portEntities = ((entity.terminals as Array<{ id: string; name?: string }>) ?? []).map((t) => ({
+    portEntities = (entity as Fixture).terminals.map((t) => ({
       id: t.id,
       name: t.name ?? t.id,
     }))
   } else {
-    portEntities = ((entity.test_points as Array<{ id: string; net?: string }>) ?? []).map((t) => ({
+    portEntities = (entity as DUT).test_points.map((t) => ({
       id: t.id,
       name: t.net ?? t.id,
     }))

@@ -127,7 +127,7 @@ const faultForm = ref({ type: 'network_delay', count: 1, probability: 1.0, condi
 const {
   items: breakpoints,
   paused: bpPaused,
-  load: loadBreakpoints,
+  lastHit,
   add: addTypedBreakpoint,
   remove: removeTypedBreakpoint,
   resume: resumeRun,

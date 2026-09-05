@@ -32,17 +32,10 @@ import {
   ElCollapseItem,
   ElTimeline,
   ElTimelineItem,
-  ElTooltip,
   ElIcon,
 } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
-import axios from 'axios'
-
-const api = axios.create({
-  baseURL: '/api/v1',
-  timeout: 10000,
-  headers: { 'Content-Type': 'application/json' },
-})
+import http from '@/api/interceptor'
 
 // ─── Types (mirror src/ate_cloud/schemas/trace.py) ───────────────────────────
 
@@ -208,8 +201,8 @@ async function search(): Promise<void> {
   jsonld.value = null
   try {
     const [structResp, jsonldResp] = await Promise.all([
-      api.get<TestTraceResult>(`/trace/${encodeURIComponent(serial)}/structured`),
-      api.get<Record<string, unknown>>(`/trace/${encodeURIComponent(serial)}`),
+      http.get<TestTraceResult>(`/trace/${encodeURIComponent(serial)}/structured`),
+      http.get<Record<string, unknown>>(`/trace/${encodeURIComponent(serial)}`),
     ])
     trace.value = structResp.data
     jsonld.value = jsonldResp.data
@@ -405,7 +398,11 @@ onMounted(() => {
     </ElCard>
 
     <!-- ─── JSON-LD collapsible viewer ─── -->
-    <ElCollapse v-if="trace && showJsonld" v-model="showJsonld" data-testid="jsonld-collapse">
+    <ElCollapse
+      v-if="trace && showJsonld"
+      :model-value="showJsonld ? ['jsonld'] : []"
+      data-testid="jsonld-collapse"
+    >
       <ElCollapseItem title="W3C PROV JSON-LD" name="jsonld">
         <pre class="tv-jsonld-pre" data-testid="jsonld-pre">{{ JSON.stringify(jsonld, null, 2) }}</pre>
       </ElCollapseItem>

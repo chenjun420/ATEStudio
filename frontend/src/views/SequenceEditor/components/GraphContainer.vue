@@ -1,12 +1,18 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, inject, watch, computed } from 'vue'
-import { Graph, History, Keyboard, Clipboard, Snapline } from '@antv/x6'
+import { onMounted, onUnmounted, ref, shallowRef, inject, watch, computed } from 'vue'
+import { Graph, History, Keyboard, Clipboard, Snapline, Selection } from '@antv/x6'
 import type { Ref, ShallowRef } from 'vue'
 import type { Node } from '@antv/x6'
 import type { ScriptStepData, NodeData } from '@/models/nodes/types'
 import { isLoopContainerData, isScriptStepData } from '@/models/nodes/types'
 import { validateConnection } from '@/composables/useDependencyCheck'
 import { useExecutionStatus, type StepStatus } from '@/composables/useExecutionStatus'
+import {
+  useNodeBreakpoints,
+  NODE_BREAKPOINTS_KEY,
+  type UseNodeBreakpointsReturn,
+} from '@/composables/useNodeBreakpoints'
+import { setBreakpointBadge, setBreakpointHitHalo } from '../breakpointMarkers'
 import { searchScripts } from '@/api/scripts'
 import { ElMessage } from 'element-plus'
 import NodeQuickEdit from './NodeQuickEdit.vue'
@@ -30,9 +36,10 @@ const containerRef = ref<HTMLDivElement | null>(null)
 const selectedNodeId = inject<Ref<string | null>>('selectedNodeId')
 const graphInstance = inject<ShallowRef<Graph | null>>('graphInstance')
 
-// Quick edit state
+// Quick edit state. Use shallowRef: X6 Node instances are non-reactive
+// objects with protected members that Vue's deep ref unwrapping would strip.
 const quickEditVisible = ref(false)
-const quickEditNode = ref<Node | null>(null)
+const quickEditNode = shallowRef<Node | null>(null)
 const quickEditPosition = ref<{ x: number; y: number } | null>(null)
 
 // Graph instance reference
@@ -46,7 +53,57 @@ let graph: Graph | null = null
 const runIdRef = computed(() => props.runId ?? '')
 
 // Use the execution status composable
-const { stepStatuses, isRunning, setTotalSteps, reset: resetExecution } = useExecutionStatus(runIdRef)
+const { stepStatuses, setTotalSteps, reset: resetExecution } = useExecutionStatus(runIdRef)
+
+// ============================================
+// Step Breakpoint Integration (task 23)
+// ============================================
+
+// Shared step-breakpoint composable, provided by index.vue so the main graph
+// and the sub-graph render identical markers. Fallback: local instance.
+const breakpoints =
+  inject<UseNodeBreakpointsReturn | null>(NODE_BREAKPOINTS_KEY, null) ??
+  useNodeBreakpoints((m, t) =>
+    t === 'success'
+      ? ElMessage.success(m)
+      : t === 'warning'
+        ? ElMessage.warning(m)
+        : t === 'error'
+          ? ElMessage.error(m)
+          : ElMessage.info(m),
+  )
+
+/** Paint breakpoint badge + hit halo for every script-step node in the graph. */
+function refreshBreakpointMarkers() {
+  if (!graph) return
+  for (const node of graph.getNodes()) {
+    const data = node.getData() as NodeData
+    if (!isScriptStepData(data)) continue
+    setBreakpointBadge(node, breakpoints.isArmed(data.stepId))
+    setBreakpointHitHalo(node, breakpoints.hitStep.value === data.stepId)
+  }
+}
+
+// Repaint markers whenever armed set or hit target changes.
+watch(
+  () => ({ ...breakpoints.armedSteps, hit: breakpoints.hitStep.value }),
+  () => refreshBreakpointMarkers(),
+  { deep: true },
+)
+
+// Load durable breakpoints and open the BREAKPOINT_HIT stream for a run.
+watch(
+  () => props.runId,
+  (newRunId) => {
+    if (newRunId) {
+      void breakpoints.load(newRunId)
+      breakpoints.connect(newRunId)
+    } else {
+      breakpoints.disconnect()
+      breakpoints.clearHit()
+    }
+  },
+)
 
 /**
  * Status → visual attribute mapping for node styling
@@ -78,8 +135,8 @@ function applyStepNodeStatus(node: Node, status: StepStatus) {
   })
 
   // Update node data status
-  const data = node.getData() as Record<string, unknown>
-  if (data && (isScriptStepData(data) || isLoopContainerData(data as NodeData))) {
+  const data = node.getData<NodeData>()
+  if (isScriptStepData(data) || isLoopContainerData(data)) {
     node.setData({ ...data, status }, { silent: true })
   }
 }
@@ -149,6 +206,16 @@ interface ScriptDropData {
   }>
 }
 
+/**
+ * Minimal shape of the X6 context-menu DOM event we rely on (clientX/Y +
+ * preventDefault). Avoids coupling to @antv/x6 DOM event types.
+ */
+interface MenuTriggerEvent {
+  clientX: number
+  clientY: number
+  preventDefault: () => void
+}
+
 onMounted(() => {
   if (!containerRef.value) return
 
@@ -167,23 +234,17 @@ onMounted(() => {
         thickness: 1,
       },
     },
-    // Panning and zooming
+    // Panning and zooming. X6 3.x configures wheel-zoom via the `mousewheel`
+    // option (there is no `zooming` Graph option); plain wheel zooms the canvas.
     panning: {
       enabled: true,
       modifiers: [],
     },
-    zooming: {
+    mousewheel: {
       enabled: true,
       minScale: 0.25,
       maxScale: 2,
-    },
-    // Selection
-    selecting: {
-      enabled: true,
-      multiple: true,
-      rubberband: true,
-      movable: true,
-      showNodeSelectionBox: true,
+      modifiers: [],
     },
     // Connection settings
     connecting: {
@@ -226,7 +287,15 @@ onMounted(() => {
     },
   })
 
-  // Enable plugins for history, keyboard, clipboard, snapline
+  // Enable plugins for selection, history, keyboard, clipboard, snapline
+  // X6 3.x: selection is a plugin (the v2 `selecting` Graph option no longer exists)
+  graph.use(new Selection({
+    enabled: true,
+    multiple: true,
+    rubberband: true,
+    movable: true,
+    showNodeSelectionBox: true,
+  }))
   graph.use(new History({ enabled: true }))
   graph.use(new Keyboard({ enabled: true, global: true }))
   graph.use(new Clipboard({ enabled: true }))
@@ -246,14 +315,14 @@ onMounted(() => {
   })
 
   // Handle node double-click: enter sub-graph for loop containers, quick edit for others
-  graph.on('node:dblclick', ({ node, e }) => {
+  graph.on('node:dblclick', ({ node }) => {
     const data = node.getData() as NodeData
     if (isLoopContainerData(data)) {
       // Enter sub-graph view for loop container
       emit('enter-sub-graph', node.id)
     } else {
       // Open quick edit for non-loop nodes
-      openQuickEdit(node, e)
+      openQuickEdit(node)
     }
   })
 
@@ -269,6 +338,14 @@ onMounted(() => {
       e.preventDefault()
       showContextMenu(e, data)
     }
+  })
+
+  // Paint breakpoint markers on nodes added after mount (drag-drop etc.).
+  graph.on('node:added', ({ node }) => {
+    const data = node.getData() as NodeData
+    if (!isScriptStepData(data)) return
+    setBreakpointBadge(node, breakpoints.isArmed(data.stepId))
+    setBreakpointHitHalo(node, breakpoints.hitStep.value === data.stepId)
   })
 
   // Store graph instance for property panel
@@ -292,6 +369,9 @@ onMounted(() => {
 
   // Add demo nodes for testing
   addDemoNodes()
+
+  // Initial breakpoint marker paint (run may already carry armed breakpoints).
+  refreshBreakpointMarkers()
 })
 
 onUnmounted(() => {
@@ -576,7 +656,7 @@ defineExpose({
 /**
  * Open quick edit form for a node
  */
-function openQuickEdit(node: Node, e: MouseEvent) {
+function openQuickEdit(node: Node) {
   // Close if already open
   if (quickEditVisible.value) {
     closeQuickEdit()
@@ -613,11 +693,11 @@ function handleQuickEditUpdate(data: ScriptStepData) {
   
   // Update node data
   quickEditNode.value.setData(data, { silent: false })
-  
-  // Update node label to reflect changes
+
+  // Update node label via X6 attrs (X6 Node has no setLabel method)
   const label = `${data.scriptName}\n${data.stepId.slice(0, 8)}`
-  quickEditNode.value.setLabel(label)
-  
+  quickEditNode.value.attr('label/text', label)
+
   console.log('Updated node data:', data.stepId)
 }
 
@@ -632,7 +712,7 @@ const contextMenuScriptData = ref<ScriptStepData | null>(null)
 /**
  * Show context menu for a script step node
  */
-function showContextMenu(e: MouseEvent, data: ScriptStepData) {
+function showContextMenu(e: MenuTriggerEvent, data: ScriptStepData) {
   contextMenuPosition.value = { x: e.clientX, y: e.clientY }
   contextMenuScriptData.value = data
   contextMenuVisible.value = true
@@ -644,6 +724,27 @@ function showContextMenu(e: MouseEvent, data: ScriptStepData) {
 function closeContextMenu() {
   contextMenuVisible.value = false
   contextMenuScriptData.value = null
+}
+
+/** Whether the node backing the open context menu has an armed breakpoint. */
+const contextMenuHasBreakpoint = computed(() =>
+  contextMenuScriptData.value ? breakpoints.isArmed(contextMenuScriptData.value.stepId) : false,
+)
+
+/**
+ * Handle "Toggle breakpoint" context menu action (task 23).
+ * Creates/deletes a typed `step` breakpoint via the shared breakpoint
+ * composable (same API + ticketed SSE stream as the SimulationConsole).
+ */
+async function handleContextMenuToggleBreakpoint() {
+  const data = contextMenuScriptData.value
+  closeContextMenu()
+  if (!data || !props.runId) {
+    ElMessage.warning('请先启动一次仿真运行（断点属于运行），再为步骤设置断点')
+    return
+  }
+  await breakpoints.toggleStep(props.runId, data.stepId)
+  refreshBreakpointMarkers()
 }
 
 /**
@@ -695,6 +796,17 @@ async function handleContextMenuEditScript() {
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
           </svg>
           Edit Script
+        </button>
+        <button
+          class="context-menu-item"
+          data-testid="context-menu-toggle-breakpoint"
+          :disabled="breakpoints.busy.value"
+          @click="handleContextMenuToggleBreakpoint"
+        >
+          <svg class="tw-w-4 tw-h-4" fill="currentColor" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="6" />
+          </svg>
+          {{ contextMenuHasBreakpoint ? '移除断点' : '切换断点' }}
         </button>
       </div>
     </Teleport>

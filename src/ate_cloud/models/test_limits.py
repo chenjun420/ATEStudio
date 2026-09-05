@@ -35,6 +35,10 @@ class TestLimit(Base):
         updated_at: Timestamp of last update.
     """
 
+    # Not a pytest test class — the name starts with "Test" so tell pytest not
+    # to collect it (suppresses PytestCollectionWarning "cannot collect").
+    __test__ = False
+
     __tablename__ = "test_limits"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)

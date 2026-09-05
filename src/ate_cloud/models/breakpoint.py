@@ -1,8 +1,16 @@
 """Breakpoint SQLAlchemy model.
 
-Stores debug breakpoints for the debugpy-based breakpoint debugging framework.
-Each breakpoint is associated with a debug session, a test step, and an X6
-graph node, enabling the sequence editor to visualise breakpoints on the canvas.
+Durable store for simulation breakpoints. Two shapes share this table:
+
+- T39 typed simulation breakpoints (v41-gap-analysis #39, §8.4): armed on an
+  execution run via the ``/executions/{run_id}/breakpoints`` API. They carry
+  ``kind`` (step / instrument_call / variable_change / condition), ``target``
+  (step id / resource.method / scope.key / "*") and an optional server-side
+  ``condition`` expression. ``session_id`` holds the execution ``run_id``.
+  These rows are the durable source of truth the edge later receives (task 20).
+- Debugpy line breakpoints (legacy, removed in task 21): created via
+  ``/debug/breakpoints``. They use ``step_id`` / ``node_id`` / ``line_number``
+  / ``node_data`` and leave ``kind`` / ``target`` NULL.
 """
 
 from datetime import datetime
@@ -17,17 +25,25 @@ from . import Base
 class Breakpoint(Base):
     """Breakpoint database model.
 
-    断点数据库模型 -- 存储调试断点，关联调试会话、测试步骤和 X6 节点。
+    断点数据库模型 -- 存储仿真断点（T39 typed）与遗留调试断点。
 
     Attributes:
         id: Unique identifier (UUID as string).
-        session_id: Debug session identifier (correlates with execution run_id).
-        step_id: Test step identifier this breakpoint is attached to.
-        node_id: X6 graph node identifier (for canvas visualisation).
-        line_number: Line number within the script (1-based; 0 = any line).
-        condition: Optional conditional expression (evaluated when hit).
+        session_id: Execution run_id (T39) or debug session identifier.
+        kind: T39 breakpoint kind: step / instrument_call / variable_change /
+            condition; NULL for legacy debugpy rows.
+        target: T39 match target (step id / resource.method / scope.key / "*");
+            NULL for legacy debugpy rows.
+        step_id: Legacy debugpy: test step this breakpoint is attached to
+            ("" for T39 rows).
+        node_id: Legacy debugpy: X6 graph node for canvas visualisation (""
+            for T39 rows).
+        line_number: Legacy debugpy line number (0 for T39 rows).
+        condition: Optional conditional expression (T39 condition kind; also
+            used by legacy debugpy).
         enabled: Whether the breakpoint is active (default True).
-        node_data: X6 node serialised data for canvas restoration (JSON).
+        node_data: Legacy debugpy X6 node serialised data (JSON); NULL for
+            T39 rows.
         created_at: Timestamp of creation.
         updated_at: Timestamp of last update.
     """
@@ -36,8 +52,10 @@ class Breakpoint(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     session_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
-    step_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
-    node_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    kind: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    target: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    step_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True, default="")
+    node_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True, default="")
     line_number: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     condition: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)

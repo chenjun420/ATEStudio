@@ -21,7 +21,8 @@ function applyTheme(value: ThemeMode): void {
 
 function applyLanguage(value: string): void {
   language.value = value
-  i18n.global.locale.value = value
+  // vue-i18n locale is a fixed union; value comes from storage/preferences.
+  i18n.global.locale.value = value as 'en' | 'zh-CN'
 }
 
 async function handleSave(): Promise<void> {

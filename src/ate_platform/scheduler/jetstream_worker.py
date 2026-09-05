@@ -35,6 +35,10 @@ from shared.types import Condition
 from ..proxy.proxy_manager import ProxyManager
 from ..simulation.fault_injector import FaultInjector
 from .condition_evaluator import ConditionEvaluator
+from .edge_breakpoints import (
+    EdgeBreakpointEngine,
+    parse_breakpoint_defs,
+)
 from .event_bus import EventBus
 from .resource_manager import ResourceManager
 from .scanner_scheduler import ScannerScheduler, StepPosition
@@ -57,6 +61,9 @@ _FORWARDED_EVENT_TYPES = (
     EventType.STEP_FAILED,
     EventType.STEP_SKIPPED,
     EventType.STEP_STATUS_CHANGED,
+    # T39 edge-evaluated breakpoint hits — forwarded so the cloud can surface
+    # BREAKPOINT_HIT (with the variable snapshot) without driving the pause.
+    EventType.BREAKPOINT_HIT,
 )
 
 
@@ -105,9 +112,21 @@ class PlanBootstrapper:
         plan: YamlPlan,
         snapshot_dir: str | None = None,
         instrument_reset_callback: Callable[[], Awaitable[None]] | None = None,
+        breakpoint_defs: list[dict[str, Any]] | None = None,
     ) -> None:
         self._plan = plan
         self._snapshot_dir = snapshot_dir
+        # T39：云端下发的断点定义（原始 wire dict）。引导时容错解码——
+        # 畸形条目被丢弃且绝不挂起（见 parse_breakpoint_defs）。
+        edge_bps, dropped = parse_breakpoint_defs(breakpoint_defs)
+        if dropped:
+            logger.warning(
+                "PlanBootstrapper dropped %d malformed breakpoint def(s)", dropped,
+            )
+        # T39/T40：边缘自评估断点引擎（None ⇔ 无有效断点 → 直通不挂起）。
+        self._breakpoint_engine: EdgeBreakpointEngine | None = (
+            EdgeBreakpointEngine(edge_bps) if edge_bps else None
+        )
         # T40：flatten 时顺带构建的 step_id → StepPosition 位置表
         self._positions: dict[str, StepPosition] = {}
         self.event_bus = EventBus()
@@ -140,6 +159,8 @@ class PlanBootstrapper:
             snapshot_dir=snapshot_dir,
             # §6.6 崩溃恢复：恢复时对全部受管仪器发 *RST（T16 缺口闭合）
             instrument_reset_callback=instrument_reset_callback,
+            # T39：边缘自评估断点（None ⇔ 无有效断点 → 直通不挂起）
+            breakpoint_engine=self._breakpoint_engine,
         )
 
     def bootstrap(self, dut_id: str | None = None) -> ScannerScheduler:
@@ -311,6 +332,8 @@ class JetStreamWorker:
         self._current_event_bus: EventBus | None = None
         # T5：当前执行的故障注入器（inject_fault 控制命令的注册目标）
         self._current_injector: FaultInjector | None = None
+        # T39：任务下发后、调度器引导前暂存的断点定义（task payload 携带）。
+        self._pending_breakpoint_defs: list[dict[str, Any]] | None = None
 
     @property
     def worker_id(self) -> str:
@@ -396,6 +419,12 @@ class JetStreamWorker:
         # T40：调试步进模式同样需要结构化回复（未知执行/非法模式/未知目标）
         if action == "step_control":
             await self._handle_step_control(run_id, msg, payload)
+            return
+
+        # T39：云端把持久化断点定义下发到边缘（task 20）。边缘据此自评估，
+        # 无需云端逐条 pause。可在执行中重新武装（热更新）。
+        if action == "sync_breakpoints":
+            await self._handle_sync_breakpoints(run_id, msg, payload)
             return
 
         if self._current_execution_id != run_id:
@@ -552,6 +581,68 @@ class JetStreamWorker:
             "target_step_id": target if mode == "run_to_cursor" else None,
         })
 
+    async def _handle_sync_breakpoints(
+        self, run_id: str, msg: Any, payload: dict[str, Any],
+    ) -> None:
+        """T39：接收云端下发的持久化断点定义并武装边缘断点引擎（task 20）。
+
+        定义随任务 payload（``breakpoints`` 字段）在引导前暂存，或在执行中
+        经本控制命令（``{"action": "sync_breakpoints", "breakpoints": [...]}``）
+        热更新。畸形条目由 :func:`parse_breakpoint_defs` 丢弃并计数——绝不
+        因坏定义挂起。成功/失败均经 request-reply 回送结构化 JSON。
+        """
+
+        async def _reply(body: dict[str, Any]) -> None:
+            respond = getattr(msg, "respond", None)
+            if respond is None:
+                return
+            try:
+                await respond(json.dumps(body).encode("utf-8"))
+            except Exception as e:  # 回复失败不影响执行主流程
+                logger.warning("sync_breakpoints reply failed for run %s: %s", run_id, e)
+
+        raw_defs = payload.get("breakpoints")
+        edge_bps, dropped = parse_breakpoint_defs(raw_defs)
+
+        # Execution not booted yet — stash for the next bootstrap. The worker
+        # processes one run at a time, so the pending set belongs to the run
+        # about to be pulled; it is consumed in pull_and_process_one.
+        if self._current_scheduler is None:
+            self._pending_breakpoint_defs = (
+                list(raw_defs) if isinstance(raw_defs, list) else []
+            )
+            await _reply({
+                "status": "ok",
+                "action": "sync_breakpoints",
+                "armed": len(edge_bps),
+                "dropped": dropped,
+                "phase": "pending",
+            })
+            return
+
+        if self._current_execution_id != run_id:
+            await _reply({"status": "error", "error": "no_active_execution",
+                          "run_id": run_id})
+            return
+
+        engine = self._current_scheduler._breakpoint_engine
+        if engine is None:
+            engine = EdgeBreakpointEngine()
+            self._current_scheduler._breakpoint_engine = engine
+        engine.replace(edge_bps)
+
+        logger.info(
+            "Armed %d edge breakpoint(s) on execution %s (%d malformed skipped)",
+            len(edge_bps), run_id, dropped,
+        )
+        await _reply({
+            "status": "ok",
+            "action": "sync_breakpoints",
+            "armed": len(edge_bps),
+            "dropped": dropped,
+            "phase": "active",
+        })
+
     async def _abort_current(self) -> None:
         if self._current_scheduler is None:
             return
@@ -613,10 +704,19 @@ class JetStreamWorker:
             data = json.loads(msg.data.decode("utf-8"))
             plan = _dict_to_yaml_plan(data)
 
+            # T39：断点定义优先取任务 payload（``breakpoints`` 字段），否则
+            # 用执行前经 sync_breakpoints 暂存的定义。畸形定义在引导时
+            # 容错丢弃，绝不挂起。
+            breakpoint_defs = data.get("breakpoints")
+            if not isinstance(breakpoint_defs, list):
+                breakpoint_defs = self._pending_breakpoint_defs
+            self._pending_breakpoint_defs = None
+
             bootstrapper = PlanBootstrapper(
                 plan,
                 snapshot_dir=self._snapshot_dir,
                 instrument_reset_callback=self._build_instrument_reset_callback(),
+                breakpoint_defs=breakpoint_defs,
             )
             self._current_scheduler = bootstrapper.bootstrap(dut_id=execution_id)
             self._current_event_bus = bootstrapper.event_bus

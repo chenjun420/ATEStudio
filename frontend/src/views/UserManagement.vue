@@ -245,7 +245,7 @@ onMounted(() => {
       </el-table-column>
       <el-table-column :label="t('common.actions')" width="160">
         <template #default="{ row }">
-          <el-button v-if="hasScope('user:write')" size="small" @click="openEditDialog(row)">
+          <el-button v-if="hasScope('user:write')" size="small" @click="openEditDialog(row as UserResponse)">
             {{ t('common.edit') }}
           </el-button>
           <el-button
@@ -253,7 +253,7 @@ onMounted(() => {
             size="small"
             type="danger"
             :disabled="row.id === currentUser?.id"
-            @click="handleDelete(row)"
+                @click="handleDelete(row as UserResponse)"
           >
             {{ t('common.delete') }}
           </el-button>
