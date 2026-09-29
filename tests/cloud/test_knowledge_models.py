@@ -259,6 +259,11 @@ def test_migration_upgrade_downgrade_cycle_on_temp_sqlite(
 
     from alembic import command
 
+    #: Revision that creates test_requirements / test_cases / fmeas / diagnoses.
+    #: Its parent is the downgrade target — see the note at the call site.
+    KNOWLEDGE_TABLES_REV = "d1e2f3a4b5c6"
+    KNOWLEDGE_TABLES_PARENT_REV = "c9d0e1f2a3b4"
+
     cfg = Config(str(Path(root) / "alembic.ini"))
 
     def _tables() -> set[str]:
@@ -273,11 +278,16 @@ def test_migration_upgrade_downgrade_cycle_on_temp_sqlite(
         finally:
             conn.close()
 
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, KNOWLEDGE_TABLES_REV)
     created = _tables()
     assert {"test_requirements", "test_cases", "fmeas", "diagnoses"} <= created
 
-    command.downgrade(cfg, "-1")
+    # Downgrade to the revision *before* the knowledge tables, not "-1".
+    # "-1" means "one step back from head", and head moves every time a
+    # migration is added on top — the P2 ATERag-bundle migration did exactly
+    # that, which silently turned this into a test of the wrong migration.
+    # Naming the target revision keeps the assertion about what it claims.
+    command.downgrade(cfg, KNOWLEDGE_TABLES_PARENT_REV)
     after_downgrade = _tables()
     assert "fmeas" not in after_downgrade
     assert "test_cases" not in after_downgrade
@@ -286,3 +296,6 @@ def test_migration_upgrade_downgrade_cycle_on_temp_sqlite(
 
     command.upgrade(cfg, "head")
     assert {"test_requirements", "test_cases", "fmeas", "diagnoses"} <= _tables()
+    # Re-upgrading from the parent must also reproduce the P2 schema on top of
+    # the knowledge tables, otherwise a fresh install would come up short.
+    assert "test_conditions" in _tables()

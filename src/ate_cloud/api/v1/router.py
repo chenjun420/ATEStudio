@@ -44,6 +44,7 @@ from ate_cloud.api.v1.faults import router as faults_router
 from ate_cloud.api.v1.fixtures import router as fixtures_router
 from ate_cloud.api.v1.fmea import router as fmea_router
 from ate_cloud.api.v1.health import router as health_router
+from ate_cloud.api.v1.imports import router as imports_router
 from ate_cloud.api.v1.knowledge import router as knowledge_router
 from ate_cloud.api.v1.limits import router as limits_router
 from ate_cloud.api.v1.node_flow_bindings import router as node_flow_bindings_router
@@ -91,6 +92,7 @@ _PROTECTED_ROUTERS = (
     diagnose_router,
     faults_router,
     fmea_router,
+    imports_router,
     knowledge_router,
     fixtures_router,
     limits_router,

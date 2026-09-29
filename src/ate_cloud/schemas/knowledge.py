@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 RATING_MIN = 1
 RATING_MAX = 10
 
-RequirementSource = Literal["dsl", "atml", "manual"]
+RequirementSource = Literal["dsl", "atml", "manual", "aterag"]
 
 
 # ── TestRequirement ─────────────────────────────────────────────────────────

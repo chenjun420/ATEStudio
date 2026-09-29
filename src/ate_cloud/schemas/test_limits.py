@@ -13,7 +13,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 from uuid import uuid4
 
-from pydantic import BaseModel, Field, ValidationInfo, field_validator
+from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_validator
 
 # Type alias to avoid field-name/type-name shadowing in LimitQuery where
 # the field is named ``date`` and the type is ``date | None``. Pydantic v2
@@ -29,8 +29,12 @@ class TestLimitBase(BaseModel):
         limit_id: Business identifier for this limit version (1-255 chars).
         product_type: Product type identifier (1-255 chars).
         test_name: Test measurement name (1-255 chars).
-        spec_low: Lower bound of the acceptable range (inclusive).
-        spec_high: Upper bound of the acceptable range (inclusive).
+        spec_low: Lower bound of the acceptable range (inclusive). Optional —
+            one-sided criteria (over-voltage / under-voltage protection) are
+            the norm in real specs.
+        spec_typ: Typical / set-point value. Optional.
+        spec_high: Upper bound of the acceptable range (inclusive). Optional,
+            see ``spec_low``.
         unit: Engineering unit (1-64 chars).
         effective_from: Date (inclusive) this limit becomes effective.
         effective_until: Date (inclusive) this limit expires; None for
@@ -40,20 +44,30 @@ class TestLimitBase(BaseModel):
     limit_id: str = Field(..., min_length=1, max_length=255)
     product_type: str = Field(..., min_length=1, max_length=255)
     test_name: str = Field(..., min_length=1, max_length=255)
-    spec_low: float = Field(...)
-    spec_high: float = Field(...)
+    spec_low: float | None = Field(default=None)
+    spec_typ: float | None = Field(default=None)
+    spec_high: float | None = Field(default=None)
     unit: str = Field(..., min_length=1, max_length=64)
     effective_from: date = Field(...)
     effective_until: date | None = Field(default=None)
 
-    @field_validator("spec_high")
-    @classmethod
-    def _spec_high_must_exceed_low(cls, v: float, info: ValidationInfo) -> float:
-        """Ensure spec_high >= spec_low when both are present."""
-        low = info.data.get("spec_low")
-        if low is not None and v < low:
-            raise ValueError(f"spec_high ({v}) must be >= spec_low ({low})")
-        return v
+    @model_validator(mode="after")
+    def _bounds_sane(self) -> TestLimitBase:
+        """Bounds sanity: not both absent, and high >= low when both present.
+
+        Both-absent means the row carries no criterion at all — it would sit in
+        the limit table looking authoritative while judging nothing, so it is
+        rejected at the boundary rather than silently accepted.
+        """
+        if self.spec_low is None and self.spec_high is None and self.spec_typ is None:
+            raise ValueError("spec_low / spec_typ / spec_high 至少要提供一个")
+        if (
+            self.spec_low is not None
+            and self.spec_high is not None
+            and self.spec_high < self.spec_low
+        ):
+            raise ValueError(f"spec_high ({self.spec_high}) must be >= spec_low ({self.spec_low})")
+        return self
 
     @field_validator("effective_until")
     @classmethod
@@ -89,6 +103,7 @@ class TestLimitUpdate(BaseModel):
         product_type: Updated product type identifier.
         test_name: Updated test measurement name.
         spec_low: Updated lower bound.
+        spec_typ: Updated typical/set-point value.
         spec_high: Updated upper bound.
         unit: Updated engineering unit.
         effective_from: Updated effective-from date.
@@ -99,21 +114,24 @@ class TestLimitUpdate(BaseModel):
     product_type: str | None = Field(None, min_length=1, max_length=255)
     test_name: str | None = Field(None, min_length=1, max_length=255)
     spec_low: float | None = None
+    spec_typ: float | None = None
     spec_high: float | None = None
     unit: str | None = Field(None, min_length=1, max_length=64)
     effective_from: date | None = None
     effective_until: date | None = None
 
-    @field_validator("spec_high")
-    @classmethod
-    def _spec_high_must_exceed_low_if_both(cls, v: float | None, info: ValidationInfo) -> float | None:
-        """Ensure spec_high >= spec_low when both are present in the update."""
-        if v is None:
-            return v
-        low = info.data.get("spec_low")
-        if low is not None and v < low:
-            raise ValueError(f"spec_high ({v}) must be >= spec_low ({low})")
-        return v
+    @model_validator(mode="after")
+    def _bounds_sane_if_both(self) -> TestLimitUpdate:
+        """Partial update: only compare bounds when both are supplied."""
+        if (
+            self.spec_low is not None
+            and self.spec_high is not None
+            and self.spec_high < self.spec_low
+        ):
+            raise ValueError(
+                f"spec_high ({self.spec_high}) must be >= spec_low ({self.spec_low})"
+            )
+        return self
 
     @field_validator("effective_until")
     @classmethod

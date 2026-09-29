@@ -44,6 +44,11 @@ RATING_MAX = 10
 SOURCE_DSL = "dsl"
 SOURCE_ATML = "atml"
 SOURCE_MANUAL = "manual"
+#: Imported from an ATERag bundle (spec-driven extraction). Kept distinct from
+#: ``atml`` because ATERag owns authoritative spec fields: on conflict it wins
+#: for those fields, while manual edits elsewhere are never touched. Merging it
+#: into "atml" would erase the information needed to resolve that conflict.
+SOURCE_ATERAG = "aterag"
 
 
 def _require_rating(name: str, value: Any) -> int:
@@ -84,6 +89,15 @@ class TestRequirement(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     source: Mapped[str] = mapped_column(String(20), nullable=False, default=SOURCE_MANUAL)
     atml_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    #: active | stale. ``stale`` marks a requirement that vanished from the
+    #: newest spec revision: it is kept, never deleted, because deleting it
+    #: would break the traceability chain back to test results already produced
+    #: against it. Added with the ATERag import (P2) for that policy.
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active", index=True)
+    #: Content fingerprint of the upstream requirement, as reported by ATERag.
+    #: Lets an import tell "nothing changed" (no writes) from "changed"
+    #: (conditions rewritten, cases reset to draft).
+    req_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -108,6 +122,10 @@ class TestCase(Base):
         step_id: DSL step reference within the sequence (YamlStep id), "".
         atml_ref: Optional IEEE 1671 TestItem/TestStep reference.
         status: Lifecycle status (draft/active/retired; default draft).
+        created_by: Provenance of the row (e.g. "aterag:bundle", "agent:<run_id>",
+            an engineer name). Needed to resolve import conflicts: when an
+            ATERag import would overwrite a field, we must be able to say who
+            last touched it and surface that instead of silently clobbering.
         created_at / updated_at: Timestamps.
     """
 
@@ -127,6 +145,10 @@ class TestCase(Base):
     step_id: Mapped[str] = mapped_column(String(255), nullable=False, default="", index=True)
     atml_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft")
+    created_by: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    cond_fingerprint: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

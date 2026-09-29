@@ -224,10 +224,39 @@ class TestCreateLimit:
         assert response.status_code == 422
 
     @pytest.mark.asyncio
-    async def test_create_limit_missing_required(self, client):
-        """Test creating a limit without required fields returns 422."""
+    async def test_create_limit_missing_all_bounds(self, client):
+        """A limit with no bound at all is rejected (422).
+
+        Contract change (P2/ATERag import): spec_low / spec_high became
+        optional because one-sided criteria are the norm in real specs (an
+        over-voltage test has only an upper bound). The invariant that survives
+        is that a limit must constrain something — a row with no bounds would
+        sit in the limits table looking authoritative while judging nothing.
+        """
         limit_data = _sample_limit_data()
-        del limit_data["spec_low"]
+        for key in ("spec_low", "spec_typ", "spec_high"):
+            limit_data.pop(key, None)
+
+        response = await client.post("/api/v1/limits", json=limit_data)
+        assert response.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_create_limit_one_sided_accepted(self, client):
+        """A one-sided limit is valid: over-voltage protection has only spec_high."""
+        limit_data = _sample_limit_data()
+        limit_data.pop("spec_low", None)
+        limit_data["spec_high"] = 315.0
+
+        response = await client.post("/api/v1/limits", json=limit_data)
+        assert response.status_code == 201
+        assert response.json()["spec_low"] is None
+        assert response.json()["spec_high"] == 315.0
+
+    @pytest.mark.asyncio
+    async def test_create_limit_missing_required(self, client):
+        """Missing non-bound required fields still returns 422."""
+        limit_data = _sample_limit_data()
+        del limit_data["unit"]
 
         response = await client.post("/api/v1/limits", json=limit_data)
         assert response.status_code == 422
