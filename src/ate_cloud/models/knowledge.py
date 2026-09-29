@@ -98,6 +98,15 @@ class TestRequirement(Base):
     #: Lets an import tell "nothing changed" (no writes) from "changed"
     #: (conditions rewritten, cases reset to draft).
     req_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    #: Spec clause this requirement came from (e.g. "4.3.1"). The anchor for
+    #: "which spec paragraph does this test come from" — without it, spec-driven
+    #: traceability degrades to reading the whole document by hand, which is
+    #: the work ATERag exists to remove. Indexed because impact analysis on a
+    #: spec revision always queries by clause.
+    section_path: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    #: Verbatim spec note. Often the real source of a criterion's meaning: the
+    #: number may sit in a table, but "what this number means" usually does not.
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

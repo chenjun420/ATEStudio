@@ -328,6 +328,117 @@ class TestDryRun:
         assert (await db.execute(select(func.count()).select_from(TestCondition))).scalar_one() == 0
         assert (await db.execute(select(func.count()).select_from(TestCase))).scalar_one() == 0
 
+    async def test_dry_run_does_not_mark_stale(self, db: AsyncSession) -> None:
+        """A preview must not hide a requirement from the active list.
+
+        Stale marking changes what the user sees; doing it during a preview the
+        user has not confirmed means the screen they approved no longer matches
+        the database they get.
+        """
+        imp = ATERagImporter()
+        await imp.import_bundle(db, _bundle(code="SR-OLD"), dry_run=False, today=TODAY)
+        res = await imp.import_bundle(
+            db, _bundle(code="SR-NEW", removed=["SR-OLD"]), dry_run=True, today=TODAY
+        )
+        assert res.requirements_staled == ["SR-OLD"]  # reported…
+        row = (
+            await db.execute(
+                select(TestRequirement).where(TestRequirement.requirement_code == "SR-OLD")
+            )
+        ).scalar_one()
+        assert row.status == "active"  # …but not applied
+
+    async def test_dry_run_plans_case_writes_without_writing(self, db: AsyncSession) -> None:
+        """A preview must answer "what will this do to my cases".
+
+        Skipping the case loop on dry_run (the earlier behaviour) answered
+        "nothing" — a false answer that hid real work from the reviewer.
+        """
+        res = await ATERagImporter().import_bundle(db, _bundle(), dry_run=True, today=TODAY)
+        assert res.cases.created == 1
+        assert res.conditions.created == 2
+
+
+@pytest.mark.asyncio
+class TestNoOpReplay:
+    async def test_clean_replay_reports_zero_everywhere(self, db: AsyncSession) -> None:
+        """Re-importing an unchanged bundle must report nothing changed.
+
+        This is the counter the operator reads to decide whether anything needs
+        re-review. If a no-op replay reports hundreds of "updates", the real
+        change gets lost in the noise and the number stops being read at all.
+        """
+        imp = ATERagImporter()
+        b = _bundle(limits=[LimitModel(rail="-54V", max=11.1, unit="A")])
+        await imp.import_bundle(db, b, dry_run=False, today=TODAY)
+
+        res = await imp.import_bundle(db, b, dry_run=False, today=TODAY)
+        assert res.requirements.to_dict() == {"created": 0, "updated": 0}
+        assert res.conditions.to_dict() == {"created": 0, "updated": 0}
+        assert res.cases.to_dict() == {"created": 0, "updated": 0}
+        assert res.limits.to_dict() == {"created": 0, "updated": 0}
+        assert res.cases_reset_to_draft == []
+        assert res.changed is False
+
+    async def test_replay_preserves_approved_statuses(self, db: AsyncSession) -> None:
+        imp = ATERagImporter()
+        b = _bundle()
+        await imp.import_bundle(db, b, dry_run=False, today=TODAY)
+        for c in (await db.execute(select(TestCase))).scalars().all():
+            c.status = "active"
+        await db.commit()
+        await imp.import_bundle(db, b, dry_run=False, today=TODAY)
+        assert {c.status for c in (await db.execute(select(TestCase))).scalars().all()} == {"active"}
+
+
+class TestAuthoritativeFieldGuard:
+    def test_every_authoritative_field_is_a_real_column(self) -> None:
+        """A name with no column silently drops the data *and* reports a change.
+
+        Both halves are bad on their own; together they mean the import looks
+        healthy while discarding the spec clause number — the one thing that
+        makes a spec-driven test traceable back to its source.
+        """
+        from ate_cloud.services.aterag_importer import (
+            AUTHORITATIVE_FIELDS,
+            _assert_authoritative_fields_mapped,
+        )
+
+        _assert_authoritative_fields_mapped()  # must not raise
+        mapped = set(TestRequirement.__table__.columns.keys())
+        assert set(AUTHORITATIVE_FIELDS) <= mapped
+
+    def test_guard_raises_on_unmapped_field(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from ate_cloud.services import aterag_importer as mod
+
+        monkeypatch.setattr(mod, "AUTHORITATIVE_FIELDS", ("title", "no_such_column"))
+        with pytest.raises(RuntimeError, match="no_such_column"):
+            mod._assert_authoritative_fields_mapped()
+
+
+@pytest.mark.asyncio
+class TestSpecProvenance:
+    async def test_section_path_and_notes_are_stored(self, db: AsyncSession) -> None:
+        """section_path is the anchor back to the spec clause; notes often carry
+        the criterion's real meaning. Both must survive the import.
+        """
+        b = _bundle()
+        b.requirements[0].section_path = "4.3.1"
+        b.requirements[0].notes = "铭牌标称电压，在此电压范围内进行安规认证。"
+        await ATERagImporter().import_bundle(db, b, dry_run=False, today=TODAY)
+        row = (await db.execute(select(TestRequirement))).scalar_one()
+        assert row.section_path == "4.3.1"
+        assert "安规认证" in (row.notes or "")
+
+    async def test_provenance_change_is_reported(self, db: AsyncSession) -> None:
+        imp = ATERagImporter()
+        b = _bundle()
+        b.requirements[0].section_path = "4.3.1"
+        await imp.import_bundle(db, b, dry_run=False, today=TODAY)
+        b.requirements[0].section_path = "4.3.2"
+        res = await imp.import_bundle(db, b, dry_run=False, today=TODAY)
+        assert res.requirements.updated == 1
+
 
 # ── spec revision (stale) ───────────────────────────────────────────────────
 

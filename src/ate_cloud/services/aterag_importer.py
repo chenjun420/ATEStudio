@@ -152,6 +152,28 @@ class ImportResult:
 AUTHORITATIVE_FIELDS = ("title", "description", "notes", "section_path")
 
 
+def _assert_authoritative_fields_mapped() -> None:
+    """Fail loudly at import time if an authoritative field has no column.
+
+    A name here that the ORM does not map is not a no-op: ``getattr`` returns
+    None, so the comparison always reports "changed", the counter reports an
+    update on every re-import, and the actual value is dropped on the floor.
+    That combination is the worst kind of bug — it looks like the import
+    worked, and the missing data is only noticed months later when someone
+    asks which spec clause a case came from.
+
+    Raised once per import rather than at import time of the module, so tests
+    that rebuild the schema still get the check.
+    """
+    mapped = set(TestRequirement.__table__.columns.keys())
+    missing = [f for f in AUTHORITATIVE_FIELDS if f not in mapped]
+    if missing:
+        raise RuntimeError(
+            f"AUTHORITATIVE_FIELDS 里的字段在 TestRequirement 上没有对应列: {missing}。"
+            " 导入会把这些字段静默丢弃, 同时每次重导都谎报变更。"
+        )
+
+
 def _limit_id(req_code: str, rail: str, qualifier: str) -> str:
     """Deterministic limit id.
 
@@ -189,26 +211,23 @@ class ATERagImporter:
         Returns:
             ImportResult: counters, conflicts, unmapped kinds, staled rows.
         """
+        _assert_authoritative_fields_mapped()
         res = ImportResult(
             product_code=bundle.product_code,
             contract_hash=bundle.contract_hash,
             dry_run=dry_run,
         )
 
-        req_by_code: dict[str, TestRequirement] = {}
         for model in bundle.requirements:
             existing = await self._get_requirement(db, bundle.product_code, model.requirement_code)
-            await self._apply_requirement(db, res, bundle, model, existing, confirm_overwrite, today or date.today())
-            if existing is not None:
-                req_by_code[model.requirement_code] = existing
-            elif not dry_run:
-                refreshed = await self._get_requirement(db, bundle.product_code, model.requirement_code)
-                if refreshed is not None:
-                    req_by_code[model.requirement_code] = refreshed
+            await self._apply_requirement(
+                db, res, bundle, model, existing, confirm_overwrite, today or date.today()
+            )
 
         for code in bundle.removed_requirement_codes:
-            stale = await self._mark_stale(db, bundle.product_code, code)
-            if stale:
+            # _mark_stale 会改 status, 所以 dry_run 也要拦: 预览把需求标成
+            # stale 而不落库, 用户确认后重跑一次, 结果与预览对不上。
+            if await self._mark_stale(db, bundle.product_code, code, write=not dry_run):
                 res.requirements_staled.append(code)
 
         if not dry_run:
@@ -243,6 +262,11 @@ class ATERagImporter:
                 description=model.description,
                 source=SOURCE_ATERAG,
                 req_fingerprint=model.req_fingerprint or None,
+                # section_path 与 notes 在新建时就要落盘: 若只在更新分支里写,
+                # 首次导入就会把这两个字段悄悄丢掉, 而它们恰恰是"这条测试来自
+                # 规格书哪一段"的唯一答案。
+                section_path=model.section_path or None,
+                notes=model.notes or None,
             )
             res.requirements.bump_created()
             if not res.dry_run:
@@ -286,11 +310,20 @@ class ATERagImporter:
         await self._materialise_limits(db, res, bundle, model, today)
         await self._sync_cases(db, res, model, row)
 
-    async def _mark_stale(self, db: AsyncSession, product_code: str, code: str) -> bool:
+    async def _mark_stale(
+        self, db: AsyncSession, product_code: str, code: str, *, write: bool
+    ) -> bool:
+        """Mark a vanished requirement stale (never delete it).
+
+        ``write=False`` reports what *would* happen. Must be honoured: marking
+        stale hides the requirement from active lists, so a preview that did it
+        without asking would silently change what the user sees.
+        """
         row = await self._get_requirement(db, product_code, code)
         if row is None or row.status == STATUS_STALE:
             return False
-        row.status = STATUS_STALE
+        if write:
+            row.status = STATUS_STALE
         return True
 
     # ---------- conditions ----------
@@ -424,9 +457,17 @@ class ATERagImporter:
     async def _sync_cases(
         self, db: AsyncSession, res: ImportResult, model: RequirementModel, owner: TestRequirement
     ) -> None:
-        """One case per scenario, keyed by ``{requirement_code}-S{seq:03d}``."""
-        if res.dry_run:
-            return
+        """One case per scenario, keyed by ``{requirement_code}-S{seq:03d}``.
+
+        Counts only *real* changes. A no-op re-import must report zero, because
+        the operator reads these counters to decide whether anything needs
+        re-review — a preview that always reports hundreds of "updates" is a
+        preview nobody reads, and the one real change gets lost in the noise.
+
+        Unlike limits, this path still walks the rows on ``dry_run``: the
+        question a preview exists to answer is "what will this do to my cases",
+        and answering "nothing" by skipping the loop would be a false answer.
+        """
         for scen in model.scenarios:
             code = f"{model.requirement_code}-S{scen.seq:03d}"
             # 场景判据指纹: 绑定了哪些条件 + 哪些限值。用来判断"判据是否真的
@@ -436,6 +477,9 @@ class ATERagImporter:
             stmt = select(TestCase).where(TestCase.case_code == code)
             row = (await db.execute(stmt)).scalar_one_or_none()
             if row is None:
+                res.cases.bump_created()
+                if res.dry_run:
+                    continue
                 db.add(
                     TestCase(
                         id=str(uuid.uuid4()),
@@ -451,10 +495,8 @@ class ATERagImporter:
                         cond_fingerprint=scen_fp,
                     )
                 )
-                res.cases.bump_created()
                 continue
 
-            res.cases.bump_updated()
             if row.created_by != CREATED_BY:
                 # Someone edited this case; report it rather than silently
                 # keeping a status they approved against older data.
@@ -472,13 +514,29 @@ class ATERagImporter:
             # 任何一个条件改动都会让需求指纹变, 而那会把所有场景用例一并
             # 打回 draft —— 包括判据其实没变的那几个。粒度过粗的重置会让
             # 工程师反复重审, 久而久之就不信这个状态了。
+            # 逐字段判断是否真的变了, 变了才计数。指纹一致且标题/归属未变
+            # 时必须报告 0 —— 否则每次重导都是几百条 "updated", 真正需要
+            # 复审的那一条会淹没在里面, 于是这个计数就没人看了。
+            new_title = scen.name[:255] if scen.name else None
+            changed = (
+                row.cond_fingerprint != scen_fp
+                or row.requirement_id != owner.id
+                or (new_title is not None and row.title != new_title)
+            )
+            if not changed:
+                continue
+
+            res.cases.bump_updated()
             if row.cond_fingerprint != scen_fp:
-                row.status = STATUS_DRAFT
                 res.cases_reset_to_draft.append(code)
+                if not res.dry_run:
+                    row.status = STATUS_DRAFT
+            if res.dry_run:
+                continue
             row.requirement_id = owner.id
             row.cond_fingerprint = scen_fp
-            if scen.name:
-                row.title = scen.name[:255]
+            if new_title is not None:
+                row.title = new_title
 
     # ---------- fast path ----------
 
