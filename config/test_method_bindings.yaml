@@ -1,0 +1,354 @@
+# 条件种类 → 仪器动作绑定表 (P2.5)
+#
+# 这张表回答一个问题: ATERag 抽出的一条测试条件, 落到产测台上要做什么。
+# 它是 ATERag 语义层与 ATEStudio 执行层之间唯一的翻译表。
+#
+# ─────────────────────────────────────────────────────────────────────────
+# 为什么必须穷尽 ATERag 的 kind 词表
+# ─────────────────────────────────────────────────────────────────────────
+# 漏掉一个 kind, 那类条件就永远排不出步骤 —— 而且不报错, 只是"少了几项测
+# 试"。所以 verify_bindings.py 会把本表的键与 ATERag 实际抽出的 kind 集合
+# 做双向差集, 少一个就红。这不是形式主义: 产测少测一项, 流出的是一台
+# 不合格品, 而报告上一切正常。
+#
+# ─────────────────────────────────────────────────────────────────────────
+# resource 命名
+# ─────────────────────────────────────────────────────────────────────────
+# 必须落在 ATEStudio 已有的仪器资源名上 (见 parser.py 的 resources 归一)。
+# 写一个不存在的资源名, 步骤会在运行时才失败 —— 排产计划时看不出问题,
+# 上机第一台就炸。所以这里的取值来自既有 DSL fixture 里的真实资源。
+#
+# ─────────────────────────────────────────────────────────────────────────
+# 字段说明
+# ─────────────────────────────────────────────────────────────────────────
+#   kind          ATERag 条件种类 (须与 ATERag 词表逐字一致)
+#   side          该 kind 出现在哪一侧。input = 外部激励(须设置),
+#                 output = 被测量(须读取并判定)。同一个 kind 可能两侧都出现
+#                 (如 measurement_setup), 此时按 side 分派到不同动作。
+#   resource      占用/依赖的仪器资源。多个 = 该步骤需要多台仪器同时就位,
+#                 调度器据此排他。
+#   action        该条件下发的仪器动作, 供脚本模板填参。
+#   settle_s      施加激励后到可以开始测量的稳定等待(秒)。这个数字不是
+#                 拍脑袋: 开关电源输出电容充电 + 负载稳态需要时间, 短了
+#                 测到的是暂态, 那会让合格品被判不合格。
+#   setup_group   同组步骤可共享一次 setup (如同一输入电压档位下的多个测量)。
+#                 规划器据此把需要相同激励的步骤聚到一起, 避免反复重设电源
+#                 —— 每次重设都有稳定等待和可能的器件应力。
+#   destructive   该动作是否可能损坏被测件。过压/过流/短路等保护类测试是。
+#                 规划器必须把它们排在独立段, 且前后加恢复步骤 ——
+#                 保护触发后不恢复, 后续测试全在错误状态下测。
+#   requires      前置动作(其他 kind)必须先完成。
+#   method_ref    ATERag test_methods.yaml 的方法 id, 供溯源。
+#   unit          该 kind 的量纲约定, 用于校验绑定是否配错(电压类却写了
+#                 电流单位, 说明绑定串了)。
+
+version: 1
+description: >
+  条件种类到仪器动作的绑定。一个 kind+side 组合只能有一条记录 ——
+  多条会让规划器在两条互相冲突的方案间任意选一条, 生成的计划不可复现。
+
+bindings:
+  # ── 输入侧: 设置外部激励 ────────────────────────────────────────────────
+  - kind: input_voltage
+    side: input
+    resource: [PSU_1]
+    action: set_ac_input
+    settle_s: 2.0
+    setup_group: ac_input
+    destructive: false
+    requires: []
+    method_ref: en300132_inrush_measurement
+    unit: Vac
+
+  - kind: input_frequency
+    side: input
+    resource: [PSU_1]
+    action: set_line_frequency
+    settle_s: 1.0
+    setup_group: ac_input
+    destructive: false
+    requires: [input_voltage]
+    method_ref: ""
+    unit: Hz
+
+  - kind: input_type
+    side: input
+    resource: [RELAY_MATRIX]
+    action: select_input_source
+    settle_s: 1.0
+    setup_group: input_route
+    destructive: false
+    requires: []
+    method_ref: ""
+    unit: ""
+
+  - kind: load
+    side: input
+    resource: [ELOAD_1]
+    action: set_electronic_load
+    settle_s: 1.5
+    setup_group: load_level
+    destructive: false
+    requires: []
+    method_ref: ""
+    unit: A
+
+  # cap_load 只配 output 侧: 词表(condition_patterns.yaml)把它声明在 input
+  # 侧, 但 PA601 实际数据里它被归到 output 侧 —— 规格书写的是"带容性负载
+  # 大小: 0.0~2000.0 uF", 说的是**产品能带住多大容值**, 是能力声明而非
+  # 测试激励。所以绑成"验证能力", 而不是"接一个电容试试"。
+  # 词表与数据不一致这件事记在 verify_bindings.py 的空绑定检查里: 若上游
+  # 哪天改成真的施加激励, 这里会立刻报"空绑定"并提醒补 input 侧。
+  - kind: cap_load
+    side: output
+    resource: [CONTROL_IF]
+    action: verify_cap_load_capability
+    settle_s: 0.5
+    setup_group: telemetry
+    destructive: false
+    requires: []
+    method_ref: ""
+    unit: uF
+
+  - kind: duty
+    side: input
+    resource: [ELOAD_1]
+    action: set_load_duty
+    settle_s: 1.5
+    setup_group: load_level
+    destructive: false
+    requires: [load]
+    method_ref: ""
+    unit: "%"
+
+  - kind: temperature
+    side: input
+    resource: [CHAMBER_1]
+    action: set_chamber_temperature
+    settle_s: 1800.0
+    # 温箱是批次级设置, 不是逐台等待。稳定以小时计, 产线做法是整批换温点
+    # 再连续跑, 从不为每台等 30 分钟。若按逐台算, 12 个温度条件会得出
+    # 6 小时稳定等待 —— 一个没有任何产线会照做的数字, 且会让整个计划
+    # 失去可信度。规划器据此把温箱时间单独统计, 不计入逐台等待。
+    batch_level: true
+    setup_group: ambient
+    destructive: false
+    requires: []
+    method_ref: iec62368_temperature_rise
+    unit: degC
+
+  - kind: measurement_setup
+    side: input
+    resource: [SCOPE_1]
+    action: configure_measurement
+    settle_s: 0.2
+    setup_group: measurement
+    destructive: false
+    requires: []
+    method_ref: ""
+    unit: ""
+
+  - kind: command
+    side: input
+    resource: [PSU_1]
+    action: issue_command
+    settle_s: 0.5
+    setup_group: sequence
+    destructive: false
+    requires: []
+    method_ref: ""
+    unit: ""
+
+  - kind: test_mode
+    side: input
+    resource: [CONTROL_IF]
+    action: set_test_mode
+    settle_s: 0.5
+    setup_group: sequence
+    destructive: false
+    requires: []
+    method_ref: ""
+    unit: ""
+
+  - kind: power_event
+    side: input
+    resource: [PSU_1, RELAY_MATRIX]
+    action: trigger_power_event
+    # 上电/掉电类事件本身就是瞬态, 采样窗口短; 但需等电源回到稳定态
+    # 才能进行下一步, 故给较短稳定等待 + 由 settle 之后的 settle_and_sample
+    # 负责实际采样。
+    settle_s: 1.0
+    setup_group: power_transient
+    destructive: false
+    requires: []
+    method_ref: en300132_inrush_measurement
+    unit: ""
+
+  - kind: power_factor
+    side: input
+    resource: [POWER_ANALYZER]
+    action: configure_pf_measurement
+    settle_s: 0.5
+    setup_group: measurement
+    destructive: false
+    requires: []
+    method_ref: ""
+    unit: ""
+
+  - kind: fault_stimulus
+    side: input
+    resource: [RELAY_MATRIX]
+    # 故障注入: 短路/开路/断反馈等。明确标 destructive —— 这类激励可能
+    # 真的损坏被测件, 规划器据此隔离, 且需要人工确认授权才生成计划。
+    action: inject_fault
+    settle_s: 1.0
+    setup_group: fault_injection
+    destructive: true
+    requires: []
+    method_ref: iec61000_4_11_surge
+    unit: ""
+
+  # ── 输出侧: 读取并判定 ──────────────────────────────────────────────────
+  - kind: output_voltage
+    side: output
+    resource: [DMM_1]
+    action: measure_dc_voltage
+    settle_s: 0.3
+    setup_group: measurement
+    destructive: false
+    requires: []
+    method_ref: en300132_steady_state
+    unit: V
+
+  - kind: output_current
+    side: output
+    resource: [DMM_2]
+    action: measure_dc_current
+    settle_s: 0.3
+    setup_group: measurement
+    destructive: false
+    requires: []
+    method_ref: en300132_steady_state
+    unit: A
+
+  # output_current 出现在输入侧时, 原文是"输入电流: 6.0 A" —— 那是一个
+  # **读数**(产品在吃多少电流), 不是要你去设的值。若照搬输出侧的
+  # measure_dc_current 会去测输出通道, 测不到东西; 若设成 set 就会试图
+  # 往产品灌电流。故单列一条, 走输入侧的电流探头。
+  - kind: output_current
+    side: input
+    resource: [DMM_1]
+    action: measure_input_current
+    settle_s: 0.5
+    setup_group: measurement
+    destructive: false
+    requires: []
+    method_ref: en300132_steady_state
+    unit: A
+
+  - kind: output_power
+    side: output
+    resource: [POWER_ANALYZER]
+    action: measure_output_power
+    settle_s: 0.3
+    setup_group: measurement
+    destructive: false
+    requires: []
+    method_ref: ""
+    unit: W
+
+  - kind: ripple
+    side: output
+    resource: [SCOPE_1]
+    # 纹波带宽 20MHz(EN 300 132-1 §8.1)。带宽不够会漏掉开关尖峰,
+    # 测得的纹波偏小, 合格品被放行。
+    action: measure_ripple_20mhz
+    settle_s: 0.2
+    setup_group: measurement
+    destructive: false
+    requires: []
+    method_ref: en300132_ripple
+    unit: mVpp
+
+  - kind: efficiency
+    side: output
+    resource: [POWER_ANALYZER]
+    action: measure_efficiency
+    settle_s: 1.0
+    setup_group: measurement
+    destructive: false
+    requires: []
+    method_ref: iec62368_efficiency
+    unit: "%"
+
+  - kind: timing
+    side: output
+    resource: [SCOPE_1]
+    # 时序 10~90% 上升时间按 EN 300 132-1 §9 测。
+    action: measure_transient_response
+    settle_s: 0.2
+    setup_group: measurement
+    destructive: false
+    requires: []
+    method_ref: en300132_dynamic_response
+    unit: ms
+
+  - kind: signal_state
+    side: output
+    resource: [CONTROL_IF]
+    action: read_signal_state
+    settle_s: 0.2
+    setup_group: telemetry
+    destructive: false
+    requires: []
+    method_ref: ""
+    unit: ""
+
+  - kind: telemetry_value
+    side: output
+    resource: [CONTROL_IF]
+    action: read_telemetry
+    settle_s: 0.5
+    setup_group: telemetry
+    destructive: false
+    requires: []
+    method_ref: ""
+    unit: ""
+
+  - kind: protection_action
+    side: output
+    resource: [CONTROL_IF]
+    action: verify_protection_action
+    settle_s: 1.0
+    setup_group: protection
+    # 保护动作的验证需要先注入越限(靠 fault_stimulus 或高电压档),
+    # 所以它本身不 destructive, 但依赖破坏性前置 —— DAG 会自动带上。
+    destructive: false
+    requires: []
+    method_ref: iec62368_protection
+    unit: ""
+
+  - kind: presence
+    side: output
+    resource: [CONTROL_IF]
+    action: verify_capability_present
+    settle_s: 0.3
+    setup_group: telemetry
+    destructive: false
+    requires: []
+    method_ref: ""
+    unit: ""
+
+  # measurement_setup 出现在输出侧时, 原文是"测试点为输出端子与PCB连接部"
+  # —— 那是在指定**测点**(探针接哪), 不是施加激励。所以这条是配置测量
+  # 通道, 不是设置仪器。PA601 里这类条目(安规/绝缘)全走这条。
+  - kind: measurement_setup
+    side: output
+    resource: [DMM_1]
+    action: configure_measurement_point
+    settle_s: 0.3
+    setup_group: measurement
+    destructive: false
+    requires: []
+    method_ref: ""
+    unit: ""
