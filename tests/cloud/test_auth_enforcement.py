@@ -418,7 +418,7 @@ def test_all_protected_mounts_carry_security_dependency() -> None:
     protected = [m for m in mounts if "get_current_user" in _dep_names(m)]
     anonymous = [m for m in mounts if not _dep_names(m)]
 
-    # 28 protected mounts vs 5 exempt/already-protected mounts
+    # 31 protected mounts vs 5 exempt/already-protected mounts
     # (health, auth, users, rbac, apps). The debugpy debug-CRUD router was
     # retired (task 21); the 24th is the RH-6 checkpoint-id ack alias router
     # (POST /checkpoints/{checkpoint_id}/ack), mounted with the same
@@ -430,7 +430,10 @@ def test_all_protected_mounts_carry_security_dependency() -> None:
     # The 28th is the P2 ATERag bundle import router (/api/v1/imports) — also
     # mount-level JWT-guarded, plus its own ``aterag:import`` scope on the
     # endpoint, so it is *more* restricted than the others, not less.
-    assert len(protected) == 28
+    # The 29th-31st are the station/fault-case routers added for phase 1 fault
+    # intelligence: /api/v1/plants, /api/v1/stations and /api/v1/fault-cases.
+    # They carry mount-level JWT plus per-endpoint read/write scopes.
+    assert len(protected) == 31
     assert len(anonymous) == 5
 
     anonymous_routers = [_mounted(m) for m in anonymous]

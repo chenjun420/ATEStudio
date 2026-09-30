@@ -67,6 +67,11 @@ from ate_cloud.api.v1.scripts import router as scripts_router
 from ate_cloud.api.v1.scripts_generate import router as scripts_generate_router
 from ate_cloud.api.v1.sequences import router as sequences_router
 from ate_cloud.api.v1.spc import router as spc_router
+from ate_cloud.api.v1.stations import (
+    fault_cases_router,
+    plants_router,
+    stations_router,
+)
 from ate_cloud.api.v1.trace import router as trace_router
 from ate_cloud.api.v1.users import router as users_router
 from ate_cloud.api.v1.workers import router as workers_router
@@ -91,6 +96,9 @@ _PROTECTED_ROUTERS = (
     calibrations_router,
     diagnose_router,
     faults_router,
+    plants_router,
+    stations_router,
+    fault_cases_router,
     fmea_router,
     imports_router,
     knowledge_router,
