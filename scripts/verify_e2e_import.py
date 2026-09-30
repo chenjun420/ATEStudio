@@ -22,14 +22,19 @@ import asyncio
 import sys
 from pathlib import Path
 
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+# Self-bootstrap like verify_e2e.py does. The service gets PYTHONPATH from its
+# systemd unit, so a human running this by hand does not — and a script that
+# only works if you remember an env var gets "abandoned" instead of fixed.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from ate_cloud.config import settings
-from ate_cloud.models.knowledge import SOURCE_ATERAG, TestCase, TestRequirement
-from ate_cloud.models.test_conditions import TestCondition
-from ate_cloud.schemas.aterag_bundle import BundleModel, contract_hash
-from ate_cloud.services.aterag_importer import ATERagImporter
+from sqlalchemy import func, select  # noqa: E402
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # noqa: E402
+
+from ate_cloud.config import settings  # noqa: E402
+from ate_cloud.models.knowledge import SOURCE_ATERAG, TestCase, TestRequirement  # noqa: E402
+from ate_cloud.models.test_conditions import TestCondition  # noqa: E402
+from ate_cloud.schemas.aterag_bundle import BundleModel, contract_hash  # noqa: E402
+from ate_cloud.services.aterag_importer import ATERagImporter  # noqa: E402
 
 EXPECTED_CONTRACT_HASH = "59a852c26ca277e4141c6a60ae723b20"
 
