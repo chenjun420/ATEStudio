@@ -50,17 +50,30 @@ def case_embedding_text(case: StationFaultCase) -> str:
 
 
 def case_payload(case: StationFaultCase, *, plant_id: str | None) -> dict[str, Any]:
-    """Filterable metadata carried alongside the vector.
+    """Filterable metadata **and the case text**, carried alongside the vector.
 
-    ``fix_verified`` is included as a first-class filter because "only quote
-    remedies someone confirmed" has to be enforceable at query time, not left to
-    whoever writes the prompt to remember.
+    The text is not optional. A retrieval hit that carries only an id gives the
+    downstream writer nothing to quote, so it fills the gap: the first
+    end-to-end run cited two station fault cases, and the second citation
+    described "output capacitor ESR degradation and regulator trim offsets" for
+    a case whose actual text was "fixture contact resistance caused intermittent
+    communication timeouts". Confidently wrong, and shaped exactly like the
+    "semantically similar but the wrong component" failure the phase-1 safety
+    rules single out. An id that cannot be read cannot be quoted correctly.
+
+    ``fix_verified`` rides alongside ``fix`` so a remedy that nobody confirmed
+    is legible as such to whatever writes it up, rather than looking like any
+    other field.
     """
     return {
         "case_id": case.id,
         "station_id": case.station_id,
         "plant_id": plant_id,
         "product_code": case.product_code,
+        "symptom": case.symptom,
+        "cause": case.cause,
+        "effect": case.effect,
+        "fix": case.fix,
         "fix_verified": case.fix_verified,
         "rpn": case.rpn,
         "severity": case.severity,

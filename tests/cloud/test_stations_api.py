@@ -509,3 +509,62 @@ class TestWhatGetsEmbedded:
         assert p["rpn"] == 240
         assert p["kind"] == "station_fault_case"
         assert p["plant_id"] == "p1"
+
+
+class TestThePayloadCarriesTheCaseText:
+    """A hit carrying only an id cannot be quoted correctly — so it gets quoted
+    wrongly.
+
+    First end-to-end run: two station fault cases were retrieved, and the
+    second citation described "output capacitor ESR degradation and regulator
+    trim offsets" for a case whose actual text was about fixture contact
+    resistance causing intermittent communication timeouts. The downstream
+    writer had an id, a station, and some risk numbers — and no words — so it
+    supplied its own. Confident, fluent, and wrong, in exactly the shape of the
+    "semantically similar but the wrong component" failure the phase-1 safety
+    rules single out.
+    """
+
+    def test_symptom_and_cause_travel_with_the_vector(self) -> None:
+        from ate_cloud.services.fault_case_index import case_payload
+
+        case = StationFaultCase(
+            id="c1",
+            station_id="s1",
+            symptom="工装夹具接触不良导致间歇性通信超时",
+            cause="JIG 螺丝松动, 触点氧化",
+        )
+        p = case_payload(case, plant_id="p1")
+
+        assert p["symptom"] == "工装夹具接触不良导致间歇性通信超时"
+        assert p["cause"] == "JIG 螺丝松动, 触点氧化"
+
+    def test_an_unconfirmed_remedy_travels_with_its_flag(self) -> None:
+        """The remedy may be shown, but it must not look confirmed."""
+        from ate_cloud.services.fault_case_index import case_payload
+
+        case = StationFaultCase(
+            id="c1", station_id="s1", symptom="接触不良",
+            fix="重新压紧 JIG 螺丝", fix_verified=False,
+        )
+        p = case_payload(case, plant_id="p1")
+
+        assert p["fix"] == "重新压紧 JIG 螺丝"
+        assert p["fix_verified"] is False
+
+    async def test_the_vector_and_the_text_are_stored_together(
+        self, db: AsyncSession, live: _State
+    ) -> None:
+        """End to end through the API, not just the payload function."""
+        plant = _plant(db)
+        await _flush(db)
+        station = _station(db, plant)
+        await _flush(db)
+        await api.create_fault_case(
+            FaultCaseCreate(station_id=station.id, symptom="真空吸嘴漏气导致吸附失败"),
+            db, _Req(live), _user=None,
+        )
+
+        stored = list(live.qdrant_client.upserts.values())
+        assert len(stored) == 1
+        assert stored[0]["symptom"] == "真空吸嘴漏气导致吸附失败"
