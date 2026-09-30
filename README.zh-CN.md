@@ -16,7 +16,7 @@ ATE Studio 是面向通信、服务器及消费电子制造的端到端产测工
 - **事件驱动调度器** —— 基于状态机的扫描式调度，支持前置条件求值、资源管理、自适应跳过与配置热加载。
 - **YAML DSL + 脚本** —— 声明式测试计划（v3.0/v3.2），支持循环、分支、屏障、治具控制与多 UUT 派发；可内联 Python 脚本。
 - **三级仿真** —— 仪器级噪声注入、调度器 Dry-Run、全链路仿真，无需任何硬件即可验证测试计划。
-- **AI 辅助诊断** —— 混合检索（Qdrant RAG 向量检索 + FalkorDB 本体知识图谱）用于故障定位与诊断。
+- **AI 辅助诊断** —— 检索 Qdrant 中的工位故障案例，用于故障定位与诊断建议。
 - **SPC 与追溯** —— 实时控制图、过程能力分析（Cpk/Ppk）、端到端执行追溯与 ATML 报表导出。
 - **多工位流程** —— 基于 NATS JetStream KV 的工位交接与上游依赖编排。
 - **可视化序列编辑器** —— AntV X6 拖拽式流程编排，内嵌 Monaco Editor 编辑 YAML。
@@ -33,7 +33,7 @@ ATE Studio 采用云边协同架构。
 ┌─────────────────────────────────────────────────────────────────────┐
 │                         云端  (ate_cloud)                           │
 │  FastAPI (端口 8000)  ·  SQLAlchemy (SQLite/PostgreSQL/MySQL)       │
-│  NATS JetStream  ·  Qdrant 向量库  ·  FalkorDB 图库 (Redis/6379)    │
+│  NATS JetStream  ·  Qdrant 向量库  ·  PostgreSQL 故障案例表         │
 │                                                                     │
 │  REST API + SSE  ·  脚本版本管理  ·  故障索引                       │
 │  AI 诊断  ·  SPC 分析  ·  ATML 导出  ·  配置下发                    │
@@ -91,7 +91,7 @@ docs/                   # 设计文档（中文）
 |------|------|
 | 运行时 / 包管理 | Python 3.12+、[uv](https://docs.astral.sh/uv/) |
 | Web 框架 / ORM | FastAPI、SQLAlchemy 2.0 (async)、Alembic、Pydantic v2 |
-| 消息 / 数据 | NATS JetStream、Qdrant（向量）、FalkorDB（图库，Redis/6379） |
+| 消息 / 数据 | NATS JetStream、Qdrant（向量）、PostgreSQL（故障案例） |
 | 质量工具 | ruff、mypy (strict)、pytest + pytest-asyncio |
 | 前端 | Vue 3.5、TypeScript、Vite、Pinia、Vue Router、vue-i18n |
 | 编辑器 / UI | AntV X6、Element Plus、Monaco Editor、Tailwind CSS 4 |
@@ -126,7 +126,6 @@ docker exec -it ate-studio-ate-cloud-1 alembic upgrade head
 随后访问：
 
 - API 文档（Swagger UI）：http://localhost:8000/docs
-- FalkorDB 浏览器：http://localhost:3000
 - NATS 监控：http://localhost:8222
 
 ### 非 Docker 方式
@@ -185,7 +184,7 @@ npm run dev          # http://localhost:5173，/api 代理到 :8000
 | `ATE_CLOUD_QDRANT_URL` | `http://localhost:6333` | Qdrant 向量库地址 |
 | `ATE_SIMULATION_MODE` | `false` | 使用仿真驱动（无硬件） |
 | `ATE_DEV_MODE` | `false` | 启用调试特性 / 放宽校验 |
-| `FALKORDB_URL` / `FALKORDB_GRAPH` / `FALKORDB_PASSWORD` | `redis://localhost:6379` / `fmea` / _(空)_ | FalkorDB 图数据库（Redis RESP，端口 6379）；密码留空 = 无认证 |
+| ~~`FALKORDB_URL` / `FALKORDB_GRAPH` / `FALKORDB_PASSWORD`~~ | — | **已移除** —— 无读者、无部署；见设计规格 §6.1 |
 | `JWT_SECRET` / `JWT_ALGORITHM` | — / `RS256` | JWT 签名密钥与算法 |
 | `OPENAI_API_KEY` / `OPENAI_BASE_URL` | — | LLM 凭证（OpenAI、DashScope/通义千问等） |
 | `OPENAI_MODEL` / `OPENAI_EMBEDDING_MODEL` | `gpt-4o-mini` / `text-embedding-3-small` | 对话与嵌入模型 |
@@ -222,10 +221,12 @@ npm run generate:types                    # 由 shared/dsl.py 重新生成 DSL T
 
 | Profile | 服务 | 用途 |
 |---------|------|------|
-| `dev` | nats + qdrant + falkordb + ate-cloud + ate-platform | 全栈开发 |
-| `cloud` | nats + qdrant + falkordb + ate-cloud | 仅云侧部署 |
+| `dev` | nats + qdrant + ate-cloud + ate-platform | 全栈开发 |
+| `cloud` | nats + qdrant + ate-cloud | 仅云侧部署 |
 
-裸金属部署时，在目标主机上通过 systemd/nohup 运行同样的服务（NATS、Qdrant、FalkorDB、`ate_cloud`）；启动 uvicorn 时需设置 `PYTHONPATH=src`。FalkorDB 以 Redis 8 服务加载 `falkordb.so` 模块、监听 6379 端口运行（见 [`docs/部署手册-192.168.5.24调试服务器.md`](docs/部署手册-192.168.5.24调试服务器.md)）。
+裸金属部署时，在目标主机上通过 systemd/nohup 运行同样的服务（NATS、Qdrant、PostgreSQL、`ate_cloud`）；启动 uvicorn 时需设置 `PYTHONPATH=src`。边缘/工位执行节点接入该主机的配置见 [`docs/部署手册-边缘节点接入192.168.5.24.md`](docs/部署手册-边缘节点接入192.168.5.24.md)。
+
+没有需要部署的知识图谱服务。这里原本写着 FalkorDB，它已随知识图谱子系统一并删除：它的依赖、compose 服务、开通脚本、部署硬闸门和冒烟检查一应俱全，却从未在任何一台主机上真正启动过。故障案例存放在 PostgreSQL，经 Qdrant 检索。论证见 [`docs/superpowers/specs/2026-09-30-aterag-onboarding-and-kg-removal-design.md`](docs/superpowers/specs/2026-09-30-aterag-onboarding-and-kg-removal-design.md) §6.1。
 
 ---
 

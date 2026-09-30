@@ -1,8 +1,9 @@
 """ATML IEEE 1671 TestDescription importer (task 11).
 
 Takes the output of :func:`ate_cloud.services.atml_td_parser.parse_test_description`
-and persists it as ``TestRequirement`` / ``TestCase`` ORM rows (the relational
-traceability layer from task 10 — NOT the knowledge graph, which task 12 owns).
+and persists it as ``TestRequirement`` / ``TestCase`` ORM rows — the relational
+traceability layer. That layer is the whole destination: an earlier design also
+fed a knowledge graph from these rows, and that path was removed.
 
 Behavior:
 - ``source="atml"`` and ``atml_ref`` are set on every persisted row.

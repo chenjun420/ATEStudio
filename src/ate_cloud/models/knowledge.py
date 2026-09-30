@@ -1,7 +1,7 @@
-"""Knowledge-domain SQLAlchemy models (task 10, ontology-driven persistence).
+"""Knowledge-domain SQLAlchemy models.
 
 Deterministic relational layer for the ontology entities defined in
-``services/ontology/core.py`` (TestRequirement / TestCase / FMEA) plus the
+the requirement/case/FMEA tables plus the
 persisted Diagnosis that task 15 links to an execution run. No LLM, no graph
 DB — plain tables that run on SQLite (dev) and PostgreSQL (prod).
 
@@ -15,7 +15,7 @@ DB — plain tables that run on SQLite (dev) and PostgreSQL (prod).
   an execution run, with nullable operator feedback (helpful bool + note).
 
 Vocabulary columns (``source``, ``fault_code``, ``status``) store the stable
-canonical ID strings from ``services/ontology/vocab.py`` (FaultKind etc.).
+canonical FaultKind ids.
 """
 
 from datetime import datetime
@@ -36,7 +36,7 @@ from sqlalchemy.orm import Mapped, mapped_column, validates
 
 from . import Base
 
-#: FMEA rating bounds (ontology core.py _FMEA_MIN/_FMEA_MAX; max RPN = 1000).
+#: FMEA rating bounds (max RPN = 1000).
 RATING_MIN = 1
 RATING_MAX = 10
 
@@ -193,7 +193,7 @@ class FMEA(Base):
         component_code: Component/function this entry analyzes (ontology
             Component stable code / free-text component id, indexed).
         function_name: Optional function of the component being analyzed.
-        fault_code: Canonical FaultKind id from services/ontology/vocab.py
+        fault_code: Canonical FaultKind id
             (nullable — entries may predate vocab resolution).
         failure_mode: Failure mode description (required).
         effects: Failure effect(s) description.

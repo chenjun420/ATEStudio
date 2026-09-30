@@ -90,8 +90,7 @@ export default {
     simulationConsole: 'Simulation Console',
     operatorPanel: 'Operator Panel',
     roleManagement: 'Roles & Permissions',
-    knowledgeGraph: 'Knowledge Graph',
-    traceabilityMatrix: 'Traceability Matrix',
+      traceabilityMatrix: 'Traceability Matrix',
   },
   settings: {
     themeMode: 'Theme Mode',

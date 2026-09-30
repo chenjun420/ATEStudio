@@ -1,6 +1,6 @@
 """Tests for task 10 knowledge-domain persistence models.
 
-Covers the deterministic (non-LLM) relational layer for the ontology-driven
+Covers the deterministic (non-LLM) relational layer for the
 domain: TestRequirement -> TestCase (1-N), FMEA with server-computed RPN and
 1-10 rating enforcement, and persisted Diagnosis linked to an execution run
 (task 15 feedback link). Also an Alembic migration smoke test

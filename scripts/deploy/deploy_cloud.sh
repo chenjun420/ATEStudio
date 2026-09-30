@@ -5,11 +5,10 @@
 # DEPLOYMENT WAVE CHECKLIST (.omo/notepads/.../problems.md DEPLOY-0..4):
 #
 #   DEPLOY-0  STOP & DISABLE the old ate-cloud; verify nothing holds :8000.
-#   DEPLOY-1  (optional, off by default) purge Neo4j via purge_neo4j.sh.
 #   DEPLOY-2  (check only) NATS version/status + JetStream streams/KV;
 #             advise restart ONLY when something is missing (never forced).
-#   DEPLOY-3  FalkorDB is provisioned separately by provision_falkordb.sh
-#             (MODE=baremetal); this script verifies PING before deploying.
+#   DEPLOY-3  (removed) was a hard gate on FalkorDB being up. The knowledge-graph
+#             subsystem is gone, so there is no graph service to provision.
 #   DEPLOY-4  rsync tree -> ~/ATEStudio (non-git target); uv sync;
 #             alembic upgrade head (assert single head d1e2f3a4b5c6);
 #             install ate-cloud.service + operator env file; restart;
@@ -35,7 +34,6 @@
 #                    (re)install .env.deploy; skipped with a warning if unset)
 #   WITH_DEV=1       run `uv sync --extra dev` on the host (default: runtime-only
 #                    `uv sync`; dev tools live in the `dev` EXTRA, not a group)
-#   RUN_PURGE=1      also run DEPLOY-1 Neo4j purge on the host (default off)
 #   SKIP_RSYNC=1     do not sync code (re-run config/migrations only)
 #   SKIP_HEALTH=1    skip the final HTTP health checks
 #   LOCAL_ONLY=1     execute steps locally instead of over SSH (run ON the host)
@@ -51,7 +49,6 @@ REMOTE_USER="${REMOTE_USER:-rpdzkj}"
 REMOTE_DIR="${REMOTE_DIR:-/home/${REMOTE_USER}/ATEStudio}"
 ENV_FILE="${ENV_FILE:-}"
 WITH_DEV="${WITH_DEV:-0}"
-RUN_PURGE="${RUN_PURGE:-0}"
 SKIP_RSYNC="${SKIP_RSYNC:-0}"
 SKIP_HEALTH="${SKIP_HEALTH:-0}"
 LOCAL_ONLY="${LOCAL_ONLY:-0}"
@@ -149,22 +146,21 @@ else
     warn "ENV_FILE not set — the .env.deploy will NOT be (re)installed; the existing remote env file is left untouched"
 fi
 
-log "target: ${ssh_target}:${REMOTE_DIR}  (LOCAL_ONLY=${LOCAL_ONLY}, WITH_DEV=${WITH_DEV}, RUN_PURGE=${RUN_PURGE})"
+log "target: ${ssh_target}:${REMOTE_DIR}  (LOCAL_ONLY=${LOCAL_ONLY}, WITH_DEV=${WITH_DEV})"
 
 # ---------------------------------------------------------------------------
-# DEPLOY-3 prerequisite: FalkorDB must answer on 6379 (provision separately).
+# The DEPLOY-3 FalkorDB prerequisite gate is gone with the knowledge-graph
+# subsystem.
+#
+# It read:
+#     die "FalkorDB not reachable — run provision_falkordb.sh (DEPLOY-3) ..."
+# after a PING, then a second hard gate on `MODULE LIST` containing "graph".
+#
+# That gate was the most literal instance of the pattern this removal exists to
+# end: the deployment refused to proceed until a service the application could
+# not use was up, and no deployment had ever satisfied it. Every real
+# deployment of this project required someone to pass a flag to get past it.
 # ---------------------------------------------------------------------------
-log "[prereq] checking FalkorDB on 127.0.0.1:6379 (host-local)..."
-if ! remote_cmd 'redis-cli -h 127.0.0.1 -p 6379 PING 2>/dev/null | grep -q PONG'; then
-    warn "FalkorDB/Redis is not answering PING on the host"
-    warn "provision it FIRST (on the host):  sudo MODE=baremetal ./scripts/deploy/provision_falkordb.sh"
-    die "FalkorDB not reachable — run provision_falkordb.sh (DEPLOY-3) before deploying"
-fi
-if ! remote_cmd 'redis-cli -h 127.0.0.1 -p 6379 MODULE LIST 2>/dev/null | grep -q "\"graph\""'; then
-    warn "Redis answers PING but the FalkorDB 'graph' module is NOT loaded"
-    die "FalkorDB graph module missing — re-run provision_falkordb.sh and check journalctl -u falkordb"
-fi
-log "PASS: FalkorDB reachable with graph module loaded"
 
 # ---------------------------------------------------------------------------
 # DEPLOY-2 (check only): NATS version + systemd status + JetStream streams/KV.
@@ -200,23 +196,21 @@ fi
 NATS_EOF
 
 # ---------------------------------------------------------------------------
-# DEPLOY-1 (optional): Neo4j purge (authorized wipe; off unless RUN_PURGE=1).
-# ---------------------------------------------------------------------------
-if [ "${RUN_PURGE}" = "1" ]; then
-    log "[DEPLOY-1] purging Neo4j from the host (authorized wipe)..."
-    purge_script="${SCRIPT_DIR}/purge_neo4j.sh"
-    [ -f "${purge_script}" ] || die "missing ${purge_script}"
-    if [ "${LOCAL_ONLY}" = "1" ]; then
-        bash "${purge_script}"
-    else
-        # shellcheck disable=SC2086
-        ssh ${SSH_OPTS} "${ssh_target}" 'cat > /tmp/purge_neo4j.sh' < "${purge_script}"
-        remote_sudo 'bash /tmp/purge_neo4j.sh'
-        remote_cmd "rm -f /tmp/purge_neo4j.sh"
-    fi
-else
-    log "[DEPLOY-1] Neo4j purge skipped (set RUN_PURGE=1 to enable; graph backend is FalkorDB)"
-fi
+# DEPLOY-1 (Neo4j purge) is gone, and so is purge_neo4j.sh.
+#
+# It used to be an opt-in wipe (`RUN_PURGE=1`) of a service this system no
+# longer has any part in. Neo4j was the first graph backend, replaced by
+# FalkorDB; FalkorDB was then removed with the knowledge-graph subsystem.
+# Verified on the only deployed host (192.168.5.24) while removing that
+# subsystem: no `neo4j` binary, no systemd unit, no process, no data directory
+# under /var/lib or /opt, and ports 7474/7687 both closed. FalkorDB's 6379 was
+# closed too — so neither graph backend was ever actually running.
+#
+# The script was kept for a while on the grounds that deleting a host-wiping
+# tool is risky. That reasoning was wrong once the target is known to be
+# absent: a purge script for a service that does not exist implies an
+# operational step that someone still has to remember, and there is none.
+# --------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
 # DEPLOY-0 (user mandate): FULLY STOP & DISABLE the old ate-cloud; make sure

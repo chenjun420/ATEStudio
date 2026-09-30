@@ -32,7 +32,7 @@ const SEEDED_MENU_CODES = [
   'simulation-console', 'operator-panel',
   'settings', 'changeover', 'calibration', 'fmea', 'users', 'roles',
   // defined in AppLayout until the backend seed learns them
-  'knowledge-graph', 'traceability',
+  'traceability',
 ]
 
 const SEEDED_APP_CODES = ['node-mgmt', 'flow-mgmt', 'exec-monitor', 'system']

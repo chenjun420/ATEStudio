@@ -2,7 +2,7 @@
 
 Receives a diagnosis request (product type, failed test, error code, log
 snippet), retrieves relevant failure cases via HybridRetriever (Qdrant
-vector + ontology knowledge-graph fusion), then calls an LLM with the
+vector retrieval over the fault-case index), then calls an LLM with the
 retrieved context to produce a structured diagnosis (root cause,
 confidence, evidence citations, repair steps).
 

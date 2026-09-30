@@ -59,7 +59,7 @@ class DiagnosisRequest:
         """Build a natural-language query for hybrid retrieval.
 
         Combines all available fields into a single query string suitable
-        for Qdrant semantic search and ontology knowledge-graph traversal.
+        for semantic search over the fault-case index.
         """
         parts = [self.failed_test]
         if self.error_code:

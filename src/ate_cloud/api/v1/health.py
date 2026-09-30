@@ -4,10 +4,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 from nats.js.errors import NotFoundError
 from sqlalchemy import text
 
-from ate_cloud.config import settings
 from ate_cloud.db import async_session_factory
-from ate_cloud.services.falkordb_graph_service import FalkorDBGraphService
-from ate_cloud.services.graph_service import GraphService
 
 # Worker registry KV bucket name — must match stream_manager.py / main.py.
 _WORKER_KV_BUCKET = "ate-workers"
@@ -16,32 +13,6 @@ _STATUS_OK = "ok"
 _STATUS_DOWN = "down"
 
 router = APIRouter(tags=["health"])
-
-
-def _get_or_create_graph_service(request: Request) -> GraphService | None:
-    """Lazily fetch/create the GraphService, cached on ``app.state``.
-
-    Mirrors the lazy factories in faults.py/diagnose.py: the service is
-    reused from ``app.state.graph_service`` when present (e.g. injected by
-    tests or created by another router) and otherwise constructed from
-    settings on first use. Construction opens no socket (the FalkorDB
-    client connects lazily on first command), so a missing/unreachable
-    graph never blocks boot. Returns ``None`` when construction fails —
-    the readiness probe reports ``graph: "down"`` instead of raising.
-    """
-    service: GraphService | None = getattr(request.app.state, "graph_service", None)
-    if service is not None:
-        return service
-    try:
-        service = FalkorDBGraphService(
-            url=settings.falkordb_url,
-            graph_name=settings.falkordb_graph,
-            password=settings.falkordb_password or None,
-        )
-    except Exception:
-        return None
-    request.app.state.graph_service = service
-    return service
 
 
 @router.get("/health/db")
@@ -115,13 +86,15 @@ async def readiness(request: Request) -> dict[str, str]:
     - ``database`` — ``SELECT 1`` round-trip (mirrors ``/health/db``).
     - ``nats``     — connected client set by the lifespan (mirrors the
       ``nats_connected`` flag of ``/health/nats``).
-    - ``graph``    — FalkorDBGraphService.health() Redis PING. The graph
-      is optional: the service is constructed lazily on first probe
-      (cached on ``app.state.graph_service``, shared with faults/diagnose)
-      and any construction/connection error maps to ``"down"`` — graph
-      presence is never a boot requirement and a down graph must not 500.
 
-    Qdrant/vector health is intentionally out of scope here.
+    The ``graph`` component was removed with the knowledge-graph subsystem. It
+    had been reporting ``"down"`` on every deployment that did not run
+    FalkorDB, which is the same permanent red that told operators nothing — it
+    said "the thing you never deployed is not running".
+
+    Qdrant/vector health is intentionally out of scope here. It *is* reported,
+    with substance, by ``GET /api/v1/diagnose/readiness`` — which distinguishes
+    "configured" from "has history", something a bare ``ok``/``down`` cannot.
     """
 
     async def _database_ok() -> bool:
@@ -137,18 +110,7 @@ async def readiness(request: Request) -> dict[str, str]:
 
         return main_module._nats_client is not None
 
-    async def _graph_ok() -> bool:
-        graph_service = _get_or_create_graph_service(request)
-        if graph_service is None:
-            return False
-        try:
-            await graph_service.health()
-            return True
-        except Exception:
-            return False
-
     return {
         "database": _STATUS_OK if await _database_ok() else _STATUS_DOWN,
         "nats": _STATUS_OK if _nats_connected() else _STATUS_DOWN,
-        "graph": _STATUS_OK if await _graph_ok() else _STATUS_DOWN,
     }

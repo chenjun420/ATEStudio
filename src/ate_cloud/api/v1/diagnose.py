@@ -1,12 +1,12 @@
 """Diagnosis API endpoints - AI-assisted fault diagnosis via hybrid RAG + LLM.
 
-- ``POST /api/v1/diagnose`` - hybrid retrieval (Qdrant + ontology KG) and
+- ``POST /api/v1/diagnose`` - vector retrieval over the fault-case index and
   LLM analysis; every diagnosis is persisted to the ``diagnoses`` ORM table
   (task 15), linked to the run/session when supplied.
 - ``POST /api/v1/diagnose/{diagnosis_id}/feedback`` - record operator
   feedback, updating the row's ``helpful`` / ``feedback_note`` columns.
 
-GraphService, EmbeddingService, HybridRetriever and DiagnosisService are
+EmbeddingService, HybridRetriever and DiagnosisService are
 each lazily built once and cached on ``app.state`` (mirrors faults.py), so
 requests reuse one shared DiagnosisService.
 """
@@ -30,12 +30,8 @@ from ate_cloud.services.diagnosis_store import (
     record_feedback as persist_feedback,
 )
 from ate_cloud.services.embedding_service import EmbeddingService
-from ate_cloud.services.falkordb_graph_service import (
-    CircuitBreakerOpenError,
-    FalkorDBGraphService,
-)
-from ate_cloud.services.graph_service import GraphService
 from ate_cloud.services.hybrid_retriever import HybridRetriever
+from ate_platform.common.circuit_breaker import CircuitBreakerOpenError
 
 logger = logging.getLogger(__name__)
 
@@ -43,30 +39,6 @@ router = APIRouter(prefix="/diagnose", tags=["diagnosis"])
 
 # Type alias for async DB session dependency (avoids B008 ruff warning).
 DBSession = Annotated[AsyncSession, Depends(get_db)]
-
-
-def _get_graph_service(request: Request) -> GraphService:
-    """Lazily create/cache the GraphService on app.state (mirrors faults.py).
-
-    Construction is lazy/cheap (no socket until first graph command).
-    Raises HTTPException 503 if construction fails.
-    """
-    service: GraphService | None = getattr(request.app.state, "graph_service", None)
-    if service is not None:
-        return service
-    try:
-        service = FalkorDBGraphService(
-            url=settings.falkordb_url,
-            graph_name=settings.falkordb_graph,
-            password=settings.falkordb_password or None,
-        )
-    except (ValueError, Exception) as e:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Graph service unavailable: {e}",
-        ) from e
-    request.app.state.graph_service = service
-    return service
 
 
 def _get_embedding_service(request: Request) -> EmbeddingService:
@@ -131,19 +103,22 @@ def _get_qdrant_client(request: Request) -> Any:
 def _get_hybrid_retriever(
     request: Request,
     embedding_service: Annotated[EmbeddingService, Depends(_get_embedding_service)],
-    graph_service: Annotated[GraphService, Depends(_get_graph_service)],
     qdrant_client: Annotated[Any, Depends(_get_qdrant_client)],
 ) -> HybridRetriever:
     """Dependency: create or retrieve HybridRetriever from app state.
 
     Caches on app.state for reuse across requests.
+
+    No ``graph_service``: the knowledge-graph leg is gone, and the retriever's
+    RRF degrades to the single vector list it was always able to run on its own
+    (see ``hybrid_fusion`` — a pure function over two ranked lists, of which one
+    is now always empty).
     """
     retriever: HybridRetriever | None = getattr(request.app.state, "hybrid_retriever", None)
     if retriever is not None:
         return retriever
     retriever = HybridRetriever(
         embedding_service=embedding_service,
-        graph_service=graph_service,
         qdrant_client=qdrant_client,
     )
     request.app.state.hybrid_retriever = retriever
@@ -391,9 +366,14 @@ async def record_feedback(
     """POST /api/v1/diagnose/{diagnosis_id}/feedback - record operator feedback.
 
     Updates ``helpful`` (confirmed -> True, rejected -> False) and
-    ``feedback_note`` on the persisted diagnosis. A rejected diagnosis with
-    a correction can later drive knowledge-graph evolution via
-    ``POST /api/v1/faults/evolve``.
+    ``feedback_note`` on the persisted diagnosis.
+
+    A rejection used to be able to drive knowledge-graph evolution through
+    ``POST /api/v1/faults/evolve``. That endpoint is gone with the subsystem, so
+    feedback now only records what the operator said — it does not change any
+    knowledge. Turning a rejected diagnosis into a fault case is a person's
+    edit in the station case base, deliberately: an automatic write would let a
+    bad diagnosis author its own correction.
 
     Raises:
         HTTPException: 400 if feedback is not 'confirmed'/'rejected';

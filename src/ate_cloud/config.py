@@ -148,37 +148,21 @@ class Settings(BaseSettings):
         description="Embedding model name (e.g. text-embedding-3-small, qwen3.7-text-embedding)",
     )
 
-    # Neo4j configuration (no ATE_CLOUD_ prefix)
-    neo4j_url: str = Field(
-        default="bolt://localhost:7687",
-        validation_alias="NEO4J_URL",
-        description="Neo4j Bolt connection URL",
-    )
-    neo4j_password: str = Field(
-        default="atestudio",
-        validation_alias="NEO4J_PASSWORD",
-        description="Neo4j database password",
-    )
-
-    # FalkorDB configuration (no ATE_CLOUD_ prefix).
-    # FalkorDB speaks the Redis RESP protocol (default port 6379); it is the
-    # default GraphService backend. NEO4J_* fields above are retained for
-    # rollback/reference but the lazy graph factories select FalkorDB.
-    falkordb_url: str = Field(
-        default="redis://localhost:6379",
-        validation_alias="FALKORDB_URL",
-        description="FalkorDB/Redis connection URL (RESP, default port 6379)",
-    )
-    falkordb_graph: str = Field(
-        default="fmea",
-        validation_alias="FALKORDB_GRAPH",
-        description="FalkorDB graph name (key) holding the FMEA knowledge graph",
-    )
-    falkordb_password: str = Field(
-        default="",
-        validation_alias="FALKORDB_PASSWORD",
-        description="FalkorDB/Redis password (empty for no auth)",
-    )
+    # Knowledge-graph backend configuration removed.
+    #
+    # Two blocks lived here. FalkorDB (FALKORDB_URL / FALKORDB_GRAPH /
+    # FALKORDB_PASSWORD) backed the ontology graph that phase 1 does without:
+    # the DENSO/JST field study measured the RAG baseline at F1@20 = 0.267 *while
+    # already using an FMEA knowledge graph as its data source*, with the full
+    # graph method reaching 0.523 only on a single line, the gains coming from
+    # algorithms rather than storage. Fault cases now live in normalised
+    # relational tables and are retrieved through Qdrant.
+    #
+    # Neo4j (NEO4J_URL / NEO4J_PASSWORD) was already dead — kept only "for
+    # rollback/reference" by a comment, with no reader anywhere in the codebase.
+    # Dead configuration is not a safety net; it is a way to give a future
+    # reader the impression that a second graph backend could be switched back
+    # on by flipping one setting.
 
     # JWT authentication configuration (no ATE_CLOUD_ prefix)
     jwt_secret: str = Field(

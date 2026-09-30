@@ -51,7 +51,6 @@ const MENU_KEY_BY_CODE: Record<string, string> = {
   users: 'menu.userManagement',
   roles: 'menu.roleManagement',
   // defined in AppLayout until the backend seed learns them
-  'knowledge-graph': 'menu.knowledgeGraph',
   traceability: 'menu.traceabilityMatrix',
 }
 

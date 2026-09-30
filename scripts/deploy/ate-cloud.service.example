@@ -32,9 +32,8 @@ Description=ATE Studio cloud service (FastAPI / uvicorn, ate_cloud.main:app)
 # Start after the network and every local dependency the app talks to:
 #   nats.service      NATS JetStream      (.24 bare binary under systemd)
 #   qdrant.service    Qdrant vector DB
-#   falkordb.service  FalkorDB graph DB   (Redis 8 + falkordb.so, provision_falkordb.sh)
 #   nginx.service     reverse proxy       (unit may be enabled independently)
-After=network-online.target nats.service qdrant.service falkordb.service nginx.service
+After=network-online.target nats.service qdrant.service nginx.service
 Wants=network-online.target
 
 [Service]
@@ -70,7 +69,7 @@ TimeoutStopSec=30
 # --- Basic hardening (debug LAN; tighten further for production) ------------
 NoNewPrivileges=true
 PrivateTmp=true
-# The app needs network egress (NATS/Qdrant/FalkorDB/LLM) and the project
+# The app needs network egress (NATS/Qdrant/LLM) and the project
 # tree + data dir; do NOT over-restrict on the first bring-up.
 
 [Install]

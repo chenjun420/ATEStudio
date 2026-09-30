@@ -40,12 +40,11 @@ from ate_cloud.api.v1.dashboard import router as dashboard_router
 from ate_cloud.api.v1.diagnose import router as diagnose_router
 from ate_cloud.api.v1.executions import router as executions_router
 from ate_cloud.api.v1.executions import sse_router as executions_sse_router
-from ate_cloud.api.v1.faults import router as faults_router
 from ate_cloud.api.v1.fixtures import router as fixtures_router
 from ate_cloud.api.v1.fmea import router as fmea_router
 from ate_cloud.api.v1.health import router as health_router
 from ate_cloud.api.v1.imports import router as imports_router
-from ate_cloud.api.v1.knowledge import router as knowledge_router
+from ate_cloud.api.v1.knowledge_reads import router as knowledge_router
 from ate_cloud.api.v1.limits import router as limits_router
 from ate_cloud.api.v1.node_flow_bindings import router as node_flow_bindings_router
 from ate_cloud.api.v1.node_templates import router as node_templates_router
@@ -95,12 +94,18 @@ _PROTECTED_ROUTERS = (
     node_flow_bindings_router,
     calibrations_router,
     diagnose_router,
-    faults_router,
     plants_router,
     stations_router,
     fault_cases_router,
     fmea_router,
     imports_router,
+    # Mounted from ``knowledge_reads`` rather than from the deleted
+    # ``knowledge`` module. That module held the extraction trigger and the
+    # shared graph factories; ``knowledge_reads`` kept registering on the same
+    # router object by importing it, which meant removing the former silently
+    # unregistered every ``/knowledge`` route without a single import error —
+    # 135 paths, and the traceability and requirement reads simply gone.
+    # Hence the explicit mount here, which fails loudly if that recurs.
     knowledge_router,
     fixtures_router,
     limits_router,

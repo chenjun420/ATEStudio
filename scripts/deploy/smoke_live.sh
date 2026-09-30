@@ -3,20 +3,19 @@
 # smoke_live.sh — agent-runnable LIVE smoke test for an ATE Studio cloud deploy.
 #
 # Verifies a deployed cloud on a bare-metal host (default 192.168.5.24):
-#   * TCP reachability of nginx:80, FalkorDB:6379, Qdrant:6333, NATS monitor:8222
+#   * TCP reachability of nginx:80, Qdrant:6333, NATS monitor:8222
 #   * HTTP readiness THROUGH nginx:  GET /api/v1/health/ready  (F3 key check —
 #     the OLD deploy returns 404 for this path; a 404 is a clear FAIL meaning
 #     "old deploy still serving")
-#   * FalkorDB graph alive: redis-cli PING + GRAPH.QUERY fmea "RETURN 1"
-#     (skipped if redis-cli is not installed locally)
+#   (a check for the knowledge graph used to live here and always failed)
 #   * Qdrant: GET /collections returns 200 (expect ate_failures /
-#     ate_fault_symptoms)
+#     the station fault-case index)
 #   * NATS monitor: GET /varz returns 200
 #   * optional POST /api/v1/diagnose reachability — only when SMOKE_AUTH_TOKEN
 #     is set (skipped otherwise; no credentials are ever hardcoded here)
 #
 # This script NEVER contains passwords or keys. Any auth token/password is read
-# ONLY from the environment (SMOKE_AUTH_TOKEN / FALKORDB_PASSWORD); checks that
+# ONLY from the environment (SMOKE_AUTH_TOKEN); checks that
 # need auth but have no token are SKIPped with a clear message, never failed.
 #
 # Exit status:
@@ -34,11 +33,9 @@
 #   HOST             target host            (default 192.168.5.24)
 #   HTTP_PORT        nginx HTTP port        (default 80)
 #   CLOUD_PORT       direct cloud port      (default 8000; optional direct check)
-#   FALKORDB_PORT    FalkorDB Redis port    (default 6379; graph key "fmea")
 #   QDRANT_PORT      Qdrant HTTP port       (default 6333)
 #   NATS_MON_PORT    NATS monitor port      (default 8222)
 #   SMOKE_AUTH_TOKEN JWT for authed probes  (default unset -> those SKIP)
-#   FALKORDB_PASSWORD password for redis-cli(default unset -> no AUTH)
 #   CHECK_CLOUD_DIRECT=1 also probe :8000 directly (default 0)
 #
 set -euo pipefail
@@ -49,15 +46,12 @@ set -euo pipefail
 HOST="${HOST:-192.168.5.24}"
 HTTP_PORT="${HTTP_PORT:-80}"
 CLOUD_PORT="${CLOUD_PORT:-8000}"
-FALKORDB_PORT="${FALKORDB_PORT:-6379}"
 QDRANT_PORT="${QDRANT_PORT:-6333}"
 NATS_MON_PORT="${NATS_MON_PORT:-8222}"
 SMOKE_AUTH_TOKEN="${SMOKE_AUTH_TOKEN:-}"
-FALKORDB_PASSWORD="${FALKORDB_PASSWORD:-}"
 CHECK_CLOUD_DIRECT="${CHECK_CLOUD_DIRECT:-0}"
 
-FALKORDB_GRAPH="fmea"
-QDRANT_COLLECTIONS="ate_failures ate_fault_symptoms"
+QDRANT_COLLECTIONS="ate_failures"
 HEALTH_PATH="/api/v1/health/ready"
 
 CURL_CONNECT_TIMEOUT=5
@@ -126,7 +120,7 @@ http_body() {
          --max-time "${CURL_MAX_TIME}" "$@" "${url}" 2>/dev/null || true
 }
 
-log "target: http://${HOST}  (nginx :${HTTP_PORT}, cloud :${CLOUD_PORT}, FalkorDB :${FALKORDB_PORT}, Qdrant :${QDRANT_PORT}, NATS mon :${NATS_MON_PORT})"
+log "target: http://${HOST}  (nginx :${HTTP_PORT}, cloud :${CLOUD_PORT}, Qdrant :${QDRANT_PORT}, NATS mon :${NATS_MON_PORT})"
 log "note: short curl timeouts (connect ${CURL_CONNECT_TIMEOUT}s / max ${CURL_MAX_TIME}s) — an unreachable host fails fast."
 echo
 
@@ -143,7 +137,6 @@ check_tcp() {
     fi
 }
 check_tcp "${HTTP_PORT}"      "nginx"
-check_tcp "${FALKORDB_PORT}"  "falkordb"
 check_tcp "${QDRANT_PORT}"    "qdrant"
 check_tcp "${NATS_MON_PORT}"  "nats-mon"
 if [ "${CHECK_CLOUD_DIRECT}" = "1" ]; then
@@ -199,32 +192,14 @@ if [ "${CHECK_CLOUD_DIRECT}" = "1" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# (c) FalkorDB graph alive — redis-cli PING + GRAPH.QUERY fmea "RETURN 1".
+# (c) The FalkorDB graph check is gone with the knowledge-graph subsystem.
+#
+# It ran `redis-cli PING` and then `GRAPH.QUERY fmea "RETURN 1"`, and FAILED the
+# smoke run on both. That is the correct behaviour for a service this system
+# needs, and the wrong behaviour for a service it has stopped needing: the
+# smoke test has been reporting a failure for a component that was never
+# deployed, which trained everyone to read past a red line in this output.
 # ---------------------------------------------------------------------------
-log "== FalkorDB graph =="
-if ! have redis-cli; then
-    skip "falkordb/graph" "redis-cli not installed locally — run on the host or install redis-tools to check graph '${FALKORDB_GRAPH}'"
-else
-    auth_args=()
-    if [ -n "${FALKORDB_PASSWORD}" ]; then
-        auth_args=(-a "${FALKORDB_PASSWORD}" --no-auth-warning)
-    fi
-    if ping_out="$(redis-cli -h "${HOST}" -p "${FALKORDB_PORT}" "${auth_args[@]}" PING 2>/dev/null)" \
-       && printf '%s' "${ping_out}" | grep -q PONG; then
-        pass "falkordb/ping" "PING -> PONG"
-    else
-        fail "falkordb/ping" "redis-cli PING to ${HOST}:${FALKORDB_PORT} did not return PONG"
-    fi
-    # GRAPH.QUERY fmea "RETURN 1" — redis-cli prints the integer as (integer) 1.
-    if gq="$(redis-cli -h "${HOST}" -p "${FALKORDB_PORT}" "${auth_args[@]}" \
-                 GRAPH.QUERY "${FALKORDB_GRAPH}" "RETURN 1" 2>/dev/null)" \
-       && printf '%s' "${gq}" | grep -q '(integer) 1'; then
-        pass "falkordb/graph" "GRAPH.QUERY ${FALKORDB_GRAPH} \"RETURN 1\" -> (integer) 1"
-    else
-        fail "falkordb/graph" "GRAPH.QUERY ${FALKORDB_GRAPH} did not return (integer) 1 (graph missing/provisioning?)"
-    fi
-fi
-echo
 
 # ---------------------------------------------------------------------------
 # (d) Qdrant — GET /collections expects 200; note expected collections.

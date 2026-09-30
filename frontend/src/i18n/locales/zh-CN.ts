@@ -90,8 +90,7 @@ export default {
     simulationConsole: '仿真调试控制台',
     operatorPanel: '操作员面板',
     roleManagement: '角色与权限',
-    knowledgeGraph: '知识图谱',
-    traceabilityMatrix: '需求追溯矩阵',
+      traceabilityMatrix: '需求追溯矩阵',
   },
   settings: {
     themeMode: '主题模式',

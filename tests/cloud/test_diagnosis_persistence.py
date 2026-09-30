@@ -1,6 +1,6 @@
 """Task 15 — DiagnosisService sharing + Diagnosis persistence/feedback tests.
 
-Covers the task-15 contract with fakes only (no live FalkorDB/Qdrant/OpenAI):
+Covers the task-15 contract with fakes only (no live Qdrant/OpenAI):
 
 * ONE shared ``DiagnosisService`` is lazily built and cached on
   ``app.state`` — two requests reuse the same instance (no per-request
@@ -12,12 +12,12 @@ Covers the task-15 contract with fakes only (no live FalkorDB/Qdrant/OpenAI):
   ``feedback_note`` on that row (confirmed -> True, rejected -> False) and
   404s an unknown id.
 * No LLM key -> retrieval-only diagnosis is still returned AND persisted.
-* Graph branch down -> retrieval degrades (200, possibly empty) and the
+* Qdrant branch down -> retrieval degrades (200, possibly empty) and the
   diagnosis is still persisted (task-14 graceful degrade unchanged).
 
 The conftest ``client`` fixture supplies an in-memory SQLite session via
 the ``get_db`` override; retrieval collaborators are overridden here with
-in-memory fakes so the REAL lazy factory chain (graph/embedding/qdrant ->
+in-memory fakes so the REAL lazy factory chain (embedding/qdrant ->
 HybridRetriever -> DiagnosisService caching) executes.
 """
 
@@ -85,19 +85,18 @@ def _wire_retrieval_fakes(
     app: Any,
     *,
     qdrant: FakeQdrant | None = None,
-    graph: Any | None = None,
 ) -> None:
-    """Override the three external collaborators; keep the REAL factories.
+    """Override the two external collaborators; keep the REAL factories.
 
-    HybridRetriever and DiagnosisService are deliberately NOT overridden so
-    the lazy get_or_create caching on app.state is exercised end to end.
+    HybridRetriever and DiagnosisService are deliberately NOT overridden so the
+    lazy get_or_create caching on app.state is exercised end to end.
+
+    There is no third collaborator any more: the graph leg of retrieval was
+    removed with the knowledge-graph subsystem, and it had been failing to
+    connect on every call while contributing nothing.
     """
-    from .ontology_graph_fake import OntologyGraphFake
-
-    graph_fake = graph if graph is not None else OntologyGraphFake().seed_ontology()
     qdrant_fake = qdrant if qdrant is not None else FakeQdrant(_qdrant_points())
 
-    app.dependency_overrides[diag_module._get_graph_service] = lambda: graph_fake
     app.dependency_overrides[diag_module._get_embedding_service] = lambda: FakeEmbedding()
     app.dependency_overrides[diag_module._get_qdrant_client] = lambda: qdrant_fake
 
@@ -252,24 +251,4 @@ async def test_no_key_retrieval_only_is_persisted(
     row = await _fetch_diagnosis(db_session, data["diagnosis_id"])
     assert row.conclusion is None  # no LLM conclusion
     assert row.llm_model is None
-    assert "test_i2c_comm" in row.symptom
-
-
-@pytest.mark.asyncio
-async def test_graph_down_degrades_and_still_persists(
-    client: Any, db_session: Any
-) -> None:
-    """Graph branch raising degrades to surviving retrieval and still persists."""
-    from .ontology_graph_fake import OntologyGraphFake
-
-    broken_graph = OntologyGraphFake().seed_ontology()
-    broken_graph.fail_with = RuntimeError("graph down")
-    _wire_retrieval_fakes(client.app, graph=broken_graph)
-
-    resp = await client.post("/api/v1/diagnose", json=_diagnose_payload())
-    assert resp.status_code == 200, resp.text  # never a 500
-    diagnosis_id = resp.json()["diagnosis_id"]
-
-    row = await _fetch_diagnosis(db_session, diagnosis_id)
-    assert row.id == diagnosis_id
     assert "test_i2c_comm" in row.symptom

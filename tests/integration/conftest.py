@@ -2,7 +2,7 @@
 
 These tests exercise the REAL services on the debug server
 (192.168.5.24 by default) with real clients (nats-py, qdrant-client,
-falkordb, httpx). They are marker-gated and DEFAULT-SKIPPED:
+httpx). They are marker-gated and DEFAULT-SKIPPED:
 
 * Every test module in this directory that talks to a remote service
   carries ``pytestmark = pytest.mark.integration``.
@@ -26,9 +26,7 @@ ENV — no secrets are ever hardcoded):
     ATE_INTEGRATION_NATS_PASSWORD NATS password  (optional; skip cred if unset)
     ATE_INTEGRATION_QDRANT_PORT   Qdrant HTTP    (default 6333)
     ATE_INTEGRATION_QDRANT_API_KEY Qdrant API key (optional)
-    ATE_INTEGRATION_FALKORDB_PORT RESP/FalkorDB  (default 6379)
-    FALKORDB_URL / FALKORDB_PASSWORD  full overrides (match ate_cloud config)
-    ATE_INTEGRATION_HTTP_PORT     nginx HTTP     (default 80)
+          ATE_INTEGRATION_HTTP_PORT     nginx HTTP     (default 80)
 
 The existing LOCAL integration tests in this directory (full-flow /
 simulation) are NOT marked and are therefore unaffected by the gate.
@@ -188,30 +186,6 @@ def qdrant_api_key() -> str | None:
 
 
 @pytest.fixture(scope="session")
-def falkordb_target(integration_host: str) -> Target:
-    port = _env_int("ATE_INTEGRATION_FALKORDB_PORT", 6379)
-    # FALKORDB_URL (the ate_cloud config alias) wins when set; otherwise build
-    # a redis:// URL from host/port. FalkorDB is NOT installed on .24 yet
-    # (task 31); tests using this fixture skip until 6379 answers.
-    url = _env("FALKORDB_URL") or f"redis://{integration_host}:{port}"
-    host = integration_host
-    fport = port
-    if "://" in url:
-        _, _, netloc = url.partition("://")
-        hostport = netloc.rsplit("@", 1)[-1].split("/", 1)[0]
-        if ":" in hostport:
-            h, p = hostport.rsplit(":", 1)
-            host, fport = h or host, int(p)
-    return Target(host=host, port=fport, url=url, label="FalkorDB (RESP/6379)")
-
-
-@pytest.fixture(scope="session")
-def falkordb_password() -> str | None:
-    password = _env("FALKORDB_PASSWORD")
-    return password or None
-
-
-@pytest.fixture(scope="session")
 def cloud_http_target(integration_host: str) -> Target:
     port = _env_int("ATE_INTEGRATION_HTTP_PORT", 80)
     return Target(
@@ -244,11 +218,6 @@ async def require_nats(nats_target: Target) -> Target:
 @pytest.fixture
 async def require_qdrant(qdrant_target: Target) -> Target:
     return await _require_service(qdrant_target)
-
-
-@pytest.fixture
-async def require_falkordb(falkordb_target: Target) -> Target:
-    return await _require_service(falkordb_target)
 
 
 @pytest.fixture

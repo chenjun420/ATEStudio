@@ -142,34 +142,10 @@ class TraceabilityTree(BaseModel):
     unlinked_cases: list[TraceabilityCase] = []
 
 
-class GraphNode(BaseModel):
-    """A graph node shaped for a visualization UI.
-
-    ``label`` is the primary node label/type; ``type`` mirrors it for graph
-    libraries that key on ``type``; ``properties`` carries the remaining
-    node properties.
-    """
-
-    id: str
-    label: str
-    type: str
-    name: str = ""
-    properties: dict[str, object] = Field(default_factory=dict)
-
-
-class GraphEdge(BaseModel):
-    """A directed relationship shaped for a visualization UI."""
-
-    source: str
-    target: str
-    type: str
-
-
-class GraphBrowse(BaseModel):
-    """{nodes, edges} payload for the knowledge-graph browse view (task 25)."""
-
-    nodes: list[GraphNode] = []
-    edges: list[GraphEdge] = []
+# GraphNode / GraphEdge / GraphBrowse were removed with the knowledge-graph
+# subsystem. They shaped the ``GET /knowledge/graph`` response and had no other
+# reader once that endpoint went. ``ate_platform.serialization`` has an
+# unrelated GraphNode of its own for plan serialisation; that one is untouched.
 
 
 # ── FMEA ────────────────────────────────────────────────────────────────────

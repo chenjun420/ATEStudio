@@ -1,6 +1,6 @@
 """Tests for DiagnosisService and POST /api/v1/diagnose API endpoints.
 
-Uses mocked HybridRetriever and LLM - no real Qdrant/FalkorDB/OpenAI required.
+Uses mocked HybridRetriever and LLM - no real Qdrant/OpenAI required.
 The autouse ``_dev_mode_bypass`` fixture from conftest.py bypasses auth.
 
 Persistence and feedback-on-row behavior (task 15) lives in

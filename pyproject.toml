@@ -32,17 +32,17 @@ dependencies = [
     "langchain>=1.0.0",
     "langchain-mcp-adapters>=0.1.0",
     "mcp>=1.2.0",
-    # Knowledge graph backend: FalkorDB (Redis-compatible, RESP/6379).
-    # semantica graph-falkordb extra provides the GraphStore/GraphBuilder
-    # integration used by later KG tasks; falkordb is the async client
-    # (falkordb.asyncio) behind the GraphService protocol. Neo4j drivers
-    # (neo4j, langchain-neo4j) were removed in favor of FalkorDB.
-    # graph-falkordb: GraphStore/GraphBuilder integration; shacl: pyshacl for
-    # ontology SHACL graph validation (OWL export only needs rdflib, a semantica
-    # core dep). pyshacl is imported lazily inside the ontology service — the
-    # app boots without it; validation degrades to OntologyServiceUnavailable.
-    "semantica[graph-falkordb,shacl]>=0.6.7",
-    "falkordb>=1.7.1",
+    # The knowledge-graph backend is gone: semantica[graph-falkordb,shacl] and
+    # falkordb were removed with the subsystem. Nothing imports either now.
+    #
+    # They were hard dependencies for a capability that never ran once: the
+    # dependencies, the compose service, the provisioning script and the
+    # operations manual were all present and correct, and FalkorDB was never
+    # started, so every request against the graph failed to connect. Phase 1
+    # does not need a graph — the DENSO/JST field study measured the RAG
+    # baseline at F1@20 = 0.267 while already using an FMEA knowledge graph as
+    # its data source, with the graph method reaching 0.523 only on a single
+    # line across three scenarios. See the design spec §6.1.
     "pyjwt>=2.8.0",
     "pwdlib[argon2]>=0.0.1",
     "cryptography>=42.0.0",
@@ -110,7 +110,7 @@ strict = true
 warn_return_any = true
 warn_unused_configs = true
 [[tool.mypy.overrides]]
-module = ["pyvisa", "pyvisa.*", "nats", "nats.*", "aiosqlite", "httpx", "sqlalchemy", "sqlalchemy.*", "asyncpg", "git", "git.*", "grpc", "grpc.*", "google.protobuf", "google.protobuf.*", "simpleeval", "simpleeval.*", "falkordb", "falkordb.*", "semantica", "semantica.*"]
+module = ["pyvisa", "pyvisa.*", "nats", "nats.*", "aiosqlite", "httpx", "sqlalchemy", "sqlalchemy.*", "asyncpg", "git", "git.*", "grpc", "grpc.*", "google.protobuf", "google.protobuf.*", "simpleeval", "simpleeval.*"]
 ignore_missing_imports = true
 
 # Dynamic protobuf message classes (built at runtime via descriptor_pool +
@@ -130,7 +130,7 @@ asyncio_mode = "auto"
 # modules) carry the `integration` marker. They are SKIPPED BY DEFAULT by the
 # env gate in tests/integration/conftest.py: they only run when
 # ATE_RUN_INTEGRATION is truthy, and even then each test skips cleanly when its
-# specific remote service (NATS/Qdrant/FalkorDB/nginx on 192.168.5.24 or
+# specific remote service (NATS/Qdrant/nginx on 192.168.5.24 or
 # ATE_INTEGRATION_HOST) is unreachable. The marker is registered here so
 # pytest emits no unknown-marker warning.
 markers = [

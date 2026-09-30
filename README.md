@@ -16,7 +16,7 @@ ATE Studio is an end-to-end production test engineering platform for communicati
 - **Event-driven scheduler** — state-machine scanner scheduling with precondition evaluation, resource management, adaptive skip, and live config reload.
 - **YAML DSL + scripting** — declarative test plans (v3.0/v3.2) with loops, branches, barriers, fixture control, and multi-UUT dispatch; inline Python scripting.
 - **Three-tier simulation** — instrument-level noise injection, scheduler dry-run, and full-chain simulation, so plans can be validated without any hardware.
-- **AI-assisted diagnosis** — hybrid retrieval (RAG vector search in Qdrant + FalkorDB ontology knowledge graph) for fault localization and diagnosis.
+- **AI-assisted diagnosis** — retrieval over station fault cases indexed in Qdrant, for fault localization and diagnosis suggestions.
 - **SPC & traceability** — real-time control charts, process-capability analysis (Cpk/Ppk), end-to-end execution trace, and ATML report export.
 - **Multi-station workflows** — NATS JetStream KV-based station handoff with upstream-dependency orchestration.
 - **Visual sequence editor** — AntV X6 drag-and-drop flow editing with Monaco Editor for inline YAML.
@@ -33,7 +33,7 @@ ATE Studio follows a cloud–edge architecture.
 ┌─────────────────────────────────────────────────────────────────────┐
 │                         CLOUD  (ate_cloud)                          │
 │  FastAPI (port 8000)  ·  SQLAlchemy (SQLite/PostgreSQL/MySQL)       │
-│  NATS JetStream  ·  Qdrant vector DB  ·  FalkorDB graph (Redis/6379)│
+│  NATS JetStream  ·  Qdrant vector DB  ·  PostgreSQL fault cases    │
 │                                                                     │
 │  REST API + SSE  ·  script versioning  ·  failure indexing         │
 │  AI diagnosis  ·  SPC analytics  ·  ATML export  ·  config push     │
@@ -91,7 +91,7 @@ docs/                   # Design documents (Chinese)
 |------|------------|
 | Runtime / package manager | Python 3.12+, [uv](https://docs.astral.sh/uv/) |
 | Web framework / ORM | FastAPI, SQLAlchemy 2.0 (async), Alembic, Pydantic v2 |
-| Messaging / data | NATS JetStream, Qdrant (vectors), FalkorDB (graph, Redis/6379) |
+| Messaging / data | NATS JetStream, Qdrant (vectors), PostgreSQL (fault cases) |
 | Quality tools | ruff, mypy (strict), pytest + pytest-asyncio |
 | Frontend | Vue 3.5, TypeScript, Vite, Pinia, Vue Router, vue-i18n |
 | Editor / UI | AntV X6, Element Plus, Monaco Editor, Tailwind CSS 4 |
@@ -126,7 +126,6 @@ docker exec -it ate-studio-ate-cloud-1 alembic upgrade head
 Then open:
 
 - API docs (Swagger UI): http://localhost:8000/docs
-- FalkorDB browser: http://localhost:3000
 - NATS monitor: http://localhost:8222
 
 ### Without Docker
@@ -185,7 +184,7 @@ Key environment variables (see [`env.template`](env.template) for the full list)
 | `ATE_CLOUD_QDRANT_URL` | `http://localhost:6333` | Qdrant vector DB URL |
 | `ATE_SIMULATION_MODE` | `false` | Use simulation drivers (no hardware) |
 | `ATE_DEV_MODE` | `false` | Enable debug features / relaxed checks |
-| `FALKORDB_URL` / `FALKORDB_GRAPH` / `FALKORDB_PASSWORD` | `redis://localhost:6379` / `fmea` / _(empty)_ | FalkorDB graph DB (Redis RESP, port 6379); password empty = no auth |
+| ~~`FALKORDB_URL` / `FALKORDB_GRAPH` / `FALKORDB_PASSWORD`~~ | — | **Removed** — no reader, no deployment; see design spec §6.1 |
 | `JWT_SECRET` / `JWT_ALGORITHM` | — / `RS256` | JWT signing key and algorithm |
 | `OPENAI_API_KEY` / `OPENAI_BASE_URL` | — | LLM credentials (OpenAI, DashScope/Qwen, …) |
 | `OPENAI_MODEL` / `OPENAI_EMBEDDING_MODEL` | `gpt-4o-mini` / `text-embedding-3-small` | Chat & embedding models |
@@ -222,10 +221,12 @@ npm run generate:types                    # regenerate DSL TS types from shared/
 
 | Profile | Services | Use case |
 |---------|----------|----------|
-| `dev` | nats + qdrant + falkordb + ate-cloud + ate-platform | Full-stack development |
-| `cloud` | nats + qdrant + falkordb + ate-cloud | Cloud-only deployment |
+| `dev` | nats + qdrant + ate-cloud + ate-platform | Full-stack development |
+| `cloud` | nats + qdrant + ate-cloud | Cloud-only deployment |
 
-For bare-metal deployment, run the same services (NATS, Qdrant, FalkorDB, `ate_cloud`) via systemd/nohup on the target host; set `PYTHONPATH=src` when launching uvicorn. FalkorDB runs as a Redis 8 server with the `falkordb.so` module loaded on port 6379 (see [`docs/部署手册-192.168.5.24调试服务器.md`](docs/部署手册-192.168.5.24调试服务器.md)).
+For bare-metal deployment, run the same services (NATS, Qdrant, PostgreSQL, `ate_cloud`) via systemd/nohup on the target host; set `PYTHONPATH=src` when launching uvicorn. For wiring an edge/bench worker up to that host, see [`docs/部署手册-边缘节点接入192.168.5.24.md`](docs/部署手册-边缘节点接入192.168.5.24.md).
+
+There is no knowledge-graph service to deploy. A FalkorDB backend used to be documented here; it was removed along with the knowledge-graph subsystem because it had never been started on any host while its dependency, compose service, provisioning script, deployment gate and smoke check were all present. Fault cases live in PostgreSQL and are retrieved through Qdrant. The reasoning is in [`docs/superpowers/specs/2026-09-30-aterag-onboarding-and-kg-removal-design.md`](docs/superpowers/specs/2026-09-30-aterag-onboarding-and-kg-removal-design.md) §6.1.
 
 ---
 

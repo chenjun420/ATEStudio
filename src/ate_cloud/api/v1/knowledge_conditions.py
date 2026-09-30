@@ -39,7 +39,11 @@ from ate_cloud.schemas.test_conditions import (
 # DBSession = Annotated[AsyncSession, Depends(get_db)] — the repo's own alias.
 # A bare ``db: AsyncSession`` is not a valid Pydantic field, and FastAPI raises
 # at import time rather than at call time, so the app would fail to boot.
-from .knowledge import DBSession, router
+#
+# Both names now come from ``knowledge_reads``, which became the sole owner of
+# the ``/knowledge`` router when the extraction-trigger module was removed with
+# the knowledge-graph subsystem.
+from .knowledge_reads import DBSession, router
 
 logger = logging.getLogger(__name__)
 

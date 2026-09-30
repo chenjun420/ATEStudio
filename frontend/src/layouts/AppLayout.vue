@@ -100,17 +100,15 @@ onMounted(async () => {
 // Flatten menus for el-menu (handle top-level only, no nesting for now)
 //
 // Frontend-defined menu entries are merged in for routes the backend app-seed
-// has not yet learned (knowledge graph / traceability, tasks 25/26). They are
+// has not yet learned (traceability, task 26). They are
 // deduped against the DB menus by `route_path`, so once the backend seed ships
 // the same route_path the DB entry (with its server-managed name/permissions)
 // wins automatically — no frontend cleanup needed.
+//
+// The knowledge-graph entry used to sit here too. It was removed rather than
+// greyed out: there was no version of it that ever worked, so leaving a
+// disabled entry would have advertised a capability that was never deployed.
 const staticMenus = computed(() => [
-  {
-    code: 'knowledge-graph',
-    name: '知识图谱',
-    route_path: '/system/knowledge-graph',
-    icon: 'Share',
-  },
   {
     code: 'traceability',
     name: '需求追溯矩阵',

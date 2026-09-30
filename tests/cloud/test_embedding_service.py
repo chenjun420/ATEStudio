@@ -394,7 +394,7 @@ class TestRealAPI:
     @real_api
     @pytest.mark.asyncio
     async def test_real_semantic_similarity(self) -> None:
-        """Semantically similar texts produce closer vectors than dissimilar ones."""
+        """Similar texts produce closer vectors than dissimilar ones."""
         service = EmbeddingService(
             api_key=os.environ["OPENAI_API_KEY"],
             model="text-embedding-3-small",

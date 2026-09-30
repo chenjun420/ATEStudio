@@ -4,7 +4,6 @@
  *
  * Verifies the shared http client (@/api/interceptor) is used for every call,
  * with the correct /knowledge/* endpoints and query params:
- * - fetchKnowledgeGraph  GET /knowledge/graph        (?limit, ?label)
  * - fetchTraceability    GET /knowledge/traceability (?product_code)
  * - fetchRequirements    GET /knowledge/requirements  ({items,total})
  * - fetchCases           GET /knowledge/cases         (?requirement_id, ?product_code)
@@ -23,7 +22,6 @@ vi.mock('@/api/interceptor', () => ({
 }))
 
 import {
-  fetchKnowledgeGraph,
   fetchTraceability,
   fetchRequirements,
   fetchCases,
@@ -32,35 +30,6 @@ import {
 describe('api/knowledge transport', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-  })
-
-  it('fetchKnowledgeGraph GETs /knowledge/graph and unwraps {nodes,edges}', async () => {
-    getMock.mockResolvedValue({
-      data: {
-        nodes: [
-          { id: 'n1', label: 'Component', type: 'Component', name: 'PSU', properties: {} },
-        ],
-        edges: [{ source: 'n1', target: 'n2', type: 'relatesTo' }],
-      },
-    })
-    const res = await fetchKnowledgeGraph()
-    expect(getMock.mock.calls[0][0]).toBe('/knowledge/graph')
-    expect(res.nodes).toHaveLength(1)
-    expect(res.edges[0].source).toBe('n1')
-  })
-
-  it('fetchKnowledgeGraph forwards limit and label query params', async () => {
-    getMock.mockResolvedValue({ data: { nodes: [], edges: [] } })
-    await fetchKnowledgeGraph({ limit: 50, label: 'Fault' })
-    const params = getMock.mock.calls[0][1].params as Record<string, string | number>
-    expect(params).toEqual({ limit: 50, label: 'Fault' })
-  })
-
-  it('fetchKnowledgeGraph omits empty filters from the query', async () => {
-    getMock.mockResolvedValue({ data: { nodes: [], edges: [] } })
-    await fetchKnowledgeGraph({})
-    const params = getMock.mock.calls[0][1].params as Record<string, string | number>
-    expect(params).toEqual({})
   })
 
   it('fetchTraceability GETs /knowledge/traceability with product_code', async () => {

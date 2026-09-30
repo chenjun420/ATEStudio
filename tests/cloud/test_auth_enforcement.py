@@ -12,9 +12,9 @@ Plus regression guards:
 - dev-mode bypass still works (ATE_DEV_MODE=true)
 - invalid/expired tokens are rejected with 401
 
-Service-backed endpoints (workers/faults/diagnose/workflows/scripts_generate)
+Service-backed endpoints (workers/diagnose/workflows/scripts_generate)
 use FastAPI ``dependency_overrides`` with lightweight fakes so the with-token
-assertion stays deterministic (no NATS/Neo4j/LLM required).
+assertion stays deterministic (no NATS/Qdrant/LLM required).
 """
 
 import uuid
@@ -111,9 +111,8 @@ ROUTER_MATRIX = [
     ("calibrations", "GET", "/api/v1/calibrations", 200),
     ("fixtures", "GET", "/api/v1/fixtures", 200),
     ("fmea", "GET", "/api/v1/fmea", 200),
-    # knowledge extract: valid token passes auth; empty body -> 422 (non-401
-    # proves the mount-level JWT gate passed).
-    ("knowledge", "POST", "/api/v1/knowledge/extract", 422),
+    # knowledge reads: valid token passes auth; the list endpoint returns 200.
+    ("knowledge", "GET", "/api/v1/knowledge/requirements", 200),
     ("limits", "GET", "/api/v1/limits", 200),
     # offline status: valid token passes auth; provider unconfigured in test
     # app -> honest 503 (non-401 proves the mount-level JWT gate passed).
@@ -143,11 +142,6 @@ class TestAnonymousRequestsRejected:
     @pytest.mark.asyncio
     async def test_workers_anonymous_401(self, client) -> None:
         response = await client.get("/api/v1/workers")
-        assert response.status_code == 401
-
-    @pytest.mark.asyncio
-    async def test_faults_anonymous_401(self, client) -> None:
-        response = await client.post("/api/v1/faults/seed")
         assert response.status_code == 401
 
     @pytest.mark.asyncio
@@ -204,25 +198,6 @@ class TestValidTokenAccepted:
 
         assert response.status_code == 200
         assert response.json()["total"] == 0
-
-    @pytest.mark.asyncio
-    async def test_faults_seed_with_token_200(self, client, db_session) -> None:
-        """Fault seeding returns 200 with a fake KG seeder injected."""
-        from ate_cloud.api.v1.faults import _get_kg_seeder
-
-        class _FakeSeeder:
-            async def seed_all(self) -> dict[str, int]:
-                return {"nodes_created": 0, "relationships_created": 0}
-
-        client.app.dependency_overrides[_get_kg_seeder] = lambda: _FakeSeeder()
-        token = await _login_token(client, db_session)
-
-        response = await client.post(
-            "/api/v1/faults/seed", headers={"Authorization": f"Bearer {token}"}
-        )
-
-        assert response.status_code == 200
-        assert response.json()["nodes_created"] == 0
 
     @pytest.mark.asyncio
     async def test_diagnose_feedback_with_token_422(self, client, db_session) -> None:
@@ -418,22 +393,25 @@ def test_all_protected_mounts_carry_security_dependency() -> None:
     protected = [m for m in mounts if "get_current_user" in _dep_names(m)]
     anonymous = [m for m in mounts if not _dep_names(m)]
 
-    # 31 protected mounts vs 5 exempt/already-protected mounts
+    # 30 protected mounts vs 5 exempt/already-protected mounts
     # (health, auth, users, rbac, apps). The debugpy debug-CRUD router was
     # retired (task 21); the 24th is the RH-6 checkpoint-id ack alias router
     # (POST /checkpoints/{checkpoint_id}/ack), mounted with the same
     # get_current_user guard; its anonymous-401 is also covered in
     # test_checkpoint_id_ack.py. The 25th is the task-13 FMEA CRUD router
     # (/api/v1/fmea), the 26th is the task-11 ATML TestDescription import
-    # router (/api/v1/atml), and the 27th is the task-12 knowledge extraction
-    # trigger router (/api/v1/knowledge), all mount-level JWT-guarded.
-    # The 28th is the P2 ATERag bundle import router (/api/v1/imports) — also
+    # router (/api/v1/atml), all mount-level JWT-guarded.
+    # The 27th is the P2 ATERag bundle import router (/api/v1/imports) — also
     # mount-level JWT-guarded, plus its own ``aterag:import`` scope on the
     # endpoint, so it is *more* restricted than the others, not less.
-    # The 29th-31st are the station/fault-case routers added for phase 1 fault
+    # The 28th-30th are the station/fault-case routers added for phase 1 fault
     # intelligence: /api/v1/plants, /api/v1/stations and /api/v1/fault-cases.
     # They carry mount-level JWT plus per-endpoint read/write scopes.
-    assert len(protected) == 31
+    #
+    # Down one from the knowledge-graph removal: /api/v1/faults went with the
+    # subsystem, and /api/v1/knowledge now mounts ``knowledge_reads`` directly
+    # rather than the extraction-trigger module that used to own the router.
+    assert len(protected) == 30
     assert len(anonymous) == 5
 
     anonymous_routers = [_mounted(m) for m in anonymous]

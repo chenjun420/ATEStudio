@@ -1,14 +1,17 @@
 /**
- * Knowledge-graph read API module (tasks 25 & 26).
+ * Knowledge read API module (tasks 25 & 26).
  *
- * Typed client over the backend knowledge READ endpoints (mounted on the
- * existing knowledge router, JWT-protected):
+ * Typed client over the backend knowledge READ endpoints (JWT-protected):
  *
- * - `GET /knowledge/graph`         — { nodes, edges } for the graph-browse UI;
- *   the backend returns an honest 503 when the graph backend is absent/down.
  * - `GET /knowledge/traceability`  — requirement → cases → DSL-step tree.
  * - `GET /knowledge/requirements`  — paged TestRequirement list ({items,total}).
  * - `GET /knowledge/cases`         — paged TestCase list joined to requirement.
+ *
+ * A `GET /knowledge/graph` client used to live here and was removed with the
+ * knowledge-graph subsystem, along with the view that consumed it. It was not
+ * a client for something that had been switched off: the endpoint it called
+ * returned an honest 503 on every deployment, because the backend it needed was
+ * never provisioned.
  *
  * All transport uses the shared axios instance (`@/api/interceptor`) with the
  * JWT interceptor + 401 refresh — no bare `axios.create` / raw fetch.
@@ -19,51 +22,6 @@
 import http from './interceptor'
 
 const api = http
-
-// ── Graph browse (task 25) ───────────────────────────────────────────────────
-
-/** A graph node shaped for visualization (mirrors backend GraphNode). */
-export interface GraphNode {
-  id: string
-  /** Primary node label/type. */
-  label: string
-  /** Mirrors `label` for graph libraries that key on `type`. */
-  type: string
-  /** Human-readable name (may be empty). */
-  name: string
-  /** Remaining node properties. */
-  properties: Record<string, unknown>
-}
-
-/** A directed relationship (mirrors backend GraphEdge). */
-export interface GraphEdge {
-  source: string
-  target: string
-  type: string
-}
-
-/** `{ nodes, edges }` payload returned by GET /knowledge/graph. */
-export interface GraphBrowse {
-  nodes: GraphNode[]
-  edges: GraphEdge[]
-}
-
-/** Query params for the graph browse endpoint. */
-export interface GraphBrowseParams {
-  limit?: number
-  label?: string
-}
-
-/** Fetch the knowledge graph for browsing; rejects with 503 when unavailable. */
-export async function fetchKnowledgeGraph(
-  params: GraphBrowseParams = {},
-): Promise<GraphBrowse> {
-  const query: Record<string, string | number> = {}
-  if (params.limit !== undefined) query.limit = params.limit
-  if (params.label) query.label = params.label
-  const response = await api.get<GraphBrowse>('/knowledge/graph', { params: query })
-  return response.data
-}
 
 // ── Requirements / cases paged lists (task 26) ───────────────────────────────
 

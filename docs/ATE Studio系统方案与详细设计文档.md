@@ -5,6 +5,24 @@
 **日期：2026-08-17**
 **状态：评审通过，可直接用于指导开发与 AI 代码生成**
 
+> **2026-09-30 局部失效声明**
+>
+> 本文档中的**知识图谱设计（FalkorDB 图数据库，及更早的 Neo4j）已被推翻并从代码中删除**，
+> 涉及范围：AI 故障诊断的混合检索、FMEA 种子数据、图谱演化、图浏览界面，以及对应的
+> compose 服务、开通脚本、部署硬闸门与冒烟检查。
+>
+> 删除依据（实测，非推测）：在唯一部署主机 192.168.5.24 上，6379 端口关闭、无服务、
+> 无数据目录；Neo4j（更早的图后端）同样不存在。**依赖、编排、脚本、闸门、冒烟检查
+> 全部齐备，图后端一次也没有运行过。** 故障诊断接口因此长期依赖一个从未存在的
+> 后端，且这个事实对界面和日志都不可见。
+>
+> 取代方案：故障案例存入 PostgreSQL 的工位故障案例表，经 Qdrant 检索。
+> 论证与影响面见
+> [`superpowers/specs/2026-09-30-aterag-onboarding-and-kg-removal-design.md`](superpowers/specs/2026-09-30-aterag-onboarding-and-kg-removal-design.md) §6.1。
+>
+> 本文档其余部分（NATS 事件流、脚本生成、序列编排、边缘节点、仿真、SPC、
+> 换型优化、ATML、gRPC 等）仍然有效。
+
 ---
 
 ## 文档控制
@@ -68,7 +86,7 @@
 | **完全开源** | 零商业授权费用，全 Python 技术栈 |
 | **轻量化部署** | 最小生产部署约 9 核 / 16GB（不含端侧工位） |
 | **生产稳定性** | 超时熔断、进程隔离、离线容灾、断点续传、崩溃恢复 |
-| **AI 赋能** | DeepAgents + Qdrant RAG 实现需求识别、脚本生成与序列辅助生成；Qdrant + FalkorDB 知识图谱实现 AI 故障诊断 |
+| **AI 赋能** | DeepAgents + Qdrant RAG 实现需求识别、脚本生成与序列辅助生成；Qdrant 工位故障案例检索实现 AI 诊断建议 |
 | **可视化编排** | AntV X6 3.x + Vue 3 + TypeScript，以依赖连线代替流程块 |
 
 ### 1.3 范围界定
@@ -105,7 +123,7 @@
 | BR-3 | 虚拟仿真调试 | 四层仿真、故障注入、多 UUT 并行、录制回放、CI 集成 |
 | BR-4 | 产线稳定执行 | 多 UUT 并行、超时重试、崩溃恢复；断网时已下发序列/脚本可继续测试，数据本地缓存、恢复后补传（10.5 节） |
 | BR-5 | 质量数据闭环 | 测量值上传、SPC 控制图、ATML 报告、序列号追溯 |
-| BR-6 | AI 辅助 | 脚本生成、故障诊断（RAG + FMEA 知识图谱） |
+| BR-6 | AI 辅助 | 脚本生成、故障诊断（Qdrant 检索工位故障案例） |
 
 ### 2.2 非功能需求
 
@@ -156,7 +174,7 @@ flowchart TB
         Q1[测量数据上传<br/>ATML报告]:::qual
         Q2[SPC统计过程控制<br/>Cpk/Ppk·趋势报警]:::qual
         Q3[序列号追溯]:::qual
-        Q4[AI故障诊断<br/>RAG+FMEA知识图谱]:::qual
+        Q4[AI故障诊断<br/>Qdrant案例检索]:::qual
     end
 
     R1 --> D1 & D2 & D4
@@ -193,7 +211,9 @@ flowchart LR
 业务要点：
 1. **设计调试前移**：序列在虚拟环境完成验证后才允许下发产线，目标"零硬件依赖调试，缩短开发周期 60%+"（来源：虚拟仿真补充方案设计目标）。
 2. **拓扑驱动执行**：工装拓扑不仅用于展示，还参与调度前的路由校验与资源分配（见 6.7.5）。
-3. **知识反哺**：产线故障经 AI 诊断沉淀入 FMEA 知识图谱，反哺序列与脚本优化。
+3. **知识反哺**：产线故障经 AI 诊断后由工程师整理为工位故障案例，反哺序列与脚本优化。
+   > 早期设计写作「沉淀入 FMEA 知识图谱」。改为人工整理是有意的：诊断结果直接自动入库，
+   > 等于让一次可能错误的判断替人签署自己的更正。第一期只做采集与建议。
 
 ---
 
@@ -222,7 +242,7 @@ flowchart TB
         S1[FastAPI 应用<br/>REST + SSE]:::cloud
         S2[(PostgreSQL 16)]:::cloud
         S3[(Qdrant 向量库)]:::cloud
-        S4[(FalkorDB 知识图谱)]:::cloud
+        S4[(工位故障案例表<br/>PostgreSQL)]:::cloud
         S5[脚本库 / 序列库 / 工装配置库]:::cloud
     end
 
@@ -338,7 +358,7 @@ ATEStudio/
 | 数据库迁移 | Alembic | 1.13+ | MIT |
 | 关系数据库 | PostgreSQL（生产）/ SQLite（默认开发） | 16.x+ | PostgreSQL License |
 | 向量数据库 | Qdrant | v1.18.0+ | Apache 2.0 |
-| 图数据库 | FalkorDB（Redis 8 + falkordb.so，RESP/6379） | 4.x | SSPL v1 |
+| ~~图数据库~~ | ~~FalkorDB~~ | — | **已移除**：2026-09-30 随知识图谱子系统删除，实测从未在任何主机启动 |
 | 消息中间件 | NATS Server（含 JetStream） | v2.12.0+ | Apache 2.0 |
 | AI 框架 | DeepAgents | 最新稳定版 | MIT |
 | 大语言模型 | DeepSeek / Qwen（开源） | — | 开源 |
@@ -3089,7 +3109,7 @@ flowchart LR
 
     SVC1 & SVC2 & SVC4 --> PG[(PostgreSQL/SQLite)]:::store
     SVC3 --> QD[(Qdrant)]:::store
-    SVC3 --> N4[(FalkorDB FMEA)]:::store
+    SVC3 --> N4[(工位故障案例<br/>PostgreSQL)]:::store
     SSE --> NT[NATS JetStream]:::store
 ```
 
@@ -3143,7 +3163,7 @@ POST   /api/v1/executions/{id}/fault-injection  # 运行时注入故障
 |------|------|------|
 | 脚本生成/润色 | DeepAgents + LLM（DeepSeek/Qwen 开源模型） | POST /scripts/generate、/refine |
 | 序列辅助生成 | RAG 检索相似依赖模式 | 依赖驱动模型下 AI 只需预测步骤间依赖，DSL 生成更简单可靠 |
-| 故障诊断 | Qdrant 向量检索 + FalkorDB FMEA 知识图谱混合检索 | 100+ 种子故障记录，知识图谱持续演化 |
+| 故障诊断 | Qdrant 向量检索工位故障案例 | 案例由工程师录入；向量索引可全量重建 |
 | Embedding | BAAI/bge-m3 等，维度 1536（可配置） | — |
 
 Qdrant 选型依据见 4.4.4（p95 延迟优 39%，QPS 优 291%）。
@@ -3233,7 +3253,7 @@ flowchart TB
     subgraph CLOUD[云侧 · 192.168.5.24（物理部署 / 或 Docker Compose cloud profile）]
         N1[NATS JetStream<br/>4222 / 8222]:::cloud
         Q1[Qdrant<br/>6333]:::cloud
-        N4[FalkorDB 图数据库<br/>Redis RESP 6379 / Browser 3000]:::cloud
+        N4[工位故障案例表<br/>PostgreSQL]:::cloud
         API1[ate-cloud FastAPI<br/>8000]:::cloud
         PG1[(PostgreSQL 16<br/>生产)]:::cloud
         NG[Nginx<br/>前端静态资源]:::cloud
@@ -3266,8 +3286,8 @@ flowchart TB
 
 | 模式 | 状态 | 说明 |
 |------|------|------|
-| Docker Compose（dev profile） | ✅ 可用 | 全栈本地开发：nats + qdrant + falkordb + ate-cloud + ate-platform |
-| Docker Compose（cloud profile） | ✅ 可用 | 云侧部署：nats + qdrant + falkordb + ate-cloud |
+| Docker Compose（dev profile） | ✅ 可用 | 全栈本地开发：nats + qdrant + ate-cloud + ate-platform |
+| Docker Compose（cloud profile） | ✅ 可用 | 云侧部署：nats + qdrant + ate-cloud |
 | Podman Compose | ✅ 兼容 | 与 Docker Compose 命令兼容，已在 192.168.5.24 验证 |
 | 物理部署（Bare Metal） | ✅ 生产 | 云侧服务器 systemd/nohup 直跑，无容器开销 |
 | 虚拟设备仿真 | ✅ 可用 | `ATE_SIMULATION_MODE=true` 或 API 触发 |
@@ -3304,7 +3324,7 @@ flowchart TB
 | `ATE_CLOUD_QDRANT_URL` | `http://localhost:6333` | Qdrant 连接 |
 | `ATE_SIMULATION_MODE` | `false` | 启用仿真驱动（Docker dev 默认 true） |
 | `ATE_DEV_MODE` | `false` | 调试特性 |
-| `FALKORDB_URL` / `FALKORDB_GRAPH` / `FALKORDB_PASSWORD` | `redis://localhost:6379` / `fmea` / _(空)_ | FalkorDB 图数据库连接（Redis RESP，端口 6379；密码留空为无认证） |
+| ~~`FALKORDB_URL` / `FALKORDB_GRAPH` / `FALKORDB_PASSWORD`~~ | — | **已移除**：无读者、无部署；详见设计规格 §6.1 |
 | `JWT_SECRET` / `JWT_ALGORITHM` / `JWT_EXPIRE_MINUTES` | — / RS256 / 30 | 认证 |
 | `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL` | — | LLM（OpenAI/DashScope Qwen） |
 | `OPENAI_EMBEDDING_MODEL` / `ATE_CLOUD_EMBEDDING_DIMENSIONS` | text-embedding-3-small / 1536 | Embedding |
@@ -3373,7 +3393,7 @@ flowchart TB
 | 断点续跑/崩溃恢复 | ✅ | 本地状态快照（6.6 节） |
 | 操作员面板本地视图 | ✅ | 端侧本地服务提供 |
 | 新序列/脚本下发 | ❌ | 需联网下发并 ACK 后才可离线使用 |
-| AI 诊断/脚本生成 | ❌ | 依赖云侧 Qdrant/FalkorDB/LLM |
+| AI 诊断/脚本生成 | ❌ | 依赖云侧 Qdrant/LLM 凭据 |
 | SPC/追溯/看板查询 | ❌（部分） | 端侧可查本地记录；全量历史需联网 |
 | 跨工位工作流 | ❌ | 依赖云侧编排 |
 
@@ -3539,7 +3559,7 @@ AI 生成代码时严格按以下顺序，先底座后上层；每个模块都�
 
 ### 13.4 超出原设计的增强功能（已实现）
 
-三层仿真系统、MockDriverFactory、AI 故障诊断（Qdrant + FalkorDB FMEA）、SPC、校准管理、可追溯性、多工位工作流、录制/回放、操作员检查点、故障预测、换型优化（CP-SAT）、人力资源分配、自适应跳过、ATML 导出、gRPC 驱动接口、OpenTelemetry 可观测性、NATS Leafnode 边缘自治、Alembic 迁移、CI/CD 流水线。
+三层仿真系统、MockDriverFactory、AI 故障诊断（Qdrant 工位故障案例检索）、SPC、校准管理、可追溯性、多工位工作流、录制/回放、操作员检查点、故障预测、换型优化（CP-SAT）、人力资源分配、自适应跳过、ATML 导出、gRPC 驱动接口、OpenTelemetry 可观测性、NATS Leafnode 边缘自治、Alembic 迁移、CI/CD 流水线。
 
 ### 13.5 待完成项
 

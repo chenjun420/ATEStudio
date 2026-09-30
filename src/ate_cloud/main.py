@@ -138,45 +138,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             failure_indexer.subscribe_to_events(bridge)
             app.state.failure_indexer = failure_indexer
 
-        # Automatic failure→KG evolution (task 16): after a failure is
-        # indexed, evolve the ontology KG via the task-7 pipeline. The
-        # pipeline is built lazily on first failure and cached on app.state;
-        # any construction failure (no graph / Semantica unusable) degrades
-        # to a logged skip — it never blocks failure indexing.
-        from ate_cloud.services.failure_evolution import FailureEvolutionTrigger
-
-        def _resolve_failure_pipeline() -> object | None:
-            cached: object | None = getattr(app.state, "failure_kg_pipeline", None)
-            if cached is not None:
-                return cached
-            try:
-                from ate_cloud.services.falkordb_graph_service import FalkorDBGraphService
-                from ate_cloud.services.kg_pipeline import build_pipeline
-
-                graph_service = FalkorDBGraphService(
-                    url=settings.falkordb_url,
-                    graph_name=settings.falkordb_graph,
-                    password=settings.falkordb_password or None,
-                )
-                pipeline = build_pipeline(
-                    graph_service=graph_service,
-                    embedding_service=embedding_service,
-                    qdrant_client=qdrant_client,
-                )
-            except Exception as exc:  # noqa: BLE001 — graph/key absent is a benign skip
-                print(  # noqa: T201
-                    "Auto KG evolution disabled (pipeline unavailable: "
-                    f"{type(exc).__name__}: {exc}); failures still indexed"
-                )
-                return None
-            app.state.failure_kg_pipeline = pipeline
-            app.state.graph_service = graph_service
-            return pipeline
+        # Automatic failure→KG evolution was removed with the knowledge-graph
+        # subsystem. It resolved a `kg_pipeline` lazily on first failure, and
+        # the resolution failed every time ("Auto KG evolution disabled
+        # (pipeline unavailable: ...)"), because the graph backend it needed was
+        # never deployed. Fault cases now accumulate in the station case base
+        # and are indexed for retrieval; nothing evolves a graph.
 
         if failure_indexer is not None:
-            failure_indexer.set_evolution_trigger(
-                FailureEvolutionTrigger(resolve=_resolve_failure_pipeline).evolve_from_failure
-            )
             print(  # noqa: T201
                 "Failure indexer initialized with Qdrant at "
                 f"{settings.qdrant_url} (dim={settings.embedding_dimensions})"

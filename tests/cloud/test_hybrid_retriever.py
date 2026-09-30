@@ -1,21 +1,24 @@
-"""Tests for HybridRetriever — Qdrant vector + ontology-KG fusion (task 14).
+"""Tests for the retriever — Qdrant vector search with RRF and re-ranking.
 
-The retriever fuses two branches on STABLE ONTOLOGY ENTITY IDS (no text-prefix
-heuristic, no legacy ``FaultSymptom`` label):
+What changed with the knowledge-graph removal
+----------------------------------------------
+This file used to cover two branches fused by Reciprocal Rank Fusion: Qdrant
+semantic search, and ontology-KG traversal seeded from the request error code.
+The second branch is gone — it needed a graph backend that was never deployed,
+so every call logged ``Graph retrieval failed: Error 111`` and returned nothing.
 
-* Qdrant semantic hits, normalized to ``entity_id`` (payload ``entity_id`` or
-  an ``error_code`` resolved to ``fault:<slug(code)>``);
-* ontology-KG traversal (:mod:`ate_cloud.services.kg_retrieval`) seeded from
-  the request error code and the vector hits' entity ids.
+What survives here is the part still in production:
 
-All dependencies are fakes:
-* ``OntologyGraphFake`` — in-memory graph seeded from the real
-  ``build_seed_graph()``, answers the retrieval Cypher shapes;
-* ``FakeQdrant`` / ``FakeEmbedding`` — deterministic vector hits/embeddings.
+* ``reciprocal_rank_fusion`` — kept as the seam where a second source would
+  join, and covered here because it is the module's only remaining logic worth
+  asserting on its own.
+* The Qdrant branch and its degradation behaviour.
 
-No live FalkorDB/Qdrant/OpenAI. Covered: ontology graph traversal, shared-id
-fusion, per-branch circuit-breaker degrade, and removal of the legacy
-``_match_key`` / ``_search_neo4j`` join.
+One behaviour is asserted that did not exist before: ``error_code`` is now
+**ignored**. It used to seed graph traversal; if it were quietly repurposed into
+a filter or a re-weighting, a fault case sharing a symptom but not an error code
+would silently drop out of the results — and a retrieval that quietly drops
+relevant cases is indistinguishable from a line with no history.
 """
 
 from __future__ import annotations
@@ -24,62 +27,64 @@ from typing import Any
 
 import pytest
 
-from ate_cloud.services.hybrid_fusion import (
-    RRF_K,
-    fusion_key,
-    reciprocal_rank_fusion,
-)
+from ate_cloud.services.hybrid_fusion import reciprocal_rank_fusion
 from ate_cloud.services.hybrid_retriever import HybridRetriever
-from ate_cloud.services.kg_retrieval import (
-    extract_keyword,
-    fault_entity_id,
-    retrieve_faults,
-)
-
-from .ontology_graph_fake import OntologyGraphFake
+from ate_platform.common.circuit_breaker import CircuitBreaker, CircuitBreakerOpenError
 
 # ── Fakes ─────────────────────────────────────────────────────────────────
 
 
 class _Point:
-    def __init__(self, point_id: str, score: float, payload: dict[str, Any]) -> None:
+    def __init__(self, point_id: str, score: float, payload: dict[str, Any] | None = None) -> None:
         self.id = point_id
         self.score = score
-        self.payload = payload
+        self.payload = payload or {}
+
+
+class _QueryResponse:
+    """What ``query_points`` returns — the shape the compat layer normalises to."""
+
+    def __init__(self, points: list[_Point]) -> None:
+        self.points = points
 
 
 class FakeQdrant:
-    """Minimal Qdrant client: returns scripted points, records calls."""
+    """Minimal Qdrant client: scripted points, records calls.
+
+    Exposes ``query_points`` and deliberately **not** ``search``: the installed
+    client (>=1.12) removed ``search``, and a fake that still had it would have
+    let the removed-API regression through (see test_qdrant_client_compat.py).
+    """
 
     def __init__(self, points: list[_Point] | None = None) -> None:
         self._points = points or []
-        self.searches: list[dict[str, Any]] = []
+        self.queries: list[dict[str, Any]] = []
         self.fail: Exception | None = None
 
-    def search(self, **kwargs: Any) -> list[_Point]:
-        self.searches.append(kwargs)
+    def query_points(self, **kwargs: Any) -> _QueryResponse:
+        self.queries.append(kwargs)
         if self.fail is not None:
             raise self.fail
         limit = kwargs.get("limit", len(self._points))
-        return self._points[:limit]
+        return _QueryResponse(self._points[:limit])
 
 
 class FakeEmbedding:
     """Embedding service stand-in: deterministic vectors, batch works."""
 
+    def __init__(self, dim: int = 8) -> None:
+        self._dim = dim
+        self.embedded: list[str] = []
+
     async def embed(self, text: str) -> list[float]:
-        return [0.1] * 8
+        self.embedded.append(text)
+        return [0.1] * self._dim
 
     async def embed_batch(self, texts: list[str]) -> list[list[float]]:
-        return [[0.1] * 8 for _ in texts]
+        return [[0.1] * self._dim for _ in texts]
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
-
-
-@pytest.fixture
-def graph() -> OntologyGraphFake:
-    return OntologyGraphFake().seed_ontology()
 
 
 @pytest.fixture
@@ -88,12 +93,14 @@ def qdrant() -> FakeQdrant:
 
 
 @pytest.fixture
-def retriever(
-    graph: OntologyGraphFake, qdrant: FakeQdrant
-) -> HybridRetriever:
+def embedding() -> FakeEmbedding:
+    return FakeEmbedding()
+
+
+@pytest.fixture
+def retriever(embedding: FakeEmbedding, qdrant: FakeQdrant) -> HybridRetriever:
     return HybridRetriever(
-        embedding_service=FakeEmbedding(),  # type: ignore[arg-type]
-        graph_service=graph,  # type: ignore[arg-type]
+        embedding_service=embedding,  # type: ignore[arg-type]
         qdrant_client=qdrant,
         collection_name="test_fault_cases",
         api_key="",  # no LLM: dictionary-only rewrite (deterministic)
@@ -101,204 +108,171 @@ def retriever(
     )
 
 
-# ── kg_retrieval: ontology graph traversal ────────────────────────────────
+def _make(qdrant: FakeQdrant, embedding: FakeEmbedding | None = None) -> HybridRetriever:
+    return HybridRetriever(
+        embedding_service=embedding or FakeEmbedding(),  # type: ignore[arg-type]
+        qdrant_client=qdrant,
+        collection_name="test_fault_cases",
+        api_key="",
+        embedding_dim=8,
+    )
 
 
-class TestOntologyGraphRetrieval:
-    async def test_fault_found_by_stable_id_from_error_code(
-        self, graph: OntologyGraphFake
+def _cases() -> list[_Point]:
+    return [
+        _Point("c1", 0.91, {"kind": "station_fault_case", "symptom": "输出电压偏低"}),
+        _Point("c2", 0.55, {"kind": "station_fault_case", "symptom": "间歇性通信超时"}),
+    ]
+
+
+# ── The Qdrant branch ─────────────────────────────────────────────────────
+
+
+class TestVectorBranch:
+    async def test_hits_come_back_with_their_payload(
+        self, qdrant: FakeQdrant
     ) -> None:
-        """An error code resolves to the seed Fault id and enriches the chain."""
-        fid = fault_entity_id("I2C_TIMEOUT")
-        results = await retrieve_faults(graph, candidate_ids=[fid], limit=5)
+        """The payload must survive — it carries the case text.
 
-        assert len(results) == 1
-        row = results[0]
-        assert row["id"] == fid
-        assert row["source"] == "graph"
-        assert row["error_code"] == "I2C_TIMEOUT"
-        # Fault -> Symptom -> Cause -> Solution chain is enriched.
-        assert row["symptom"]
-        assert row["cause"]
-        assert row["solution"]
-        assert row["component"]
-        assert row["instrument"]
+        A hit reduced to an id cannot be quoted correctly, so the downstream
+        writer invents content. That happened: a citation described
+        "capacitor ESR degradation" for a case about fixture contact resistance.
+        """
+        qdrant._points = _cases()
+        results = await _make(qdrant).search("output voltage too low", rerank=False)
 
-    async def test_unknown_id_returns_empty(self, graph: OntologyGraphFake) -> None:
-        """A candidate id that matches no Fault yields no rows."""
-        results = await retrieve_faults(
-            graph, candidate_ids=["fault:does_not_exist"], limit=5
-        )
-        assert results == []
-
-    async def test_keyword_fallback_finds_fault(
-        self, graph: OntologyGraphFake
-    ) -> None:
-        """Free-text keyword scans ontology Fault/Symptom/Cause properties."""
-        results = await retrieve_faults(graph, keyword="framing", limit=10)
-        codes = {r["error_code"] for r in results}
-        assert "UART_FRAME_ERR" in codes
-
-    async def test_keyword_fallback_empty_when_no_match(
-        self, graph: OntologyGraphFake
-    ) -> None:
-        results = await retrieve_faults(graph, keyword="zzz_no_such_token_xyz", limit=10)
-        assert results == []
-
-    async def test_no_ids_no_keyword_returns_empty(
-        self, graph: OntologyGraphFake
-    ) -> None:
-        assert await retrieve_faults(graph) == []
-
-    def test_fault_entity_id_matches_seed_slug_scheme(self) -> None:
-        """fault_entity_id mirrors kg_seed_facts._fault_node_id."""
-        assert fault_entity_id("I2C_TIMEOUT") == "fault:i2c_timeout"
-        assert fault_entity_id("ERR I2C TIMEOUT") == "fault:err_i2c_timeout"
-
-    def test_extract_keyword_picks_longest_specific_token(self) -> None:
-        assert extract_keyword("I2C communication timeout on bus") == "communication"
-        assert extract_keyword("error failure fault test") == ""
-        assert extract_keyword("") == ""
-
-
-# ── Shared-ID fusion (pure function) ──────────────────────────────────────
-
-
-class TestIdFusion:
-    def test_same_entity_id_fuses(self) -> None:
-        """A vector hit and graph hit with the same entity id merge to 'fused'."""
-        fid = "fault:i2c_timeout"
-        vector = [{"id": "p1", "score": 0.9, "source": "qdrant",
-                   "entity_id": fid, "error_code": "I2C_TIMEOUT"}]
-        graph_rows = [{"id": fid, "score": 0.0, "source": "graph",
-                       "entity_id": fid, "symptom": "I2C bus failure",
-                       "cause": "pull-up", "solution": "add resistor"}]
-
-        fused = reciprocal_rank_fusion(vector, graph_rows)
-        assert len(fused) == 1
-        assert fused[0]["source"] == "fused"
-        # Graph relationship fields merge into the fused entry.
-        assert fused[0]["cause"] == "pull-up"
-        assert fused[0]["solution"] == "add resistor"
-        # RRF score accumulates from both ranked lists.
-        assert fused[0]["rrf_score"] == pytest.approx(
-            1.0 / (RRF_K + 1) + 1.0 / (RRF_K + 1)
-        )
-
-    def test_distinct_ids_do_not_fuse(self) -> None:
-        """Hits with different keys stay separate entries."""
-        vector = [{"id": "p1", "score": 0.9, "entity_id": "fault:a"}]
-        graph_rows = [{"id": "fault:b", "score": 0.0, "entity_id": "fault:b"}]
-        fused = reciprocal_rank_fusion(vector, graph_rows)
-        assert len(fused) == 2
-
-    def test_vector_hit_without_entity_uses_point_key(self) -> None:
-        """A free failure case (no entity) can never falsely fuse with a Fault."""
-        key = fusion_key({"id": "uuid-1", "score": 0.5})
-        assert key == "point:uuid-1"
-        assert key != fusion_key({"id": "fault:x", "entity_id": "fault:x"})
-
-
-# ── End-to-end HybridRetriever.search ─────────────────────────────────────
-
-
-class TestHybridSearch:
-    async def test_vector_and_graph_fuse_on_error_code(
-        self, retriever: HybridRetriever, qdrant: FakeQdrant
-    ) -> None:
-        """A Qdrant hit carrying error_code I2C_TIMEOUT fuses with the KG Fault."""
-        qdrant._points = [
-            _Point("point-1", 0.91, {
-                "error_code": "I2C_TIMEOUT",
-                "fault_symptom": "I2C bus communication failure",
-                "root_cause": "missing pull-up",
-            }),
-        ]
-        results = await retriever.search(
-            "I2C bus failure", top_k=5, rerank=False, error_code="I2C_TIMEOUT"
-        )
-        assert results
-        top = results[0]
-        # The top result is the fused fault: present in BOTH branches.
-        assert top["source"] == "fused"
-        assert top["entity_id"] == fault_entity_id("I2C_TIMEOUT")
-        # Graph-enriched relationship fields are attached.
-        assert top["cause"]
-        assert top["solution"]
-
-    async def test_error_code_seeds_graph_without_vector_match(
-        self, retriever: HybridRetriever, qdrant: FakeQdrant
-    ) -> None:
-        """With no vector hit, the structured error code still retrieves from KG."""
-        results = await retriever.search(
-            "some fault", top_k=5, rerank=False, error_code="SPI_MODE_ERR"
-        )
-        assert results
-        assert any(r.get("error_code") == "SPI_MODE_ERR" for r in results)
-        assert any(r["source"] == "graph" for r in results)
-
-    async def test_graph_failure_degrades_to_vector_only(
-        self, retriever: HybridRetriever, graph: OntologyGraphFake,
-        qdrant: FakeQdrant,
-    ) -> None:
-        """A graph outage logs and returns the surviving vector branch."""
-        graph.fail_with = RuntimeError("FalkorDB unreachable")
-        qdrant._points = [
-            _Point("p1", 0.8, {"error_message": "step failed"}),
-        ]
-        results = await retriever.search("fault A", top_k=5, rerank=False)
-        assert len(results) == 1
+        assert [r["id"] for r in results] == ["c1", "c2"]
+        assert results[0]["symptom"] == "输出电压偏低"
         assert results[0]["source"] == "qdrant"
 
-    async def test_vector_failure_degrades_to_graph_only(
-        self, retriever: HybridRetriever, qdrant: FakeQdrant
+    async def test_the_query_vector_reaches_qdrant(
+        self, qdrant: FakeQdrant, embedding: FakeEmbedding
     ) -> None:
-        """A Qdrant outage logs and returns the surviving graph branch."""
-        qdrant.fail = RuntimeError("Qdrant down")
-        results = await retriever.search(
-            "SPI clock polarity", top_k=5, rerank=False, error_code="SPI_MODE_ERR"
-        )
-        assert results
-        assert all(r["source"] == "graph" for r in results)
-        assert any(r.get("error_code") == "SPI_MODE_ERR" for r in results)
+        qdrant._points = _cases()
+        await _make(qdrant, embedding).search("voltage low", rerank=False)
 
-    async def test_both_branches_empty_returns_empty(
-        self, retriever: HybridRetriever, qdrant: FakeQdrant
+        assert len(qdrant.queries) == 1
+        assert qdrant.queries[0]["collection_name"] == "test_fault_cases"
+        assert qdrant.queries[0]["query"] == [0.1] * 8
+
+    async def test_top_k_is_respected(self, qdrant: FakeQdrant) -> None:
+        qdrant._points = _cases()
+        results = await _make(qdrant).search("v", top_k=1, rerank=False)
+
+        assert len(results) == 1
+        assert qdrant.queries[0]["limit"] == 1
+
+    async def test_the_query_is_rewritten_before_embedding(
+        self, qdrant: FakeQdrant, embedding: FakeEmbedding
     ) -> None:
-        results = await retriever.search(
-            "zzz unmatched token", top_k=5, rerank=False
-        )
-        assert results == []
+        """Rewriting happens on the path to the vector, so it must be asserted
+        there rather than assumed from the module docstring."""
+        qdrant._points = _cases()
+        await _make(qdrant, embedding).search("ERR_I2C_TIMEOUT", rerank=False)
+
+        assert embedding.embedded, "查询没有被改写就直接送去嵌入"
 
 
-# ── Legacy join removed (grep-proof) ──────────────────────────────────────
+class TestErrorCodeIsIgnoredNotRepurposed:
+    """It used to seed graph traversal. Anything else would be a silent filter."""
 
-
-class TestLegacyJoinRemoved:
-    def test_no_match_key_or_search_neo4j(self) -> None:
-        """The ad-hoc text-prefix join and legacy Cypher branch are gone."""
-        assert not hasattr(HybridRetriever, "_match_key")
-        assert not hasattr(HybridRetriever, "_search_neo4j")
-        assert not hasattr(HybridRetriever, "_extract_keyword")
-
-    def test_constructor_uses_graph_service_param(
-        self, graph: OntologyGraphFake, qdrant: FakeQdrant
+    async def test_the_same_results_with_and_without_an_error_code(
+        self, qdrant: FakeQdrant
     ) -> None:
-        """The ctor parameter is graph_service (neo4j_service is gone)."""
-        r = HybridRetriever(
-            embedding_service=FakeEmbedding(),  # type: ignore[arg-type]
-            graph_service=graph,  # type: ignore[arg-type]
-            qdrant_client=qdrant,
-            api_key="",
+        qdrant._points = _cases()
+        r = _make(qdrant)
+
+        without = await r.search("contact intermittent", rerank=False)
+        with_code = await r.search(
+            "contact intermittent", rerank=False, error_code="ERR_UNRELATED"
         )
-        assert r._graph_service is graph
-        with pytest.raises(TypeError):
-            HybridRetriever(
-                embedding_service=FakeEmbedding(),  # type: ignore[arg-type]
-                neo4j_service=graph,  # type: ignore[call-arg]
-                qdrant_client=qdrant,
-            )
+
+        assert [x["id"] for x in without] == [x["id"] for x in with_code]
 
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-q"])
+class TestDegradation:
+    async def test_qdrant_failure_returns_empty_rather_than_raising(
+        self, qdrant: FakeQdrant
+    ) -> None:
+        """An empty list is the documented signal for total retrieval failure,
+        and it must not take the diagnosis endpoint down with it."""
+        qdrant.fail = ConnectionError("qdrant unreachable")
+
+        assert await _make(qdrant).search("anything", rerank=False) == []
+
+    async def test_an_open_circuit_breaker_returns_empty(
+        self, qdrant: FakeQdrant
+    ) -> None:
+        """A tripped breaker means repeated failures already; hammering it would
+        turn one outage into a self-inflicted one."""
+        r = _make(qdrant)
+        r._qdrant_breaker = CircuitBreaker(
+            failure_threshold=1, timeout=60.0, name="test"
+        )
+        r._qdrant_breaker._failure_count = 99  # force the open state
+        qdrant.fail = ConnectionError("down")
+
+        assert await r.search("anything", rerank=False) == []
+        assert isinstance(CircuitBreakerOpenError("test"), CircuitBreakerOpenError)
+
+    async def test_an_empty_index_returns_empty(self, qdrant: FakeQdrant) -> None:
+        """Distinct from failure: the collection simply holds no cases yet.
+
+        ``/diagnose/readiness`` reports this as ``has_history: false`` so an
+        empty result is legible as a fact about the line rather than a fault.
+        """
+        assert await _make(qdrant).search("anything", rerank=False) == []
+
+
+# ── RRF, kept as the seam ─────────────────────────────────────────────────
+
+
+class TestReciprocalRankFusionStillBehaves:
+    """``hybrid_fusion`` is a pure function over ranked lists and is retained.
+
+    With one list it preserves order; with two it merges them on a shared key.
+    Both are asserted, because the second is the reason to keep the module.
+    """
+
+    def test_a_single_list_passes_through_in_order(self) -> None:
+        hits = [
+            {"id": "a", "score": 0.9, "source": "qdrant"},
+            {"id": "b", "score": 0.5, "source": "qdrant"},
+        ]
+        fused = reciprocal_rank_fusion(hits, [])
+
+        assert [r["id"] for r in fused] == ["a", "b"]
+
+    def test_same_entity_id_fuses_across_lists(self) -> None:
+        vector = [{"id": "p1", "score": 0.9, "source": "qdrant", "entity_id": "fault:x"}]
+        graph = [{"id": "n1", "score": 0.8, "source": "graph", "entity_id": "fault:x"}]
+
+        fused = reciprocal_rank_fusion(vector, graph)
+
+        assert len(fused) == 1, "同一实体应合并为一条"
+        assert fused[0]["source"] == "fused"
+
+    def test_distinct_ids_do_not_fuse(self) -> None:
+        vector = [{"id": "p1", "score": 0.9, "source": "qdrant", "entity_id": "fault:x"}]
+        graph = [{"id": "n1", "score": 0.8, "source": "graph", "entity_id": "fault:y"}]
+
+        assert len(reciprocal_rank_fusion(vector, graph)) == 2
+
+    def test_a_hit_without_a_key_uses_its_point_id(self) -> None:
+        """Prevents two unrelated point ids from colliding into one fused entry."""
+        vector = [{"id": "p1", "score": 0.9, "source": "qdrant"}]
+        graph = [{"id": "p2", "score": 0.8, "source": "graph"}]
+
+        assert len(reciprocal_rank_fusion(vector, graph)) == 2
+
+
+class TestRemovedApiIsGoneFromTheConstructor:
+    def test_no_graph_service_parameter(self, embedding: FakeEmbedding) -> None:
+        """``graph_service`` was a required ctor argument.
+
+        Keeping it required would have meant every caller in production passing a
+        graph that does not exist — the shape that made the whole branch look
+        configured.
+        """
+        assert "graph_service" not in HybridRetriever.__init__.__code__.co_varnames
+        assert "graph_service" not in str(HybridRetriever.__init__.__annotations__)

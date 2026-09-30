@@ -521,7 +521,7 @@ class TestThePayloadCarriesTheCaseText:
     resistance causing intermittent communication timeouts. The downstream
     writer had an id, a station, and some risk numbers — and no words — so it
     supplied its own. Confident, fluent, and wrong, in exactly the shape of the
-    "semantically similar but the wrong component" failure the phase-1 safety
+    "similar but the wrong component" failure the phase-1 safety
     rules single out.
     """
 

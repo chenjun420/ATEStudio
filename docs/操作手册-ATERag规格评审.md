@@ -260,5 +260,5 @@ VERIFY_USER=<用户名> VERIFY_PASSWORD=<密码> \
 | `scripts/verify_e2e_import.py` | 真库导入验收 |
 | `scripts/verify_flow_http.py` | 五步流程 HTTP 走查 |
 | `scripts/deploy/deploy_venv.sh` | venv 隔离部署 |
-| `docs/部署手册-192.168.5.24调试服务器.md` | 开通与排错 |
+| `docs/部署手册-边缘节点接入192.168.5.24.md` | 边缘/工位执行节点接入与排错 |
 | ATERag 仓库 `docs/使用说明.md` | 注记生成、抽取与导出 |

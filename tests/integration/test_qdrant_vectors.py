@@ -1,8 +1,7 @@
 """Real Qdrant integration tests against the debug server.
 
-Verifies the vector backend used by the failure index (RAG retrieval)
-and fault-symptom synonym store (KG evolution), using the REAL
-qdrant-client async client:
+Verifies the vector backend used by the failure index and the station
+fault-case index, using the REAL qdrant-client async client:
 
 * Connect + server version round-trip.
 * The collections this plan uses are reachable / creatable:
@@ -21,15 +20,16 @@ from qdrant_client import AsyncQdrantClient
 from qdrant_client.http import models as qmodels
 
 from ate_cloud.config import settings
-from ate_cloud.services.fault_symptom_vector_store import DEFAULT_SYMPTOM_COLLECTION
 
 pytestmark = pytest.mark.integration
 
 #: Collections this plan depends on (real names from production config).
-_EXPECTED_COLLECTIONS = (
-    settings.qdrant_collection_failures,  # "ate_failures" — RAG failure index
-    DEFAULT_SYMPTOM_COLLECTION,           # "ate_fault_symptoms" — KG synonym store
-)
+# ``ate_fault_symptoms`` used to be listed here too, on the strength of
+# FaultSymptomVectorStore. That class existed only to back KG evolution, so once
+# the knowledge-graph subsystem went, nothing in production could write to that
+# collection — and a test asserting it is "present or creatable" is a test that a
+# capability exists. It does not, so it is no longer listed.
+_EXPECTED_COLLECTIONS = (settings.qdrant_collection_failures,)  # "ate_failures"
 
 
 def _client(target, api_key):
@@ -69,7 +69,7 @@ async def test_qdrant_required_collections_present_or_creatable(
             if name in present:
                 continue
             # Not yet provisioned — verify it IS creatable, mirroring
-            # FaultSymptomVectorStore._ensure_collection / FailureIndexer.
+            # FailureIndexer.ensure_collection.
             await client.create_collection(
                 collection_name=name,
                 vectors_config=qmodels.VectorParams(

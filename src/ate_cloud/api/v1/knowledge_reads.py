@@ -10,11 +10,11 @@ unchanged: no new router, no new mount.
 - ``GET /knowledge/cases``          paged TestCase list joined to requirement
   + DSL sequence_id/step_id mapping.
 - ``GET /knowledge/traceability``   requirement → cases → DSL-step tree.
-- ``GET /knowledge/graph``          {nodes, edges} from the GraphService;
+- (a ``GET /knowledge/graph`` {nodes, edges} endpoint used to live here and
   honest 503 when the graph backend is absent/down.
 
 ORM reads follow the fmea.py paged-list pattern ({items,total}); the graph
-read goes through the GraphService protocol (no raw FalkorDB driver).
+ was removed with the knowledge-graph subsystem.)
 """
 
 from __future__ import annotations
@@ -22,26 +22,33 @@ from __future__ import annotations
 import logging
 from typing import Annotated
 
-from fastapi import Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from ate_cloud.db import get_db
 from ate_cloud.models.knowledge import TestCase, TestRequirement
 from ate_cloud.schemas.knowledge import (
     CasePage,
     CaseResponse,
-    GraphBrowse,
     RequirementPage,
     TestRequirementResponse,
     TraceabilityCase,
     TraceabilityRequirement,
     TraceabilityTree,
 )
-from ate_cloud.services.graph_browse import MAX_BROWSE_LIMIT, browse_graph
-from ate_cloud.services.graph_service import GraphService
-
-from .knowledge import DBSession, require_graph_service, router
 
 logger = logging.getLogger(__name__)
+
+# The router and the session alias used to live in ``knowledge.py``, which was the
+# extraction-trigger module and went away with the knowledge-graph subsystem.
+# This module is now the sole owner of the ``/knowledge`` prefix. Keeping a
+# sibling module hold the router by import was indirection with no remaining
+# reason: there is no second module to share it with.
+router = APIRouter(prefix="/knowledge", tags=["knowledge"])
+
+# Type alias for async DB session dependency (avoids B008 ruff warning).
+DBSession = Annotated[AsyncSession, Depends(get_db)]
 
 
 @router.get("/requirements", response_model=RequirementPage)
@@ -161,26 +168,10 @@ async def get_traceability(
     )
 
 
-@router.get("/graph", response_model=GraphBrowse)
-async def browse_knowledge_graph(
-    graph: Annotated[GraphService, Depends(require_graph_service)],
-    limit: int = Query(default=100, ge=1, le=MAX_BROWSE_LIMIT),
-    label: Annotated[str | None, Query(description="Optional node-label filter")] = None,
-) -> GraphBrowse:
-    """GET /knowledge/graph — nodes + edges for the graph-browse UI.
-
-    Sourced through the GraphService protocol (no raw FalkorDB driver). A
-    missing/unreachable backend is a 503 (construction failure or query
-    error); the app itself boots without a reachable graph.
-    """
-    try:
-        return await browse_graph(graph, limit=limit, label=label)
-    except Exception as exc:  # noqa: BLE001 - graph outage -> honest 503
-        logger.warning("Knowledge graph browse failed: %s", exc)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Knowledge graph unavailable: {exc}",
-        ) from exc
+# ``GET /knowledge/graph`` was removed with the knowledge-graph subsystem. It
+# returned an honest 503 on every deployment, because the backend it needed was
+# never provisioned — a permanently red endpoint that told an operator nothing
+# except that a feature they had never been given did not work.
 
 
 # P5: condition read/review endpoints register on the same router, imported
