@@ -19,6 +19,7 @@ from ate_cloud.models.node_template import NodeTemplate
 from ate_cloud.models.rbac import Permission, Role
 from ate_cloud.models.script import Script
 from ate_cloud.models.sequence import Sequence
+from ate_cloud.models.station import Plant, Station, StationFaultCase
 from ate_cloud.models.test_conditions import TestCondition
 from ate_cloud.models.user import User
 
@@ -43,5 +44,8 @@ __all__ = [
     "Role",
     "Script",
     "Sequence",
+    "Plant",
+    "Station",
+    "StationFaultCase",
     "User",
 ]
