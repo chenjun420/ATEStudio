@@ -51,6 +51,17 @@ class TestConditionResponse(BaseModel):
     requirement_code: str | None = None
     requirement_title: str | None = None
     section_path: str | None = None
+    #: The spec clause the condition was extracted from, and the spec note
+    #: attached to it. A reviewer confirms that the clause says what the
+    #: condition claims; that check is impossible without the text on screen,
+    #: so a signature taken without it is a signature on a blank form.
+    requirement_description: str | None = None
+    requirement_notes: str | None = None
+    #: Extraction signals for the owning requirement. ``annotation_draft`` in
+    #: ``flags`` marks conditions a person wrote rather than the rules cut —
+    #: unapproved criteria that must not become production bounds.
+    requirement_flags: list[str] = Field(default_factory=list)
+    requirement_assessment: dict[str, str] = Field(default_factory=dict)
 
 
 class ConditionPage(BaseModel):

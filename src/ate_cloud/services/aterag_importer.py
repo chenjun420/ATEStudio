@@ -267,6 +267,12 @@ class ATERagImporter:
                 # 规格书哪一段"的唯一答案。
                 section_path=model.section_path or None,
                 notes=model.notes or None,
+                # flags / assessment 是"该需求要不要人管"的信号, 必须在首次
+                # 导入就落盘。只在更新分支写的话, 首导就把它们丢了, 而界面
+                # 恰恰靠 annotation_draft 标出"这条的条件来自人工注记, 签字
+                # 前不能作为判据" —— 丢了这一列, 评审就看不出该做什么。
+                flags=_dumps(model.flags) or None,
+                assessment=_dumps(model.assessment) or None,
             )
             res.requirements.bump_created()
             if not res.dry_run:
@@ -305,6 +311,14 @@ class ATERagImporter:
                     setattr(row, name, incoming)
             if not res.dry_run and (model.req_fingerprint or None) != row.req_fingerprint:
                 row.req_fingerprint = model.req_fingerprint or None
+            # Same reasoning as the fingerprint: these two are not in
+            # AUTHORITATIVE_FIELDS (they are not compared field-by-field for
+            # conflicts, they are wholesale replaced), so they need their own
+            # update or a re-import after the spec changed would keep showing
+            # the reviewer the previous extraction's signals.
+            if not res.dry_run:
+                row.flags = _dumps(model.flags) or None
+                row.assessment = _dumps(model.assessment) or None
 
         await self._sync_conditions(db, res, model, row)
         await self._materialise_limits(db, res, bundle, model, today)
@@ -576,6 +590,23 @@ def _scenario_fingerprint(model: RequirementModel, seq: int) -> str:
     }
     canon = json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str)
     return hashlib.sha256(canon.encode("utf-8")).hexdigest()[:16]
+
+
+def _dumps(value: object) -> str:
+    """Serialise a bundle field for a Text column.
+
+    ``flags`` (a list) and ``assessment`` (a mapping) are stored as JSON text
+    rather than in JSONB columns: both are sparse, neither is a lookup key, and
+    one representation keeps SQLite and PostgreSQL on the same code path.
+
+    Sorted keys so that a re-import of an unchanged bundle produces a
+    byte-identical value. Without sorting, a dict whose insertion order differs
+    between runs would look like a change to anyone comparing the column, and
+    the importer's whole contract is that a clean replay is a no-op.
+    """
+    if not value:
+        return ""
+    return json.dumps(value, ensure_ascii=False, sort_keys=True)
 
 
 def _was_aterag_authored(row: Any) -> bool:

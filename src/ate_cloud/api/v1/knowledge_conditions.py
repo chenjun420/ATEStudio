@@ -20,6 +20,7 @@ numbers. The summary is the cheap question, asked first.
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Annotated
 
@@ -41,6 +42,38 @@ from ate_cloud.schemas.test_conditions import (
 from .knowledge import DBSession, router
 
 logger = logging.getLogger(__name__)
+
+
+def _loads_list(raw: str | None) -> list[str]:
+    """Decode a stored ``flags`` column.
+
+    Returns an empty list for NULL, empty, or malformed content rather than
+    raising: these columns were added after the rows were written, so NULL is
+    the normal case for pre-existing requirements, and a review screen that
+    500s on an old row is worse than one that shows the row without a badge.
+    A malformed value is likewise a display problem, not a reason to fail the
+    whole page.
+    """
+    if not raw:
+        return []
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.warning("flags 列不是合法 JSON, 按空处理: %r", raw[:120])
+        return []
+    return [str(v) for v in value] if isinstance(value, list) else []
+
+
+def _loads_map(raw: str | None) -> dict[str, str]:
+    """Decode a stored ``assessment`` column. Same tolerance as :func:`_loads_list`."""
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.warning("assessment 列不是合法 JSON, 按空处理: %r", raw[:120])
+        return {}
+    return {str(k): str(v) for k, v in value.items()} if isinstance(value, dict) else {}
 
 
 @router.get("/conditions", response_model=ConditionPage)
@@ -110,6 +143,20 @@ async def list_conditions(
             item.requirement_code = req.requirement_code
             item.requirement_title = req.title
             item.section_path = req.section_path
+            # The spec clause itself, plus the spec note. Signing a criterion
+            # without the sentence it came from is signing a blank form: the
+            # reviewer's job is to confirm the clause says what the extracted
+            # condition claims, and that check is impossible without the text
+            # on screen. `notes` is included because the number is often in the
+            # table while "what this number means" is only in the note.
+            item.requirement_description = req.description
+            item.requirement_notes = req.notes
+            # Where these conditions came from. `annotation_draft` means they
+            # were written by a person, not cut by the rules — such clauses
+            # cannot become production bounds until signed, and the screen has
+            # to say so rather than present them like any other row.
+            item.requirement_flags = _loads_list(req.flags)
+            item.requirement_assessment = _loads_map(req.assessment)
         items.append(item)
     return ConditionPage(items=items, total=total)
 

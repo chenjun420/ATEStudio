@@ -44,6 +44,25 @@ export interface TestCondition {
   updated_at: string
   /** Denormalized for display so the table needs no per-row request. */
   requirement_code: string | null
+  /**
+   * The spec clause the condition was extracted from, and the spec note on it.
+   *
+   * A reviewer confirms the clause actually says what the condition claims.
+   * That check needs the text on screen; without it the signature is taken on
+   * a blank form.
+   */
+  requirement_description: string | null
+  requirement_notes: string | null
+  /**
+   * Extraction signals for the owning requirement.
+   *
+   * `annotation_draft` in `flags` means these clauses were written by a person
+   * rather than cut by the rules. They are unapproved criteria and must not
+   * become production bounds, so the review screen marks them rather than
+   * presenting them like any other row.
+   */
+  requirement_flags: string[]
+  requirement_assessment: Record<string, string>
   requirement_title: string | null
   section_path: string | null
 }

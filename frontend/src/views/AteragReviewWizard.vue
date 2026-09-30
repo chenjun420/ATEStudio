@@ -60,7 +60,16 @@ import { importBundle, planBundle, type ImportPreview, type PlanPreview } from '
 
 const step = ref(0)
 
-const STEPS = ['上传规格', '冲突处置', '条件评审', '流程规划', '批准导出']
+/**
+ * Step 1 is named "导入抽取结果", not "上传规格".
+ *
+ * The earlier name promised something this screen cannot do. Uploading the
+ * spec happens in ATERag (`ingest_document`); by the time anything reaches
+ * this wizard, extraction has already run and what arrives is a bundle. An
+ * engineer who read "上传规格" and came here to load a document found no such
+ * control and no explanation — the step looked broken rather than misplaced.
+ */
+const STEPS = ['导入抽取结果', '冲突处置', '条件评审', '流程规划', '批准导出']
 
 /** Steps that must be cleared before the next is reachable. */
 const canAdvance = computed<boolean[]>(() => [
@@ -208,12 +217,37 @@ async function loadConditions(): Promise<void> {
     })
     conditions.value = page.items
     conditionTotal.value = page.total
+    // The spec clause is carried on every condition row (denormalised server
+    // side), so it is read off the first one rather than fetched separately.
+    // Taken from the page in view: a reviewer signing page 3 is looking at
+    // page 3's clause, and an empty list legitimately has nothing to show.
+    specText.value = {
+      requirement_description: page.items[0]?.requirement_description ?? null,
+      requirement_notes: page.items[0]?.requirement_notes ?? null,
+    }
     // Selection is per-page: keeping ids from a previous page would approve
     // conditions the reviewer cannot currently see.
     selectedIds.value = new Set()
   } finally {
     loadingConditions.value = false
   }
+}
+
+/** The spec clause behind the conditions currently on screen. */
+const specText = ref<{ requirement_description: string | null; requirement_notes: string | null }>({
+  requirement_description: null,
+  requirement_notes: null,
+})
+
+/**
+ * Whether this clause was written by a person rather than cut by the rules.
+ *
+ * `annotation_draft` is set on the owning requirement, so it rides along on
+ * every one of its conditions. A requirement can also have a mix — some
+ * clauses rule-cut, some hand-written — which is why this is per row.
+ */
+function isAnnotationDraft(row: TestCondition): boolean {
+  return row.requirement_flags.includes('annotation_draft')
 }
 
 watch([sideFilter, statusFilter, conditionPage], () => {
@@ -350,7 +384,15 @@ onMounted(loadSummary)
 
     <!-- ── 1. Upload ────────────────────────────────────────────────────── -->
     <ElCard v-if="step === 0" shadow="never">
-      <template #header>第 1 步 · 上传规格书抽取结果</template>
+      <template #header>第 1 步 · 导入规格书抽取结果</template>
+      <ElAlert
+        class="mb-3"
+        type="info"
+        :closable="false"
+        show-icon
+        title="这里导入的是抽取结果, 不是规格书原件"
+        description="规格书原件由 ATERag 侧上传 (MCP 工具 ingest_document), 抽取完成后用 export_studio.py 导出 studio_bundle.json, 再回到本页导入。如果还没有 bundle, 请先在 ATERag 侧完成上传与抽取。"
+      />
       <ElForm label-width="120px">
         <ElFormItem label="bundle JSON">
           <el-input
@@ -487,6 +529,37 @@ onMounted(loadSummary)
               <span class="text-sm text-gray-500">{{ selectedRequirement.title }}</span>
             </div>
 
+            <!--
+              The spec clause, above the extracted conditions.
+
+              Signing means confirming that the clause says what the condition
+              claims. That comparison cannot be done from the condition table
+              alone: every row is a distilled fragment, and a fragment that
+              looks reasonable can still invert the original's meaning. Putting
+              the clause on screen is what makes the signature mean anything —
+              without it a reviewer is signing a blank form.
+
+              The note is shown too because the number is often in the table
+              while "what this number means" is only in the note.
+            -->
+            <div class="mb-3 p-3 rounded border border-gray-200 bg-gray-50">
+              <div class="text-xs text-gray-500 mb-1">
+                规格书原文
+                <span v-if="selectedRequirement.section_path" class="ml-1">
+                  · 条款 {{ selectedRequirement.section_path }}
+                </span>
+              </div>
+              <div class="text-sm leading-relaxed whitespace-pre-wrap">
+                {{ specText.requirement_description || '（该需求没有原文描述）' }}
+              </div>
+              <div v-if="specText.requirement_notes" class="mt-2 pt-2 border-t border-gray-200">
+                <div class="text-xs text-gray-500 mb-1">原文备注</div>
+                <div class="text-sm text-gray-700 whitespace-pre-wrap">
+                  {{ specText.requirement_notes }}
+                </div>
+              </div>
+            </div>
+
             <div class="flex gap-2 mb-2 items-center flex-wrap">
               <ElSelect v-model="statusFilter" size="small" style="width: 120px">
                 <ElOption label="待签字" value="draft" />
@@ -546,7 +619,25 @@ onMounted(loadSummary)
                 </template>
               </ElTableColumn>
               <ElTableColumn prop="kind" label="种类" width="150" />
-              <ElTableColumn prop="text" label="内容" min-width="220" show-overflow-tooltip />
+              <ElTableColumn prop="text" label="内容" min-width="220" show-overflow-tooltip>
+                <template #default="{ row }">
+                  <div>{{ row.text }}</div>
+                  <!--
+                    Marks clauses a person wrote rather than the rules cut.
+                    Without this they render like any other row, and a reviewer
+                    has no way to know these are the ones the red line is about:
+                    unapproved criteria that must not become production bounds.
+                  -->
+                  <ElTag
+                    v-if="isAnnotationDraft(row)"
+                    size="small"
+                    type="danger"
+                    class="mt-1"
+                  >
+                    人工注记 · 未经签字不得作为判据
+                  </ElTag>
+                </template>
+              </ElTableColumn>
               <ElTableColumn label="值" min-width="180" show-overflow-tooltip>
                 <template #default="{ row }">
                   <span v-if="row.value" class="font-mono text-xs">

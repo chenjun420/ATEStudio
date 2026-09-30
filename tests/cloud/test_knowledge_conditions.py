@@ -368,3 +368,114 @@ class TestApprove:
             ).all()
         )
         assert statuses == {"signal_state": "approved", "output_voltage": "draft"}
+
+
+# ── what the reviewer needs on screen ────────────────────────────────────────
+
+
+class TestReviewScreenHasWhatItNeeds:
+    """The review screen's job is to answer "can this clause ship?".
+
+    Both of these were silently dropped on the floor at import time, and the
+    failure mode is not a missing column — it is a reviewer signing a form
+    they cannot check:
+
+    * the spec clause. Signing means confirming the clause says what the
+      condition claims, and a distilled fragment can invert the original's
+      meaning. Without the text on screen that check is impossible.
+    * ``flags`` / ``assessment``. ``annotation_draft`` marks clauses a person
+      wrote rather than the rules cut. Those are exactly the criteria the red
+      line is about, and with the signal dropped they render like any other
+      row.
+    """
+
+    async def test_extraction_signals_survive_the_import(self, db: AsyncSession) -> None:
+        req = _req("SR-SIG-1", [_draft("output_voltage", "fp-sig-1")])
+        req.flags = ["annotation_draft"]
+        req.assessment = {"sufficiency": "needs_review"}
+        await _import(db, req)
+
+        row = await _get_requirement(db, "SR-SIG-1")
+        assert row.flags is not None, "flags 没落盘 -> 界面标不出人工注记的条件"
+        assert "annotation_draft" in row.flags
+        assert row.assessment is not None
+        assert "needs_review" in row.assessment
+
+    async def test_signals_are_replaced_on_reimport(self, db: AsyncSession) -> None:
+        """A re-import must refresh them, not leave the previous verdict.
+
+        The spec changed and extraction now succeeds where it used to need a
+        human. Keeping the stale ``annotation_draft`` would keep marking
+        ordinary rule-cut clauses as hand-written, and the reviewer would chase
+        an annotation that no longer exists.
+        """
+        first = _req("SR-SIG-2", [_draft("output_voltage", "fp-sig-2")])
+        first.flags = ["annotation_draft"]
+        first.assessment = {"sufficiency": "needs_review"}
+        await _import(db, first)
+
+        second = _req("SR-SIG-2", [_draft("output_voltage", "fp-sig-2b")])
+        second.flags = []
+        second.assessment = {"sufficiency": "sufficient"}
+        await _import(db, second)
+
+        row = await _get_requirement(db, "SR-SIG-2")
+        assert row.flags is None, "旧的 annotation_draft 没被清掉"
+        assert row.assessment is not None
+        assert "sufficient" in row.assessment
+        assert "needs_review" not in row.assessment
+
+    async def test_signals_serialise_deterministically(self, db: AsyncSession) -> None:
+        """Key order must not make a clean replay look like a change.
+
+        The importer's contract is that re-importing an unchanged bundle is a
+        no-op. ``json.dumps`` without ``sort_keys`` would emit a different
+        string for the same mapping whenever insertion order differed, which
+        is invisible in the row counts and shows up as phantom churn.
+        """
+        req = _req("SR-SIG-3", [_draft("output_voltage", "fp-sig-3")])
+        req.assessment = {"b": "2", "a": "1"}
+        await _import(db, req)
+        row = await _get_requirement(db, "SR-SIG-3")
+        assert row.assessment is not None
+        assert row.assessment.index('"a"') < row.assessment.index('"b"')
+
+    async def test_spec_clause_reaches_the_condition_response(self, db: AsyncSession) -> None:
+        from ate_cloud.api.v1.knowledge_conditions import list_conditions
+
+        req = _req("SR-SIG-4", [_draft("output_voltage", "fp-sig-4")])
+        req.description = "在 -25℃ 低温下限启动时, 开机输出延时应不大于 12s"
+        req.notes = "启动过程中允许跌落"
+        await _import(db, req)
+        row = await _get_requirement(db, "SR-SIG-4")
+
+        page = await list_conditions(
+            db, requirement_id=row.id, product_code=None, side=None, kind=None,
+            status_filter=None, skip=0, limit=100,
+        )
+        item = page.items[0]
+        assert item.requirement_description == req.description
+        assert item.requirement_notes == req.notes
+
+    async def test_missing_signals_degrade_to_empty_not_error(self, db: AsyncSession) -> None:
+        """NULL is normal for rows written before the columns existed.
+
+        A review screen that 500s on an older requirement is worse than one
+        that shows it without a badge.
+        """
+        from ate_cloud.api.v1.knowledge_conditions import list_conditions
+
+        req = _req("SR-SIG-5", [_draft("output_voltage", "fp-sig-5")])
+        await _import(db, req)
+        row = await _get_requirement(db, "SR-SIG-5")
+        row.flags = "not json at all"
+        row.assessment = "also not json"
+        db.add(row)
+        await db.commit()
+
+        page = await list_conditions(
+            db, requirement_id=row.id, product_code=None, side=None, kind=None,
+            status_filter=None, skip=0, limit=100,
+        )
+        assert page.items[0].requirement_flags == []
+        assert page.items[0].requirement_assessment == {}

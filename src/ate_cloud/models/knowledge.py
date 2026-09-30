@@ -107,6 +107,22 @@ class TestRequirement(Base):
     #: Verbatim spec note. Often the real source of a criterion's meaning: the
     #: number may sit in a table, but "what this number means" usually does not.
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: Extraction signals from the producing side, JSON-encoded text.
+    #:
+    #: ``flags`` carries markers such as ``annotation_draft`` — meaning this
+    #: requirement's conditions came from a human-written annotation rather
+    #: than from the rules. ``assessment`` carries the sufficiency verdict.
+    #:
+    #: They exist so the review screen can answer "does this need a human, and
+    #: what kind". Without them an ``annotation_draft`` requirement looks like
+    #: any other: its clauses are unapproved criteria that must not become
+    #: production bounds, and nothing on screen says so.
+    #:
+    #: Stored as text rather than JSONB: sparse, never a lookup key, and one
+    #: representation keeps SQLite and PostgreSQL on the same code path.
+    #: Read them through the schema's deserialising properties, not raw.
+    flags: Mapped[str | None] = mapped_column(Text, nullable=True)
+    assessment: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
