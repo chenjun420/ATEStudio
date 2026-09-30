@@ -25,6 +25,13 @@ dependencies = [
     "qdrant-client>=1.12.0",
     "langchain-openai>=0.2.0",
     "langchain-core>=0.3.0",
+    # P4 Agent face (D2): create_agent + MCP client against ATERag's read-only
+    # MCP server. Pinned to the 1.x line because langchain pre-1.0 had minor
+    # breaking changes in the agent API, and a factory test platform should not
+    # track that churn.
+    "langchain>=1.0.0",
+    "langchain-mcp-adapters>=0.1.0",
+    "mcp>=1.2.0",
     # Knowledge graph backend: FalkorDB (Redis-compatible, RESP/6379).
     # semantica graph-falkordb extra provides the GraphStore/GraphBuilder
     # integration used by later KG tasks; falkordb is the async client
