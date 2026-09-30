@@ -61,6 +61,12 @@ dependencies = [
     "pyjwt>=2.8.0",
     "pwdlib[argon2]>=0.0.1",
     "cryptography>=42.0.0",
+    # pydantic is imported at module level by 53 files and was, until this line,
+    # undeclared — it was only installed because fastapi and pydantic-settings
+    # require it. That is the same shape as the structlog landmine that broke
+    # the deployed service, one size larger, so it is declared rather than left
+    # to a transitive.
+    "pydantic>=2.9",
 ]
 
 [project.optional-dependencies]
@@ -150,4 +156,5 @@ asyncio_mode = "auto"
 # pytest emits no unknown-marker warning.
 markers = [
     "integration: real remote-service integration test against the debug server (gated by ATE_RUN_INTEGRATION; skipped by default)",
+    "slow: shells out to uv; seconds rather than milliseconds",
 ]

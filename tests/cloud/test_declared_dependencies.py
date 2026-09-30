@@ -1,358 +1,376 @@
-"""A module-level third-party import must be a declared dependency.
+"""Declared dependencies must match what the code, the lock, and the venv agree on.
 
-The invariant, precisely
-------------------------
-If `src/` imports a package at module level — not inside a function, not inside
-a try/except — then the absence of that package stops the application from
-importing at all. So that package has to be in `pyproject.toml`, not merely
-present in the venv.
+Three separate claims, each of which has been false in this repository at some
+point:
 
-`state_snapshot.py` violated this. It did `import structlog` at module level,
-`structlog` was never declared, and it reached the venv only because `semantica`
-happened to depend on it. Removing the knowledge-graph subsystem removed
-semantica, and the deployed service on 192.168.5.24 stopped importing — the
-traceback pointed at structlog and said nothing about the dependency change
-that caused it.
+1. Every module-level third-party import is a declared dependency.
+   `structlog` was imported by 18 files, declared nowhere, and installed only
+   because `semantica` depended on it. Removing semantica left the deployed
+   service on 192.168.5.24 unable to import, with a traceback naming structlog
+   and nothing about the dependency change that caused it. No test could have
+   caught it: the local environment already had the package.
 
-No test could have seen it: the local environment already had structlog, so
-every test passed. Only `uv sync` against the new lock, on a machine that had
-not already installed it, produced the failure. Hence this is a static check
-against pyproject rather than an import test.
+2. The lock file agrees with the installed environment.
+   In ATERag, `uv sync --frozen` would have uninstalled `psycopg2-binary` — the
+   hard dependency of `semantica.ApacheAgeStore`, and the only driver of
+   `scripts/sync_semantica.py`, the script that maintains the real Apache AGE
+   rule graph (384 vertices, 468 edges on the board). The package was in the
+   venv, in neither pyproject.toml nor uv.lock. It had been there by hand.
 
-A quieter version of the same bug
---------------------------------
-`report_exporter.py` imports `pyarrow` inside a try/except to offer Parquet
-export and falls back to CSV. That guard is correct, and it is why the Parquet
-path went from working to silently not working when pyarrow disappeared with
-semantica: the fallback caught the ImportError, no test failed, and a caller
-asking for Parquet received CSV. So guarded imports of a package the project
-actually wants are also declared — see DECLARED_OPTIONAL.
-
-Deliberately not declared
--------------------------
-`ortools` is imported inside try/except with an explicit availability sentinel
-and a documented degradation to heuristic scheduling. The guard is the
-contract, so it stays undeclared, and OPTIONAL_BY_DESIGN keeps the
-distinction honest by failing if such an import ever becomes unguarded.
+3. A declared dependency is either imported, or loaded by name at runtime, or
+   deliberately an entry point.
+   "No import statement" is not sufficient grounds for removal. Three
+   dependencies in ATEStudio have no import anywhere and are all load-bearing:
+   `mcp` (langchain-mcp-adapters does `from mcp import ClientSession`),
+   `pyvisa-py` (PyVISA's only VISA backend on a host without NI-VISA), and
+   `aiomysql` (SQLAlchemy resolves the driver from the `mysql+aiomysql://` DSN
+   that config.py builds). Removing any of them on the strength of a grep would
+   have broken a capability that only fails when someone tries to use it.
 """
 from __future__ import annotations
 
 import ast
+import re
+import subprocess
+import sys
 import tomllib
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SRC = REPO_ROOT / "src"
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 
-#: The project's own top-level packages. `shared` is a fourth one alongside
-#: ate_cloud / ate_platform, and forgetting it produces a false positive that
+#: This repository's own top-level packages. `shared` is a third one alongside
+#: ate_cloud / ate_platform, and omitting it produces a false positive that
 #: reads exactly like a real finding.
 OWN_PACKAGES = {"ate_cloud", "ate_platform", "shared"}
 
-#: Imported inside try/except with an explicit degradation path, so absence is
-#: a supported mode rather than a break. Keyed to the reason it stays
-#: undeclared, so the list is reviewable rather than a place to hide things.
+#: Imported inside try/except, or lazily inside a function whose caller has
+#: already checked availability. Absence is a supported mode, not a break.
+#: Keyed to the reason, so the list is reviewable rather than a hiding place.
 OPTIONAL_BY_DESIGN = {
     "ortools": "guarded by _ORTOOLS_AVAILABLE with a documented heuristic fallback",
 }
 
-#: Imported at module level but not declared, and nothing has broken because of
-#: it. Recorded with the reason it is currently safe, so that "currently safe"
-#: is a claim someone can re-check rather than an assumption.
+#: Module-level imports whose distribution is not declared, with the reason each
+#: is currently safe. Keyed by *distribution* name, because that is what the
+#: check compares against — keyed by module name it silently stops matching the
+#: moment DISTRIBUTION_OF gains an entry, and the allowlist becomes a place that
+#: hides things.
 #:
-#: `structlog` and `pyarrow` are deliberately NOT here — they were on this list
-#: in spirit until the knowledge-graph removal proved it, and they are declared
+#: Recorded rather than ignored: "currently safe" should be a claim someone can
+#: re-check, not an assumption.
+#:
+#: `pydantic` and `structlog` are deliberately absent — they were on this list
+#: in spirit until the knowledge-graph removal proved it, and both are declared
 #: now with the history in the module docstring.
 TRANSITIVE_BY_DESIGN = {
-    "pydantic": "guaranteed by pydantic-settings>=2.0.0 and fastapi>=0.110.0, "
-                "both of which require it; removing either is a much larger change",
-    "numpy": "pulled in by the langchain/scientific stack the project already "
-             "depends on",
-    "grpcio": "the gRPC instrument driver is a separate deployment concern; no "
-              "startup path imports it",
-    "protobuf": "same gRPC layer; generated stubs only",
-    "google": "namespace package from protobuf, same gRPC layer",
+    "grpcio": "the gRPC instrument driver; no startup path imports it",
+    "protobuf": "same gRPC layer; generated stubs only, and `google` maps here too",
+    "numpy": "pulled in by the langchain/scientific stack already depended on",
     "opentelemetry": "observability/telemetry.py imports it unguarded, but "
                      "nothing imports that module — the telemetry setup has "
-                     "never been wired into the app. A separate "
-                     "'built but never enabled' finding, not a dependency one",
+                     "never been wired in. A separate 'built but never "
+                     "enabled' finding, not a dependency one",
 }
 
-#: Guarded imports, but the project wants the capability, so it is declared.
-DECLARED_OPTIONAL = {"pyarrow"}
+#: Declared but never imported, because they are entry points or runtime-resolved.
+#: The test below asserts the reason still holds, so the list cannot rot into a
+#: place where genuinely dead dependencies hide.
+RESOLVED_AT_RUNTIME = {
+    "uvicorn": "the service is started with `uvicorn ate_cloud.main:app`",
+    "alembic": "migrations are run with `alembic upgrade head`",
+    "aiomysql": "SQLAlchemy resolves the driver from the mysql+aiomysql:// DSN "
+                "that config.database_url builds",
+    "mcp": "langchain-mcp-adapters does `from mcp import ClientSession`, and "
+           "ATEStudio uses MultiServerMCPClient for the ATERag agent face",
+    "pyvisa-py": "PyVISA's VISA backend. `ivi` (NI-VISA) is not installed, so "
+                 "this is the only working backend on the host",
+}
+
+#: Declared, imported nowhere, and with no runtime role found. This is the list
+#: that should be empty; anything added here needs a reason.
+REMOVED = {
+    "falkordb": "knowledge-graph backend, removed 2026-09-30, never deployed",
+    "semantica": "knowledge-graph extraction, removed 2026-09-30, never executed",
+    "bm25s": "BM25 is provided by PostgreSQL pg_textsearch; never imported",
+    "markdown-it-py": "never imported anywhere",
+}
 
 
-def _declared_dependencies() -> set[str]:
-    """Normalised distribution names from [project].dependencies."""
-    pyproject = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
-    names: set[str] = set()
-    for spec in pyproject["project"]["dependencies"]:
-        name = spec.split("[", 1)[0]
-        for separator in (">=", "<=", "==", "~=", "!=", ">", "<", " "):
-            name = name.split(separator, 1)[0]
-        if name:
-            names.add(name.strip().lower().replace("-", "_"))
-    return names
+#: Import name -> distribution name, where they differ. The distribution side is
+#: compared after normalising dashes to underscores, so "nats-py" appears here
+#: as "nats_py".
+#:
+#: A hand-written table is where a wrong answer hides, so it is kept minimal and
+#: every entry is one where the import name genuinely differs from the
+#: distribution name. `importlib.metadata.packages_distributions()` was tried as
+#: the source and rejected: it does not report every mapping, so it would have
+#: silently produced false "undeclared" findings.
+DISTRIBUTION_OF = {
+    "jwt": "pyjwt",
+    "yaml": "pyyaml",
+    "git": "gitpython",
+    "grpc": "grpcio",
+    "google": "protobuf",
+    "nats": "nats_py",
+    "langchain_core": "langchain_core",
+    "langchain_openai": "langchain_openai",
+    "langchain_mcp_adapters": "langchain_mcp_adapters",
+    "pydantic_settings": "pydantic_settings",
+    "qdrant_client": "qdrant_client",
+    "sse_starlette": "sse_starlette",
+    "pytest_asyncio": "pytest_asyncio",
+}
 
 
-def _imported_modules(*, guarded_only: bool) -> dict[str, list[str]]:
-    """Top-level third-party modules -> "file:line" sites.
+def _norm(name: str) -> str:
+    return name.strip().lower().replace("-", "_").replace(".", "_")
 
-    With ``guarded_only``, returns only imports nested inside a ``try`` block.
+
+def _declared() -> dict[str, str]:
+    """Every declared distribution, across all dependency groups.
+
+    `pytest` lives in the `dev` extra and `openhtf` in its own extra, so reading
+    only `dependencies` would report both as undeclared — which is how a test
+    that claims to catch undeclared dependencies ends up crying wolf.
     """
-    import sys
+    pyproject = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
+    project = pyproject["project"]
+    specs: list[str] = list(project["dependencies"])
+    for group in (project.get("optional-dependencies") or {}).values():
+        specs.extend(group)
 
+    out: dict[str, str] = {}
+    for spec in specs:
+        name = spec.split("[", 1)[0]
+        for sep in (">=", "<=", "==", "~=", "!=", ">", "<", " ", ";"):
+            name = name.split(sep, 1)[0]
+        if name:
+            out[_norm(name)] = spec
+    return out
+
+
+def _imports() -> tuple[dict[str, set[str]], dict[str, set[str]]]:
+    """-> (unguarded sites, all sites) for unguarded / all third-party imports."""
+    unguarded: dict[str, set[str]] = {}
+    everywhere: dict[str, set[str]] = {}
     stdlib = set(sys.stdlib_module_names)
-    found: dict[str, list[str]] = {}
 
-    for path in sorted(SRC.rglob("*.py")):
-        source = path.read_text(encoding="utf-8")
-        tree = ast.parse(source, filename=str(path))
-        rel = path.relative_to(SRC).as_posix()
+    roots = [SRC]
+    for extra in ("scripts", "tests"):
+        if (REPO_ROOT / extra).is_dir():
+            roots.append(REPO_ROOT / extra)
 
-        guarded_nodes: set[int] = set()
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Try):
-                for stmt in node.body:
-                    guarded_nodes.update(id(inner) for inner in ast.walk(stmt))
+    for root_dir in roots:
+        for path in sorted(root_dir.rglob("*.py")):
+            if "__pycache__" in path.parts:
+                continue
+            try:
+                tree = ast.parse(path.read_text(encoding="utf-8", errors="ignore"))
+            except SyntaxError:
+                continue
+            rel = path.relative_to(REPO_ROOT).as_posix()
 
-        for node in ast.walk(tree):
-            if not isinstance(node, (ast.Import, ast.ImportFrom)):
-                continue
-            if guarded_only and id(node) not in guarded_nodes:
-                continue
-            if isinstance(node, ast.Import):
-                roots = [alias.name.split(".")[0] for alias in node.names]
-            elif node.level == 0 and node.module:
-                roots = [node.module.split(".")[0]]
-            else:
-                continue
-            for root in roots:
-                if root in stdlib or root.startswith("_") or root in OWN_PACKAGES:
+            guarded: set[int] = set()
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Try):
+                    for stmt in node.body:
+                        guarded.update(id(i) for i in ast.walk(stmt))
+
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    roots_ = [a.name.split(".")[0] for a in node.names]
+                elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                    roots_ = [node.module.split(".")[0]]
+                else:
                     continue
-                found.setdefault(root, []).append(f"{rel}:{node.lineno}")
+                for r in roots_:
+                    if r in stdlib or r.startswith("_") or r in OWN_PACKAGES:
+                        continue
+                    # Local sibling directories that are not packages.
+                    if (REPO_ROOT / r).is_dir() and not (REPO_ROOT / r / "__init__.py").exists():
+                        continue
+                    everywhere.setdefault(r, set()).add(rel)
+                    if id(node) not in guarded:
+                        unguarded.setdefault(r, set()).add(rel)
 
-    return found
+    return unguarded, everywhere
 
 
-def test_unguarded_third_party_imports_are_declared() -> None:
-    """Module-level imports must be declared, or startup is one `uv lock` away
-    from failing. Reports every offender at once: finding these one per lock
-    refresh is the entire cost this test exists to remove."""
-    declared = _declared_dependencies()
-    imported = _imported_modules(guarded_only=False)
-
-    # Distribution name for a module that differs from it, and the cases where
-    # the module name is the import name rather than a distribution.
-    # Import name -> distribution name, where they differ. The distribution side
-    # is compared after normalising dashes to underscores, so "nats-py" has to
-    # appear here as "nats_py".
-    distribution_of = {
-        "jwt": "pyjwt",
-        "yaml": "pyyaml",
-        "grpc": "grpcio",
-        "google": "protobuf",
-        "nats": "nats_py",
-        "qdrant_client": "qdrant_client",
-        "sse_starlette": "sse_starlette",
-        "git": "gitpython",
-        "langchain_core": "langchain_core",
-        "langchain_openai": "langchain_openai",
-        "langchain_mcp_adapters": "langchain_mcp_adapters",
-        "pydantic_settings": "pydantic_settings",
-        "structlog": "structlog",
-        "pyarrow": "pyarrow",
-        "numpy": "numpy",
-        "pydantic": "pydantic",
-        "opentelemetry": "opentelemetry",
-    }
+def test_unguarded_imports_are_declared() -> None:
+    """The invariant that broke a deployed service."""
+    declared = set(_declared())
+    unguarded, _ = _imports()
 
     undeclared: dict[str, list[str]] = {}
-    for module, sites in imported.items():
-        distribution = distribution_of.get(module, module)
-        if distribution in declared:
+    for module, sites in unguarded.items():
+        dist = _norm(DISTRIBUTION_OF.get(module, module))
+        if dist in declared or dist in TRANSITIVE_BY_DESIGN or module in OPTIONAL_BY_DESIGN:
             continue
-        if distribution in TRANSITIVE_BY_DESIGN or module in OPTIONAL_BY_DESIGN:
-            continue
-        undeclared.setdefault(distribution, []).extend(sites)
+        undeclared.setdefault(dist, []).extend(sites)
 
     assert not undeclared, (
-        "These packages are imported at module level by src/ but are not in "
-        "pyproject.toml, so they are only installed as someone else's "
-        "transitive dependency. Removing that dependency breaks startup:\n"
+        "Imported at module level but not in pyproject.toml, so installed only "
+        "as someone else's transitive dependency — removing that dependency "
+        "breaks startup:\n"
         + "\n".join(
-            f"  {name:26} <- {', '.join(sorted(set(sites))[:3])}"
-            for name, sites in sorted(undeclared.items())
+            f"  {name:26} <- {', '.join(sorted(set(s))[:3])}"
+            for name, s in sorted(undeclared.items())
         )
     )
 
 
-def test_structlog_is_declared() -> None:
-    """The specific one that broke a deployed service.
+@pytest.mark.parametrize("package", ["structlog", "pyarrow", "pydantic"])
+def test_load_bearing_packages_are_declared(package: str) -> None:
+    """Named individually so each regression has a named home.
 
-    Named separately so the regression has a named home. If this ever fails
-    again, the history is right here: it was imported at module level by
-    state_snapshot.py, never declared, and present only because semantica
-    depended on it.
+    structlog: broke the deployed service outright.
+    pyarrow: guarded, so nothing broke — Parquet export became CSV silently.
+    pydantic: 53 module-level imports, was riding on fastapi's requirement.
     """
-    assert "structlog" in _declared_dependencies(), (
-        "structlog is imported at module level by 18 files under src/ and must "
-        "be a direct dependency, not a transitive one"
+    assert _norm(package) in _declared(), (
+        f"{package} is imported directly by src/ and must be a direct "
+        "dependency, not a transitive one"
     )
 
 
-def test_pyarrow_is_declared_so_parquet_export_keeps_working() -> None:
-    """Guarded, so nothing breaks — but the capability silently disappears.
+def test_removed_dependencies_stay_removed() -> None:
+    """A dependency nothing imports is a promise that a capability exists."""
+    text = PYPROJECT.read_text(encoding="utf-8")
+    stripped = "\n".join(
+        line for line in text.splitlines() if not line.lstrip().startswith("#")
+    )
+    for name, reason in REMOVED.items():
+        assert _norm(name) not in stripped, (
+            f"{name} is declared again ({reason})"
+        )
 
-    The try/except in report_exporter.py falls back to CSV, so a missing
-    pyarrow turns Parquet export into CSV with only a log line to show for it.
+
+def test_runtime_resolved_dependencies_still_have_their_reason() -> None:
+    """The allowlist must keep describing reality.
+
+    Each of these is declared without a single import statement. If the
+    mechanism that made it load-bearing disappears — langchain-mcp-adapters
+    dropping its `from mcp import ...`, NI-VISA becoming the only installed
+    VISA backend, config.py dropping the mysql DSN — then it becomes an
+    ordinary unused dependency and belongs in the removal path, not here.
     """
-    assert "pyarrow" in _declared_dependencies(), (
-        "pyarrow backs Parquet export; undeclared it silently degrades to CSV"
+    source = "\n".join(
+        p.read_text(encoding="utf-8", errors="ignore")
+        for p in SRC.rglob("*.py")
+        if "__pycache__" not in p.parts
+    )
+    declared = _declared()
+
+    for package in RESOLVED_AT_RUNTIME:
+        assert _norm(package) in declared, (
+            f"{package} is listed in RESOLVED_AT_RUNTIME but is not declared"
+        )
+
+    # mcp: the adapter that needs it must still be present and used.
+    assert "MultiServerMCPClient" in source, (
+        "mcp is declared because langchain-mcp-adapters imports it, but "
+        "MultiServerMCPClient is no longer used — mcp is now an unused "
+        "dependency and should be removed"
+    )
+    # aiomysql: config.py must still build a mysql+aiomysql:// DSN.
+    assert "mysql+aiomysql" in source, (
+        "aiomysql is declared because config.database_url builds a "
+        "mysql+aiomysql:// DSN, but that string is gone — aiomysql is now an "
+        "unused dependency and should be removed"
+    )
+    # pyvisa-py: pyvisa must still be used for instrument access.
+    assert re.search(r"\bpyvisa\b", source), (
+        "pyvisa-py is declared as the VISA backend, but pyvisa is no longer "
+        "used anywhere — both are now removable"
     )
 
 
 def test_optional_by_design_imports_stay_guarded() -> None:
-    """The allowlist must keep describing reality.
+    """Optional means guarded or lazy, never module-level and bare.
 
-    A package claimed to degrade gracefully may be imported two ways and not a
-    third: inside a try/except, or lazily inside a function whose caller has
-    already checked availability. `fault_penalty.py` does the latter — it
-    imports cp_model at call time, and it is only ever called from the CP-SAT
-    path that `cpsat.py` already gated on _ORTOOLS_AVAILABLE.
-
-    What must not happen is a module-level unguarded import, because that turns
-    "optional" into "required, and the failure is a startup traceback". So
-    every import of an allowlisted package is checked to be either guarded or
-    nested inside a function.
+    fault_penalty.py imports cp_model inside a function; that is fine, because
+    its caller already checked _ORTOOLS_AVAILABLE. A module-level unguarded
+    import would turn "optional" into "required, with a startup traceback".
     """
     offenders: list[str] = []
     for path in sorted(SRC.rglob("*.py")):
+        if "__pycache__" in path.parts:
+            continue
         source = path.read_text(encoding="utf-8")
+        if not any(name in source for name in OPTIONAL_BY_DESIGN):
+            continue
         tree = ast.parse(source, filename=str(path))
-        rel = path.relative_to(SRC).as_posix()
+        rel = path.relative_to(REPO_ROOT).as_posix()
 
         guarded: set[int] = set()
         nested: set[int] = set()
         for outer in ast.walk(tree):
             if isinstance(outer, ast.Try):
                 for stmt in outer.body:
-                    guarded.update(id(inner) for inner in ast.walk(stmt))
+                    guarded.update(id(i) for i in ast.walk(stmt))
             elif isinstance(outer, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 for stmt in outer.body:
-                    nested.update(id(inner) for inner in ast.walk(stmt))
+                    nested.update(id(i) for i in ast.walk(stmt))
 
         for node in ast.walk(tree):
             if not isinstance(node, (ast.Import, ast.ImportFrom)):
                 continue
-            imported = (
-                [alias.name for alias in node.names]
+            names = (
+                [a.name for a in node.names]
                 if isinstance(node, ast.Import)
                 else [node.module or ""]
             )
-            names = {name.split(".")[0] for name in imported}
-            hit = names & set(OPTIONAL_BY_DESIGN)
-            if not hit:
+            if not any(n.split(".")[0] in OPTIONAL_BY_DESIGN for n in names):
                 continue
             if id(node) not in guarded and id(node) not in nested:
-                offenders.append(
-                    f"{rel}:{node.lineno} {sorted(hit)[0]} — module level, "
-                    "no try/except"
-                )
+                offenders.append(f"{rel}:{node.lineno}")
 
     assert not offenders, (
-        "OPTIONAL_BY_DESIGN claims these degrade gracefully, so they cannot be "
-        "imported at module level without a guard — that makes them required, "
-        "and the failure mode is a startup traceback rather than a fallback:\n"
-        + "\n".join(f"  {o}" for o in offenders)
+        "OPTIONAL_BY_DESIGN packages are now imported at module level without a "
+        "guard, which makes them required:\n" + "\n".join(f"  {o}" for o in offenders)
     )
 
 
-def test_removed_graph_dependencies_are_not_still_declared() -> None:
-    """A dependency nothing imports is a promise that a capability exists.
+@pytest.mark.slow
+def test_lock_file_agrees_with_the_installed_environment() -> None:
+    """`uv sync --frozen` must be a no-op.
 
-    falkordb and semantica were hard requirements for a subsystem removed on
-    2026-09-30. Leaving them declared would invite the next reader to treat the
-    knowledge graph as merely switched off rather than gone.
+    In ATERag this check would have failed: the venv held psycopg2-binary,
+    which was in neither pyproject.toml nor uv.lock, so `uv sync --frozen` was
+    one command away from removing the driver behind the script that maintains
+    the Apache AGE rule graph. The drift was invisible because nothing runs
+    `uv sync` and then tries that script.
+
+    Skipped when uv is unavailable, and when the dev extra is not installed
+    (the dry-run would then want to uninstall pytest and friends).
     """
-    stripped = "\n".join(
-        line
-        for line in PYPROJECT.read_text(encoding="utf-8").splitlines()
-        if not line.lstrip().startswith("#")
+    uv = None
+    for candidate in ("uv", "uv.exe"):
+        try:
+            subprocess.run([candidate, "--version"], capture_output=True, check=True)
+            uv = candidate
+            break
+        except (OSError, subprocess.CalledProcessError):
+            continue
+    if uv is None:
+        pytest.skip("uv is not on PATH")
+
+    proc = subprocess.run(
+        [uv, "sync", "--frozen", "--extra", "dev", "--dry-run"],
+        cwd=REPO_ROOT, capture_output=True, text=True, encoding="utf-8",
+        errors="replace",
     )
-    for name in ("falkordb", "semantica"):
-        assert name not in stripped, (
-            f"{name} is still a declared dependency, but the subsystem that used "
-            "it was removed"
-        )
-
-
-def test_nothing_imports_the_removed_subsystem() -> None:
-    """Deleting a package is not the same as nobody importing it.
-
-    Checked through the AST rather than by grepping source text, because the
-    surviving modules carry prose that names the removed ones — and prose
-    mentioning a deleted module is a note to the reader, not a broken import.
-    """
-    removed = (
-        "falkordb_graph_service",
-        "graph_service",
-        "graph_browse",
-        "kg_evolution",
-        "kg_retrieval",
-        "kg_pipeline",
-        "kg_seeder",
-        "kg_seed_data",
-        "kg_seed_facts",
-        "kg_seed_writer",
-        "failure_evolution",
-        "ontology",
-        "knowledge_extraction",
-        "fault_symptom_vector_store",
+    removals = [
+        line.strip()
+        for line in proc.stdout.splitlines()
+        if re.match(r"^\s*-\s+\S", line) and "aterag" not in line
+    ]
+    assert not removals, (
+        "uv.lock and the installed environment disagree. Running `uv sync` "
+        "would remove packages the code depends on:\n"
+        + "\n".join(f"  {r}" for r in removals)
     )
-    offenders: list[str] = []
-    for path in sorted(SRC.rglob("*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                roots = [alias.name for alias in node.names]
-            elif isinstance(node, ast.ImportFrom) and node.module:
-                roots = [node.module]
-            else:
-                continue
-            for name in roots:
-                if any(name == f"ate_cloud.services.{mod}" or name == f"ate_cloud.api.v1.{mod}"
-                       for mod in removed):
-                    offenders.append(f"{path.relative_to(SRC).as_posix()}:{node.lineno} -> {name}")
-
-    assert not offenders, (
-        "Code still imports a module removed with the knowledge-graph subsystem:\n"
-        + "\n".join(f"  {o}" for o in offenders)
-    )
-
-
-def test_removed_modules_are_actually_gone() -> None:
-    """A guard that passes on a leftover file is worse than no guard."""
-    services = SRC / "ate_cloud" / "services"
-    for module in (
-        "falkordb_graph_service",
-        "graph_service",
-        "graph_browse",
-        "kg_evolution",
-        "kg_retrieval",
-        "kg_seeder",
-        "kg_seed_data",
-        "kg_seed_facts",
-        "kg_seed_writer",
-        "failure_evolution",
-        "fault_symptom_vector_store",
-    ):
-        assert not (services / f"{module}.py").exists(), f"{module}.py is still in src/"
-
-    for package in ("kg_pipeline", "ontology", "knowledge_extraction"):
-        assert not (services / package).exists(), f"{package}/ is still in src/"
-
-    api = SRC / "ate_cloud" / "api" / "v1"
-    for module in ("faults", "knowledge"):
-        assert not (api / f"{module}.py").exists(), f"api/v1/{module}.py is still in src/"
