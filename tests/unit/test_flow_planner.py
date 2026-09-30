@@ -459,3 +459,59 @@ def test_generated_plan_parses_with_real_dsl_parser() -> None:
     # every step id must be unique or the dependency graph is ambiguous
     ids = [s.id for s in parsed.steps]
     assert len(ids) == len(set(ids)), "DSL 步骤 id 重复, 依赖图有歧义"
+
+
+def test_emitted_step_count_matches_what_to_yaml_writes() -> None:
+    """The plan's own step count must equal the file it emits.
+
+    ``to_yaml`` injects a clamp, a release, and one recovery fence per
+    destructive segment — steps that are in no segment. Reporting only
+    ``step_count`` understates the fixture's real cycle, and the generated
+    YAML's header used to print that understated number, so whoever
+    commissions the fixture read a step count the file did not contain.
+    """
+    bundle_path = Path(r"F:\Workspace\ATERag\rag_storage\exports\studio_bundle.json")
+    if not bundle_path.exists():
+        pytest.skip("需要 ATERag 导出的真实 bundle")
+    bundle = BundleModel.model_validate_json(bundle_path.read_text(encoding="utf-8"))
+    plan = plan_flow(bundle, load_bindings())
+
+    assert plan.emitted_step_count > plan.step_count, "真实计划含破坏性段, 发射步数必然更多"
+
+    from ate_platform.dsl.parser import YamlParser
+
+    tmp = REPO / "data" / "_flow_count_test.yaml"
+    tmp.parent.mkdir(parents=True, exist_ok=True)
+    tmp.write_text(plan.to_yaml(), encoding="utf-8")
+    try:
+        parsed = YamlParser().parse(tmp)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+    assert len(parsed.steps) == plan.emitted_step_count, (
+        f"发射 {len(parsed.steps)} 步, 但 predicted {plan.emitted_step_count} 步 —— "
+        "发射端有未预期的注入"
+    )
+
+
+def test_generated_yaml_header_states_the_real_step_count() -> None:
+    """The header is what a commissioning engineer reads first.
+
+    It used to say `step_count`, which is the planned count, while the file
+    body carried more steps — so the artifact misdescribed its own size.
+    """
+    bundle_path = Path(r"F:\Workspace\ATERag\rag_storage\exports\studio_bundle.json")
+    if not bundle_path.exists():
+        pytest.skip("需要 ATERag 导出的真实 bundle")
+    bundle = BundleModel.model_validate_json(bundle_path.read_text(encoding="utf-8"))
+    plan = plan_flow(bundle, load_bindings())
+    text = plan.to_yaml()
+
+    header = [ln for ln in text.splitlines() if ln.lstrip().startswith("#")]
+    assert any(str(plan.emitted_step_count) in ln for ln in header), (
+        f"YAML 头部没有报出实际步数 {plan.emitted_step_count}"
+    )
+
+    import yaml
+
+    assert len(yaml.safe_load(text)["steps"]) == plan.emitted_step_count

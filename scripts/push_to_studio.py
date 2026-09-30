@@ -61,6 +61,7 @@ class PushPlan:
     scripts: dict[str, str]
     gaps: list[PlanGap]
     step_count: int
+    emitted_step_count: int
     segment_count: int
     settle_s: float
     pending: list[dict[str, str]] = field(default_factory=list)
@@ -104,6 +105,7 @@ def build(bundle_path: Path) -> PushPlan:
         scripts=scripts,
         gaps=plan_gaps(plan),
         step_count=plan.step_count,
+        emitted_step_count=plan.emitted_step_count,
         segment_count=len(plan.segments),
         settle_s=plan.total_settle_s,
         pending=list(plan.pending),
@@ -116,7 +118,10 @@ def report(pp: PushPlan, *, allow_gaps: bool, apply: bool) -> bool:
     blocking = pp.blocking_reasons(allow_gaps=allow_gaps)
 
     print(f"产品        : {pp.product_code}")
-    print(f"计划        : {pp.segment_count} 分段 / {pp.step_count} 步")
+    print(
+        f"计划        : {pp.segment_count} 分段 / {pp.emitted_step_count} 步"
+        f" (含装夹/释放与破坏性栅栏; 纯计划步 {pp.step_count})"
+    )
     print(f"逐台稳定等待: {pp.settle_s:.1f}s ({pp.settle_s / 60:.1f} 分钟)")
     print(f"脚本        : {len(pp.scripts)} 个, 其中 {len(pp.unwired)} 个未接线")
     print(f"无判据测量  : {len(pp.gaps)} 个")
@@ -179,7 +184,9 @@ def upload(pp: PushPlan, base_url: str, token: str, plan_name: str, timeout: int
             "/api/v1/scripts/register",
             {
                 "name": plan_name,
-                "description": f"ATERag 生成草稿: {pp.step_count} 步 / {len(pp.scripts)} 脚本",
+                "description": (
+                    f"ATERag 生成草稿: {pp.emitted_step_count} 步 / {len(pp.scripts)} 脚本"
+                ),
                 "script_path": f"generated/{plan_name}.yaml",
                 "tags": ["aterag", "draft"],
             },

@@ -113,12 +113,30 @@ else
 fi
 
 # ── Frontend ────────────────────────────────────────────────────────────────
+# FRONTEND_BUILT records what actually happened, not what was requested. The
+# stamp below exists to answer "what is running on this board after an
+# incident"; a stamp that says frontend_built=true when npm was missing is
+# worse than no stamp, because it is believed.
+FRONTEND_BUILT=false
 if [[ "$RUN_FRONTEND" == "1" && -d "$REPO_DIR/frontend" ]]; then
   if command -v npm >/dev/null 2>&1; then
     log "building frontend"
     ( cd "$REPO_DIR/frontend" && npm ci --no-audit --no-fund && npm run build )
+    # Trust the artifact, not the exit code: npm can succeed and still leave no
+    # dist (a misconfigured outDir), and the stamp is the only record.
+    if [[ -f "$REPO_DIR/frontend/dist/index.html" ]]; then
+      FRONTEND_BUILT=true
+    else
+      log "WARNING: npm build produced no frontend/dist/index.html"
+    fi
   else
-    log "npm not found; serving the previously built frontend"
+    # "previously built" is a claim, not a fact. On a fresh clone there is no
+    # previous build and the UI is simply absent.
+    if [[ -f "$REPO_DIR/frontend/dist/index.html" ]]; then
+      log "npm not found; keeping the existing frontend/dist"
+    else
+      log "WARNING: npm not found and no frontend/dist — the web UI will not be served"
+    fi
   fi
 else
   log "skipping frontend build"
@@ -135,7 +153,7 @@ cat > "$STAMP_DIR/current.json" <<EOF
   "venv": "$VENV_DIR",
   "deployed_at": "$(date -Iseconds)",
   "migrations": $( [[ "$RUN_MIGRATE" == "1" ]] && echo true || echo false ),
-  "frontend_built": $( [[ "$RUN_FRONTEND" == "1" ]] && echo true || echo false )
+  "frontend_built": $FRONTEND_BUILT
 }
 EOF
 

@@ -114,7 +114,8 @@ def run(bundle_path: Path) -> Report:
     rep.add(
         "计划非空",
         plan.step_count > 0,
-        f"{len(plan.segments)} 分段 / {plan.step_count} 步",
+        f"{len(plan.segments)} 分段 / 计划 {plan.step_count} 步 / "
+        f"实际发射 {plan.emitted_step_count} 步",
     )
 
     # ── 3. red line: no draft-derived step ──────────────────────────────────
@@ -179,7 +180,20 @@ def run(bundle_path: Path) -> Report:
         tmp.write_text(text, encoding="utf-8")
         try:
             parsed = YamlParser().parse(tmp)
-            rep.add("平台 DSL 解析器接受该计划", True, f"{len(parsed.steps)} 步, version={parsed.version}")
+            # The emitted plan is longer than the planned one by construction:
+            # a clamp, a release, and one recovery fence per destructive
+            # segment. Comparing against the predicted total turns "the
+            # numbers differ" into "the numbers differ by exactly the safety
+            # steps we expect" — an unexplained step injected anywhere else
+            # still fails here.
+            n = len(parsed.steps)
+            want = plan.emitted_step_count
+            rep.add(
+                "平台 DSL 解析器接受该计划",
+                n == want,
+                f"{n} 步, version={parsed.version}"
+                + ("" if n == want else f" —— 与预测 {want} 步不符, 发射端有未预期的注入"),
+            )
         finally:
             tmp.unlink(missing_ok=True)
     except Exception as exc:  # noqa: BLE001

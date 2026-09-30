@@ -198,7 +198,37 @@ class FlowPlan:
 
     @property
     def step_count(self) -> int:
+        """Steps the planner decided on — excludes the safety steps ``to_yaml``
+        injects. See :attr:`emitted_step_count` for the number that actually
+        executes; the two differ, and conflating them makes a plan look
+        smaller than the work it will do."""
         return sum(len(s.steps) for s in self.segments)
+
+    @property
+    def destructive_segment_count(self) -> int:
+        return sum(1 for s in self.segments if s.destructive)
+
+    @property
+    def emitted_step_count(self) -> int:
+        """Steps ``to_yaml`` actually writes, i.e. what the station executes.
+
+        ``to_yaml`` injects steps that are not in any segment:
+
+        * ``fixture_clamp`` at the head and ``fixture_release`` at the tail —
+          a unit is not clamped or unclamped by accident;
+        * one ``recover_before_*`` fence ahead of every destructive segment,
+          because a protection latch left uncleared silently corrupts every
+          measurement after it.
+
+        So the emitted plan is always longer than the plan. Reporting only
+        ``step_count`` understates the fixture's real cycle time, and — worse —
+        the generated YAML's own header used to print that understated number,
+        so whoever commissions the fixture reads a step count the file does
+        not contain.
+        """
+        fences = self.destructive_segment_count
+        head_tail = 2 if self.step_count else 0
+        return self.step_count + fences + head_tail
 
     @property
     def total_settle_s(self) -> float:
@@ -301,7 +331,9 @@ class FlowPlan:
             "# 由 ATERag 从规格书自动生成 —— 这是**草稿**, 不是可直接上机的序列。",
             "#",
             f"# 产品: {self.product_code}  规格版本: {self.doc_version or '(未标注)'}",
-            f"# 步骤数: {self.step_count}  分段: {len(self.segments)}  "
+            f"# 步骤数: {self.emitted_step_count} "
+            f"(= 计划 {self.step_count} + 破坏性栅栏 {self.destructive_segment_count} "
+            f"+ 夹具装夹/释放 2)  分段: {len(self.segments)}  "
             f"逐台稳定等待: {self.total_settle_s:.1f}s",
             f"# 未映射场景: {len(self.unmapped)}  (这些需求未被排入任何测试)",
         ]
