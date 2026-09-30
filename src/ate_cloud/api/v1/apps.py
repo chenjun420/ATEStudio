@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from ate_cloud.auth.dependencies import get_current_user, require_scopes
-from ate_cloud.auth.rbac import get_db_effective_scopes
+from ate_cloud.auth.rbac import get_db_effective_scopes, is_superuser
 from ate_cloud.db import get_db
 from ate_cloud.models.app_menu import App, AppMenu
 from ate_cloud.models.user import User
@@ -257,9 +257,25 @@ def _filter_menus_by_permissions(
     """Filter menus based on the user's permissions.
 
     A menu is visible if:
+    - the user is an admin (see :func:`is_superuser`), or
     - required_permissions is None or empty (visible to all authenticated users)
     - The intersection of user_permissions and required_permissions is non-empty
       (user has at least one of the required permissions)
+
+    The admin bypass is load-bearing, not a convenience. The permission strings
+    on seeded menus — ``system:read``, ``node:read``, ``exec:read``,
+    ``flow:read`` — are a namespaced vocabulary that exists only in this seed
+    data; :data:`ROLE_SCOPES` grants the flat ``admin``/``read``/``write``/
+    ``execute`` set and never names any of them. So without the bypass the
+    intersection is empty for *every* account, each app is dropped for having no
+    visible menu, and a correct login lands on an empty main screen.
+
+    That is not hypothetical: it is what shipped. Note the asymmetry it leaves —
+    a non-admin with a real role still sees nothing, because no non-admin role
+    holds a menu permission either. Widening the roles is a policy decision
+    (which roles get which domain's ``:read``) and is deliberately not guessed
+    here; ``tests/cloud/test_menu_visibility.py`` states the gap explicitly so it
+    cannot be mistaken for working.
 
     Args:
         menus: Flat list of AppMenu ORM objects.
@@ -268,6 +284,9 @@ def _filter_menus_by_permissions(
     Returns:
         Filtered list of AppMenu objects visible to the user.
     """
+    if is_superuser(user_permissions):
+        return list(menus)
+
     result: list[AppMenu] = []
     for m in menus:
         if not m.required_permissions:

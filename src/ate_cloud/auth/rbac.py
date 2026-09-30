@@ -41,6 +41,34 @@ from sqlalchemy.ext.asyncio import AsyncSession
 #: only ``admin`` carries it.
 SCOPE_ATERAG_IMPORT = "aterag:import"
 
+#: The scope that means "no permission check applies".
+#:
+#: It exists because permission checks in this codebase come in two flavours and
+#: only one of them consults :data:`ROLE_SCOPES`. Endpoint guards say
+#: ``require_scopes("x")``; data-driven guards say "this row declares
+#: ``required_permissions``". The second kind compares against strings that live
+#: in the *data* — ``app_menus.required_permissions`` holds values like
+#: ``system:read`` and ``node:read``, which no role in :data:`ROLE_SCOPES` grants.
+#:
+#: Left unhandled, that makes the whole product unreachable: every seeded menu
+#: was filtered out for every account, admin included, and the main screen came
+#: up empty after a successful login. An admin who satisfies no permission check
+#: is not an admin.
+SCOPE_ADMIN = "admin"
+
+
+def is_superuser(scopes: set[str] | frozenset[str] | list[str] | None) -> bool:
+    """Whether these scopes bypass permission-gated filtering entirely.
+
+    For guards whose permission vocabulary is data-driven and therefore cannot be
+    enumerated in :data:`ROLE_SCOPES`. Where a guard names a scope explicitly,
+    prefer listing that scope on the role: an explicit grant is auditable, a
+    wildcard is not, and overusing this turns it into a way to silence checks
+    rather than satisfy them.
+    """
+    return bool(scopes) and SCOPE_ADMIN in scopes
+
+
 ROLE_SCOPES: dict[str, list[str]] = {
     "admin": ["admin", "read", "write", "execute", SCOPE_ATERAG_IMPORT],
     "write": ["read", "write"],
