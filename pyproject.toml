@@ -32,6 +32,21 @@ dependencies = [
     "langchain>=1.0.0",
     "langchain-mcp-adapters>=0.1.0",
     "mcp>=1.2.0",
+    # Two direct imports that were never declared here, and only reached the venv
+    # because `semantica` happened to depend on both. Removing the knowledge-graph
+    # subsystem removed semantica, and the app on the deployed host stopped
+    # importing at all — `state_snapshot.py` does `import structlog` at module
+    # level. A package you import directly and do not declare is one `uv lock`
+    # refresh away from vanishing, and nothing in the test suite could see it,
+    # because the local environment already had it.
+    "structlog>=24.1.0",
+    # Same story, quieter outcome: report_exporter.py imports pyarrow inside a
+    # try/except to offer Parquet export and falls back to CSV when it is
+    # absent. That fallback worked, so the Parquet path went from working to
+    # silently not working — the worst kind, because a caller asking for
+    # Parquet got CSV and a log line nobody reads. Declared so the capability
+    # is a decision rather than an accident of someone else's dependency list.
+    "pyarrow>=15.0.0",
     # The knowledge-graph backend is gone: semantica[graph-falkordb,shacl] and
     # falkordb were removed with the subsystem. Nothing imports either now.
     #
