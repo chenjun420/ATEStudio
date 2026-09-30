@@ -245,4 +245,88 @@ class TestAgentCaching:
         assert builds == ["http://a/mcp", "http://b/mcp"]
 
 
+# ── tool-set contract ────────────────────────────────────────────────────────
+
+
+#: Exactly what `aterag-mcp` advertised over tools/list on 2026-09-30 at
+#: http://192.168.5.24:8080/mcp (commit e7b5cc7), captured with the
+#: initialize -> initialized -> tools/list handshake rather than read off a
+#: docstring.
+#:
+#: This snapshot exists to catch drift in the direction the existing
+#: fail-closed test cannot see. That test proves an *unlisted* tool is not
+#: reachable; nothing proved a read tool ATERag newly added was ever noticed.
+#: `list_models` and `list_domain_rules` sat in that gap: both are pure reads,
+#: both were simply absent, and the agent could not report which model it was
+#: reasoning about.
+SERVER_TOOLS = frozenset(
+    {
+        # reads
+        "calculate",
+        "extract_test_conditions",
+        "get_condition_detail",
+        "get_coverage_summary",
+        "get_fixture_spec",
+        "get_test_cases",
+        "health",
+        "list_domain_rules",
+        "list_models",
+        "list_pending_review",
+        "optimize_process",
+        "query_parameters",
+        "search_cases",
+        "search_requirements",
+        "validate_constraints",
+        # writes
+        "build_domain_kb",
+        "ingest_document",
+    }
+)
+
+
+class TestToolSetMatchesServer:
+    def test_every_server_tool_is_classified(self) -> None:
+        """No tool may be neither allowed nor explicitly denied.
+
+        An unclassified tool is the exact failure this file was extended for:
+        it is invisible in review, so it stays missing until an engineer
+        notices the agent cannot answer something obvious.
+        """
+        unclassified = SERVER_TOOLS - agent_mod.ALLOWED_TOOLS - set(agent_mod.DENIED_TOOLS)
+        assert not unclassified, (
+            f"ATERag 新增了未分类的工具: {sorted(unclassified)}。"
+            " 逐个判定读/写后, 加入 ALLOWED_TOOLS 或 DENIED_TOOLS。"
+        )
+
+    def test_no_tool_is_both_allowed_and_denied(self) -> None:
+        assert not agent_mod.ALLOWED_TOOLS & set(agent_mod.DENIED_TOOLS)
+
+    def test_whitelist_has_no_phantom_tools(self) -> None:
+        """A name the server does not serve is dead config, not defence.
+
+        A rename upstream would otherwise leave a stale entry that looks like
+        coverage in every review of this file.
+        """
+        phantom = agent_mod.ALLOWED_TOOLS - SERVER_TOOLS
+        assert not phantom, f"白名单里有服务器不存在的工具: {sorted(phantom)}"
+
+    def test_denied_tools_are_the_write_ones(self) -> None:
+        """Spelled out because the red line is the point of the whole file.
+
+        Approving a condition, or importing a document, would let the model
+        launder an unreviewed criterion into a production bound. The denial is
+        structural — the tool is never bound to the agent — so this asserts the
+        set rather than trusting a policy sentence.
+        """
+        assert set(agent_mod.DENIED_TOOLS) == {"ingest_document", "build_domain_kb"}
+        for name in agent_mod.DENIED_TOOLS:
+            assert name not in agent_mod.ALLOWED_TOOLS
+
+    def test_every_denial_states_a_reason(self) -> None:
+        """A denial with no recorded reason is the first thing to be 'fixed'
+        by someone who assumes it is stale."""
+        for name, reason in agent_mod.DENIED_TOOLS.items():
+            assert reason.strip(), f"{name} 被拒绝但没写原因"
+
+
 

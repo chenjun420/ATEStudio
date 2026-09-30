@@ -48,25 +48,51 @@ logger = logging.getLogger(__name__)
 #: board at the factory or a laptop over a tunnel.
 DEFAULT_MCP_URL = os.getenv("ATERAG_MCP_URL", "http://192.168.5.24:8080/mcp")
 
-#: Read-only tools this agent is allowed to use. Everything ATERag exposes
-#: beyond this list is a write or a side effect, and is not granted.
+#: Read-only tools this agent is allowed to use.
+#:
+#: Kept as an explicit allow-list with the denied tools named alongside it,
+#: because the previous version of this comment claimed "everything ATERag
+#: exposes beyond this list is a write or a side effect". That was false:
+#: ``list_models`` and ``list_domain_rules`` are pure reads and were simply
+#: missed, so the agent could not tell the engineer which model it was even
+#: talking about. Naming the denials makes the next omission visible — a tool
+#: that appears on the server and in neither set is caught by
+#: ``tests/unit/test_aterag_agent.py``, which pins the server's tool list.
 ALLOWED_TOOLS = frozenset(
     {
+        # --- review surface (P4) -------------------------------------------
         "get_condition_detail",
         "list_pending_review",
         "get_coverage_summary",
+        # --- catalogue / spec lookup ---------------------------------------
+        "list_models",
+        "list_domain_rules",
         "search_requirements",
         "query_parameters",
         "get_test_cases",
         "search_cases",
         "get_fixture_spec",
+        # --- computation over already-stored facts -------------------------
+        # calculate / optimize_process evaluate domain rules; validate_constraints
+        # checks a caller-supplied graph. None of them persist anything, which is
+        # what makes them safe to expose: they can be wrong, not destructive.
         "calculate",
         "validate_constraints",
         "optimize_process",
+        # extract_test_conditions re-runs extraction in memory from the stored
+        # blocks. It writes nothing (verified: no INSERT/UPDATE/commit in its
+        # body), so it is a read that happens to be expensive.
         "extract_test_conditions",
         "health",
     }
 )
+
+#: Tools deliberately withheld, with the reason. Asserted against the server's
+#: advertised tool list in tests so this cannot rot into a stale comment.
+DENIED_TOOLS = {
+    "ingest_document": "imports a spec document and builds a model KB (write)",
+    "build_domain_kb": "builds/updates the shared product-type KB (write)",
+}
 
 SYSTEM_PROMPT = """你是 ATERag 产测规格助手, 帮助工程师理解规格书的抽取与评审结果。
 
