@@ -49,6 +49,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from sqlalchemy import select  # noqa: E402
+from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402
 
 from ate_cloud.auth.password import hash_password  # noqa: E402
 from ate_cloud.auth.rbac import ROLE_SCOPES  # noqa: E402
@@ -79,50 +80,77 @@ def _resolve_password(args: argparse.Namespace) -> str:
     return first
 
 
-async def _apply(username: str, role: str, password: str | None, promote: bool) -> int:
-    async with async_session_factory() as db:
-        existing = (
-            await db.execute(select(User).where(User.username == username))
-        ).scalar_one_or_none()
+async def _apply(
+    db: AsyncSession,
+    username: str,
+    role: str,
+    password: str | None,
+    promote: bool,
+) -> int:
+    """Create or update one account on ``db``.
 
-        if existing is not None:
-            if existing.role == role:
-                print(f"{username} already has role={role}; nothing to do")
-                return 0
-            old = existing.role
-            existing.role = role
-            # A promoted account must be able to log in, or the promotion is
-            # invisible: the next sign-in attempt would 401 and look like the
-            # script did nothing.
-            existing.is_active = True
+    The session is a parameter rather than opened here. It used to be reached
+    through the module-level ``async_session_factory``, which made the most
+    safety-critical branch untestable: a test calling this wrote to the real
+    database, so the tests could not be written at all — and the branch they
+    most needed to cover, the one that silently did nothing while printing
+    success, stayed unverified until it was run against a real deployment.
+    """
+    existing = (
+        await db.execute(select(User).where(User.username == username))
+    ).scalar_one_or_none()
+
+    if existing is not None:
+        if existing.role == role:
+            # An explicit password must still be honoured here. This branch used
+            # to return immediately with "nothing to do", which made
+            # `--username u --password newpw` against an account that already
+            # held the role a **silent no-op**: it printed a success-looking
+            # line, changed nothing, and the next login 401'd. Resetting the
+            # password of an account that already has the role is the most
+            # common reason to run this script twice.
             if password:
                 existing.password_hash = hash_password(password)
-            await db.commit()
-            print(f"promoted {username}: role {old} -> {role}")
-            if password:
-                print("  password reset")
+                existing.is_active = True
+                await db.commit()
+                print(f"{username} already has role={role}; password reset")
+            else:
+                print(f"{username} already has role={role}; nothing to do")
             return 0
-
-        if promote:
-            raise SystemExit(f"--promote given but {username!r} does not exist yet")
-
-        if not password:
-            raise SystemExit("creating an account needs a password")
-
-        db.add(
-            User(
-                id=str(uuid.uuid4()),
-                username=username,
-                password_hash=hash_password(password),
-                role=role,
-                scopes=None,
-                is_active=True,
-            )
-        )
+        old = existing.role
+        existing.role = role
+        # A promoted account must be able to log in, or the promotion is
+        # invisible: the next sign-in attempt would 401 and look like the script
+        # did nothing.
+        existing.is_active = True
+        if password:
+            existing.password_hash = hash_password(password)
         await db.commit()
-        print(f"created {username} with role={role}")
-        print(f"  effective scopes: {sorted(ROLE_SCOPES.get(role, []))}")
+        print(f"promoted {username}: role {old} -> {role}")
+        if password:
+            print("  password reset")
         return 0
+
+    if promote:
+        raise SystemExit(f"--promote given but {username!r} does not exist yet")
+
+    if not password:
+        raise SystemExit("creating an account needs a password")
+
+    db.add(
+        User(
+            id=str(uuid.uuid4()),
+            username=username,
+            password_hash=hash_password(password),
+            role=role,
+            scopes=None,
+            is_active=True,
+        )
+    )
+    await db.commit()
+    print(f"created {username} with role={role}")
+    print(f"  effective scopes: {sorted(ROLE_SCOPES.get(role, []))}")
+    return 0
 
 
 def main() -> int:
@@ -156,7 +184,12 @@ def main() -> int:
     # The host is printed without the credentials, which are the part of a
     # connection string nobody should see echoed into a deploy log.
     print(f"database host: {settings.get_database_url().split('@')[-1]}")
-    return asyncio.run(_apply(args.username, args.role, password, args.promote))
+
+    async def _run() -> int:
+        async with async_session_factory() as db:
+            return await _apply(db, args.username, args.role, password, args.promote)
+
+    return asyncio.run(_run())
 
 
 if __name__ == "__main__":
