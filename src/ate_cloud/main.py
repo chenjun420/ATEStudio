@@ -245,9 +245,14 @@ def _mount_spa(app: FastAPI) -> None:
 
     assets_dir = dist / "assets"
 
-    @app.get("/{full_path:path}", include_in_schema=False)
+    @app.api_route("/{full_path:path}", methods=["GET", "HEAD"], include_in_schema=False)
     async def spa(full_path: str) -> Response:
         """Serve a real file if there is one, else hand back the SPA shell.
+
+        HEAD is accepted alongside GET because it is how a health check or a
+        load balancer asks "is this up?". Answering 405 to ``curl -I /`` makes
+        the page look broken to exactly the tool an operator reaches for first,
+        and the 405 says nothing about whether the service is actually serving.
 
         API paths are passed through untouched. A catch-all that answered them
         with the HTML shell would turn every typo'd or unauthorised endpoint

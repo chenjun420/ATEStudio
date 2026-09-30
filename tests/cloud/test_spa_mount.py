@@ -127,6 +127,19 @@ class TestSpaIsReachable:
         """
         assert spa_client.get(f"/{ASSET}").status_code == 200
 
+    def test_head_works_on_the_shell(self, spa_client: TestClient) -> None:
+        """``curl -I /`` is how an operator first asks "is the UI up?".
+
+        A 405 there reads as "the page is broken" when the service is in fact
+        serving it perfectly, and it is the first thing anyone types. Starlette
+        does not add HEAD to a GET route on its own, so this has to be asked for.
+        """
+        r = spa_client.head("/")
+        assert r.status_code == 200
+
+    def test_head_on_an_api_path_is_not_the_shell(self, spa_client: TestClient) -> None:
+        assert spa_client.head("/api/v1/knowledge/conditions").status_code == 404
+
 
 class TestRouterStillWins:
     """The catch-all must be registered after the API, and stay out of its way."""
