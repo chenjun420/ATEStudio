@@ -21,7 +21,7 @@ const router = useRouter()
 const route = useRoute()
 const { t } = useI18n()
 const { apps, currentAppMenus, loading, loadApps, loadAppMenus } = useApps()
-const { user, isAdmin, logout } = useAuth()
+const { user, logout } = useAuth()
 
 const passwordChangeRef = ref<InstanceType<typeof PasswordChange> | null>(null)
 
@@ -148,12 +148,10 @@ function handleCommand(command: string): void {
     case 'settings':
       router.push('/system/settings')
       break
-    case 'users':
-      router.push('/system/users')
-      break
-    case 'roles':
-      router.push('/system/roles')
-      break
+    // 'users' and 'roles' were removed from this dropdown; they are menu
+    // entries under 系统管理 now. The cases are gone rather than left
+    // unreachable, so a future `command="users"` fails loudly at review time
+    // instead of silently doing nothing.
     case 'password':
       passwordChangeRef.value?.open()
       break
@@ -216,12 +214,17 @@ function handleCommand(command: string): void {
               <el-dropdown-item command="settings">
                 {{ t('menu.settings') }}
               </el-dropdown-item>
-              <el-dropdown-item v-if="isAdmin" command="users">
-                {{ t('menu.userManagement') }}
-              </el-dropdown-item>
-              <el-dropdown-item v-if="isAdmin" command="roles">
-                {{ t('rbac.title') }}
-              </el-dropdown-item>
+              <!--
+                User and role administration moved into the 系统管理 menu.
+
+                They used to live here, behind a client-side `v-if="isAdmin"`.
+                That flag is derived from the token, so the menu entry was
+                advisory at best, and the pages were reachable only by someone
+                who happened to know to look in the account dropdown. The menu
+                entry now carries `required_permissions: ["admin:read"]`, which
+                the server evaluates — so visibility and access are decided in
+                one place instead of two that can disagree.
+              -->
               <el-dropdown-item command="password" divided>
                 {{ t('auth.changePassword') }}
               </el-dropdown-item>

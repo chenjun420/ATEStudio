@@ -246,6 +246,31 @@ default_apps: list[dict[str, Any]] = [
                 "sort_order": 4,
                 "required_permissions": ["system:read"],
             },
+            # User and role administration used to be reachable only from the
+            # top-right account dropdown. Two reasons they belong in the menu:
+            # a page you can only reach by remembering a dropdown is a page
+            # nobody finds, and the menu is where per-role access is actually
+            # expressed. The ``admin:read`` requirement does that job on the
+            # server, whereas the dropdown gated on a client-side ``isAdmin``
+            # flag that the API never checked.
+            {
+                "code": "users",
+                "name": "用户管理",
+                "route_path": "/system/users",
+                "route_name": "UserManagement",
+                "icon": "User",
+                "sort_order": 5,
+                "required_permissions": ["admin:read"],
+            },
+            {
+                "code": "roles",
+                "name": "角色与权限",
+                "route_path": "/system/roles",
+                "route_name": "RoleManagement",
+                "icon": "Lock",
+                "sort_order": 6,
+                "required_permissions": ["admin:read"],
+            },
         ],
     },
 ]
