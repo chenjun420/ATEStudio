@@ -53,9 +53,35 @@ command -v git >/dev/null 2>&1 || die "git not found"
 # ── Refresh the code ────────────────────────────────────────────────────────
 # Pinned to a ref rather than "whatever is checked out": a deployment that
 # deploys an arbitrary working tree cannot be reproduced after an incident.
+
+# Refuse a dirty tree BEFORE touching it. This check used to sit after the
+# checkout, where it could never fire: git had already aborted with
+# "please commit your changes or stash them before you switch branches",
+# which names neither the file nor the remedy. Observed on the board after a
+# hand-patched deploy turned into exactly that dead end.
+if ! git -C "$REPO_DIR" diff --quiet 2>/dev/null; then
+  echo "[deploy] uncommitted changes in $REPO_DIR:" >&2
+  git -C "$REPO_DIR" status --short >&2
+  die "working tree has uncommitted changes; commit them, or restore the file, then re-run"
+fi
+
 if [[ -n "$REPO_REF" ]]; then
-  log "fetching $REPO_REF"
-  git -C "$REPO_DIR" fetch --all --tags
+  # The fetch is retried. Observed on the factory board: a transient
+  # "GnuTLS recv error (-110)" out of git fetch aborted the whole run under
+  # `set -e`, and the retry that followed then failed for a *different*
+  # reason (a dirty tree), so the operator saw two unrelated errors and had
+  # to work out which one was real. A network blip is not a deploy failure.
+  fetch_ok=false
+  for attempt in 1 2 3 4 5; do
+    log "fetching $REPO_REF (attempt $attempt/5)"
+    if git -C "$REPO_DIR" fetch --all --tags; then
+      fetch_ok=true
+      break
+    fi
+    log "  fetch failed; retrying in $((attempt * 5))s"
+    sleep $((attempt * 5))
+  done
+  $fetch_ok || die "could not fetch $REPO_REF after 5 attempts; check network egress to the remote"
   git -C "$REPO_DIR" checkout --detach "$REPO_REF"
 else
   CURRENT="$(git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null || echo unknown)"
@@ -63,13 +89,6 @@ else
   if [[ "$CURRENT" == "unknown" ]]; then
     die "not a git checkout and no --ref given; refusing to deploy an unversioned tree"
   fi
-fi
-
-# Refuse to deploy a dirty tree: a "deployed" version that differs from the
-# repo is not the thing anyone reviewed or can roll back to.
-if ! git -C "$REPO_DIR" diff --quiet 2>/dev/null; then
-  git -C "$REPO_DIR" status --short >&2
-  die "working tree has uncommitted changes; commit or --ref a clean commit first"
 fi
 
 DEPLOY_COMMIT="$(git -C "$REPO_DIR" rev-parse HEAD)"
