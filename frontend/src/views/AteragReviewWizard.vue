@@ -530,30 +530,40 @@ onMounted(loadSummary)
             </div>
 
             <!--
-              The spec clause, above the extracted conditions.
+              What the reviewer gets to check the conditions against.
 
-              Signing means confirming that the clause says what the condition
-              claims. That comparison cannot be done from the condition table
-              alone: every row is a distilled fragment, and a fragment that
-              looks reasonable can still invert the original's meaning. Putting
-              the clause on screen is what makes the signature mean anything —
-              without it a reviewer is signing a blank form.
+              Labelled for what it actually is. The bundle's `description` is
+              defined as "输入/输出条件合成后的可读描述" — a machine-composed
+              summary of the extracted conditions, NOT the spec sentence.
+              Calling this panel "规格书原文" would have been a lie of exactly
+              the kind this screen is supposed to prevent: a reviewer would
+              read a generated string as the source document and sign on that
+              basis.
 
-              The note is shown too because the number is often in the table
-              while "what this number means" is only in the note.
+              The verbatim material is:
+                - `title` + `section_path` — the anchor to look up in the spec
+                - the spec note below, when the bundle carried one
+                - each condition's 内容 column, which IS a spec fragment
+                  ("原文片段", per the clause contract)
             -->
             <div class="mb-3 p-3 rounded border border-gray-200 bg-gray-50">
               <div class="text-xs text-gray-500 mb-1">
-                规格书原文
+                需求描述(抽取合成, 非规格书原文)
                 <span v-if="selectedRequirement.section_path" class="ml-1">
                   · 条款 {{ selectedRequirement.section_path }}
                 </span>
               </div>
               <div class="text-sm leading-relaxed whitespace-pre-wrap">
-                {{ specText.requirement_description || '（该需求没有原文描述）' }}
+                {{
+                  specText.requirement_description ||
+                  '（抽取结果未携带需求描述, 请按条款号核对规格书）'
+                }}
+              </div>
+              <div class="text-xs text-gray-400 mt-2">
+                逐条原文片段见下表「内容」列; 核对判据请对照规格书 {{ selectedRequirement.section_path || '对应条款' }}。
               </div>
               <div v-if="specText.requirement_notes" class="mt-2 pt-2 border-t border-gray-200">
-                <div class="text-xs text-gray-500 mb-1">原文备注</div>
+                <div class="text-xs text-gray-500 mb-1">规格书备注</div>
                 <div class="text-sm text-gray-700 whitespace-pre-wrap">
                   {{ specText.requirement_notes }}
                 </div>

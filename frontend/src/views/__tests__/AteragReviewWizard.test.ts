@@ -165,27 +165,39 @@ describe('step 1 names what it actually does', () => {
   })
 })
 
-describe('signing has the spec clause in view', () => {
-  it('shows the clause the conditions were extracted from', async () => {
+describe('signing has something to check against', () => {
+  it('labels the description as synthesized, not as spec text', async () => {
     const { text } = await mountAtReviewStep([condition()])
     const body = text()
-    expect(body).toContain('规格书原文')
-    expect(body).toContain('在 -25℃ 低温下限启动时, 开机输出延时应不大于 12s')
+    // The bundle defines `description` as "输入/输出条件合成后的可读描述".
+    // Labelling it 原文 would have the reviewer sign on the strength of a
+    // generated string while believing they had read the source document.
+    expect(body).toContain('需求描述(抽取合成, 非规格书原文)')
+    expect(body).not.toContain('规格书原文\n')
   })
 
-  it('shows the spec note when there is one', async () => {
+  it('points at where the verbatim fragment actually lives', async () => {
     const { text } = await mountAtReviewStep([condition()])
-    expect(text()).toContain('原文备注')
+    const body = text()
+    // Each condition's 内容 column IS a spec fragment ("原文片段" per the
+    // clause contract), so that is where the reviewer looks.
+    expect(body).toContain('逐条原文片段见下表')
+    expect(body).toContain('内容')
+  })
+
+  it('shows the spec note when the bundle carried one', async () => {
+    const { text } = await mountAtReviewStep([condition()])
+    expect(text()).toContain('规格书备注')
     expect(text()).toContain('启动过程中允许跌落')
   })
 
-  it('says so plainly when a requirement has no clause text', async () => {
+  it('tells the reviewer to consult the spec when no description came through', async () => {
     const { text } = await mountAtReviewStep([
       condition({ requirement_description: null, requirement_notes: null }),
     ])
     // Silently rendering an empty box reads as "nothing to check", which is
-    // exactly the state where a signature is meaningless.
-    expect(text()).toContain('该需求没有原文描述')
+    // exactly the state where a signature means nothing.
+    expect(text()).toContain('抽取结果未携带需求描述')
   })
 })
 
