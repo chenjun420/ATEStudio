@@ -104,8 +104,12 @@ def upgrade() -> None:
     op.create_index(
         "ix_stations_plant_code", "stations", ["plant_id", "code"], unique=True
     )
+    # Argument order is (name, source_table, referent_table) — the constraint
+    # lives on the table named second. Reversing them yields
+    # UndefinedColumnError naming the *referenced* column, which reads like a
+    # missing column rather than a reversed call.
     op.create_foreign_key(
-        "fk_stations_plant_id", "plants", "stations", ["plant_id"], ["id"], ondelete="CASCADE"
+        "fk_stations_plant_id", "stations", "plants", ["plant_id"], ["id"], ondelete="CASCADE"
     )
 
     op.create_table(
@@ -149,8 +153,8 @@ def upgrade() -> None:
     )
     op.create_foreign_key(
         "fk_fault_cases_station_id",
-        "stations",
         "station_fault_cases",
+        "stations",
         ["station_id"],
         ["id"],
         ondelete="CASCADE",
@@ -159,8 +163,8 @@ def upgrade() -> None:
     # outlives it must not be deleted with it.
     op.create_foreign_key(
         "fk_fault_cases_source_diagnosis_id",
-        "diagnoses",
         "station_fault_cases",
+        "diagnoses",
         ["source_diagnosis_id"],
         ["id"],
         ondelete="SET NULL",
