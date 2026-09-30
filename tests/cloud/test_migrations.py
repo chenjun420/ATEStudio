@@ -122,25 +122,53 @@ def _alembic(url: str, *args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+#: Hard interlock on the reuse path. This fixture wipes the target database's
+#: public schema, so pointing it at a real database is a data-loss bug — not a
+#: misconfiguration. A name prefix makes that impossible rather than merely
+#: discouraged.
+SCRATCH_PREFIX = "mig_test_"
+
+
 @pytest.fixture
 def migrated_db() -> str:
-    """A scratch database migrated to head, dropped afterwards.
+    """A scratch database migrated to head, dropped or restored afterwards.
 
     Scratch rather than the real one: ``downgrade`` runs against it, and a
     migration whose downgrade is broken should be discovered here rather than
     during a rollback on a board holding production data.
+
+    Two ways to supply it, because real deployments differ:
+
+    * ``TEST_POSTGRES_URL`` — the fixture creates and drops its own database.
+      Needs a role with ``CREATEDB``.
+    * ``TEST_POSTGRES_SCRATCH_URL`` — a pre-provisioned, throwaway database the
+      fixture wipes instead. For environments where no role has ``CREATEDB``
+      (the board's ``atestudio`` role does not) but an operator can hand over
+      a scratch database. The name must start with :data:`SCRATCH_PREFIX`.
     """
-    base = _admin_url()
-    if not base:
-        pytest.skip(NO_POSTGRES)
-    name = f"mig_test_{uuid.uuid4().hex[:12]}"
+    reuse = os.environ.get("TEST_POSTGRES_SCRATCH_URL")
+    if reuse:
+        dbname = reuse.split("/")[-1].split("?")[0]
+        assert dbname.startswith(SCRATCH_PREFIX), (
+            f"拒绝使用 {dbname!r}: 本测试会清空目标库的 public schema, "
+            f"库名必须以 {SCRATCH_PREFIX!r} 开头。"
+        )
+        _run_sql(reuse, "DROP SCHEMA IF EXISTS public CASCADE")
+        _run_sql(reuse, "CREATE SCHEMA public")
+        url = reuse
+        owned = False
+    else:
+        base = _admin_url()
+        if not base:
+            pytest.skip(NO_POSTGRES)
+        name = f"{SCRATCH_PREFIX}{uuid.uuid4().hex[:12]}"
+        try:
+            _run_sql(base, f'CREATE DATABASE "{name}"')
+        except Exception as exc:  # noqa: BLE001 — unreachable host must skip, not fail
+            pytest.skip(f"无法连接 Postgres 以建临时库({type(exc).__name__})")
+        url = _dsn_to_admin(base, name)
+        owned = True
 
-    try:
-        _run_sql(base, f'CREATE DATABASE "{name}"')
-    except Exception as exc:  # noqa: BLE001 — unreachable host must skip, not fail
-        pytest.skip(f"无法连接 Postgres 以建临时库({type(exc).__name__})")
-
-    url = _dsn_to_admin(base, name)
     try:
         result = _alembic(url, "upgrade", "head")
         if result.returncode != 0:
@@ -151,7 +179,11 @@ def migrated_db() -> str:
         yield url
     finally:
         try:
-            _run_sql(base, f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
+            if owned:
+                _run_sql(base, f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
+            else:
+                _run_sql(url, "DROP SCHEMA IF EXISTS public CASCADE")
+                _run_sql(url, "CREATE SCHEMA public")
         except Exception:  # noqa: BLE001,S110 — cleanup must not mask a real failure
             pass
 
@@ -347,7 +379,6 @@ class TestEveryVersionIsOnOneChain:
             pytest.skip("还没有迁移")
 
         import re
-
         revisions: dict[str, str | None] = {}
         for f in files:
             text = f.read_text(encoding="utf-8")
