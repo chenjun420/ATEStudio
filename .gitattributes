@@ -1,0 +1,25 @@
+# Shell scripts are executed by bash, on the Linux host and (for the deploy
+# path) on Windows under Git Bash. CRLF breaks them: bash reads the \r as part
+# of the shebang and of every argument, so `bash script.sh` fails outright and
+# `bash -n` is the only way to notice before the failure reaches a deploy.
+#
+# `core.autocrlf=true` is set in this repository, which means a fresh Windows
+# checkout rewrites every tracked text file to CRLF. Pinning eol=lf here is
+# what keeps the scripts runnable after any clone.
+#
+# This is a pre-existing hazard, not a new one: it was live before the
+# knowledge-graph removal, and it is invisible until someone clones fresh and
+# then runs a deploy script.
+*.sh text eol=lf
+
+# Same reasoning for files bash reads as data: compose files, env templates and
+# systemd units are all consumed by tooling on Linux, never edited as Windows
+# text, and a stray CR in a KEY=value line becomes part of the value.
+*.yml text eol=lf
+*.yaml text eol=lf
+*.service text eol=lf
+*.example text eol=lf
+
+# Deliberately NOT set globally (`* text=auto`): that would renormalise every
+# tracked file in the repository and bury this change under an unrelated diff.
+# Apply it deliberately, per file type, when a type actually needs it.
