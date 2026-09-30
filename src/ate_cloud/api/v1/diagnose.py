@@ -67,20 +67,48 @@ def _get_graph_service(request: Request) -> GraphService:
 
 
 def _get_embedding_service(request: Request) -> EmbeddingService:
-    """Lazily create/cache EmbeddingService on app.state (503 on failure)."""
+    """Lazily create/cache EmbeddingService on app.state (503 on failure).
+
+    The not-configured case is separated from the broken case, and it names the
+    variable to set. Both distinctions matter:
+
+    * A missing deployment credential is not the same failure as a service that
+      is configured but cannot start. Collapsing them into one message meant an
+      operator saw the OpenAI SDK's own "Missing credentials" text and had no
+      idea it was a deployment step, not a code fault.
+    * The SDK's message leaks library internals and names nothing actionable.
+      Whoever reads it still cannot tell what to do.
+
+    Deliberately still a 503: the service genuinely cannot serve this
+    capability, and the code says so honestly. What changed is that the reason
+    is stated instead of implied.
+    """
     service: EmbeddingService | None = getattr(request.app.state, "embedding_service", None)
     if service is not None:
         return service
+
+    if not settings.openai_api_key:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "故障诊断未启用: 缺少 OPENAI_API_KEY。症状/故障向量的语义检索依赖它, "
+                "未配置时本能力不可用(检索退化, 不影响产测执行与其他功能)。"
+            ),
+        )
+
     try:
         service = EmbeddingService(
             api_key=settings.openai_api_key,
             model=settings.openai_embedding_model,
             dimensions=settings.embedding_dimensions,
         )
-    except (ValueError, Exception) as e:
+    except Exception as e:  # noqa: BLE001 — construction can fail many ways
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Embedding service unavailable: {e}",
+            detail=(
+                f"嵌入服务初始化失败: {type(e).__name__}: {e}。"
+                "请检查 OPENAI_API_KEY / OPENAI_BASE_URL / OPENAI_EMBEDDING_MODEL 是否可达。"
+            ),
         ) from e
     request.app.state.embedding_service = service
     return service
@@ -199,6 +227,62 @@ class FeedbackResponse(BaseModel):
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────────
+
+
+@router.get("/readiness")
+async def diagnose_readiness(request: Request) -> dict[str, Any]:
+    """GET /api/v1/diagnose/readiness — what this capability can actually do.
+
+    Added because four capabilities in this project were built, wired, and
+    deployed, and had never once run: the SPA was never served, the
+    ``aterag:import`` scope was granted to nobody, the diagnosis path had no
+    credentials, and the knowledge-graph backend was never provisioned. Every
+    one of them passed every check that existed, because every check was an API
+    probe rather than a walk through the flow.
+
+    So the rule this endpoint exists to enforce: **a capability is not available
+    until it has been observed to work end to end.** A menu entry, a registered
+    route and a build stamp are not evidence. This reports what is configured
+    right now, which is the input to that judgement — the walk itself lives in
+    ``scripts/verify_flow_http.py``.
+
+    Deliberately unauthenticated-free of side effects and cheap: it touches no
+    network service beyond reading ``app.state``, so the UI can call it on every
+    page load and grey out what is not live.
+    """
+    state = request.app.state
+    embedding = getattr(state, "embedding_service", None) is not None
+    qdrant = getattr(state, "qdrant_client", None) is not None
+
+    # Retrieval is the part that must work for a suggestion to exist at all.
+    # Without embeddings the fault vectors carry no meaning, so retrieval
+    # silently returns nothing useful — which reads as "no similar past faults"
+    # rather than as "this feature is off".
+    retrieval = embedding and qdrant
+    llm = bool(settings.openai_api_key)
+
+    blockers: list[str] = []
+    if not embedding:
+        blockers.append("缺少 OPENAI_API_KEY —— 症状/故障向量无法嵌入, 检索退化")
+    if not qdrant:
+        blockers.append("Qdrant 不可用 —— 故障向量库无法读取")
+
+    return {
+        # `available` is deliberately narrower than "the route exists".
+        "available": retrieval,
+        "capabilities": {
+            "retrieval": retrieval,
+            # A suggestion needs retrieval; an LLM only writes it up.
+            "suggestion": retrieval,
+            "llm_writeup": retrieval and llm,
+        },
+        "blockers": blockers,
+        "detail": (
+            "诊断建议可用 (无 LLM 时仅返回检索结果)"
+            if retrieval and not llm
+            else ("诊断建议与 LLM 归纳均可用" if retrieval else "故障诊断未启用")
+        ),
+    }
 
 
 @router.post("", response_model=DiagnoseResponse, status_code=status.HTTP_200_OK)

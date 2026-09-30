@@ -21,13 +21,15 @@
 | F1 | 前端构建产物从未被服务,`/` 长期 404,而进程 active、健康端点 200、stamp 写 `frontend_built: true` | 板卡 curl + 日志 |
 | F2 | `require_scopes("aterag:import")` 守着导入与规划,而**无任何角色持有该 scope**,admin 亦 403 | 板卡以 admin token 实测两个端点 |
 | F3 | 规划直接用传入 bundle,而 ATERag 永远导出 `draft` 且无任何东西重写该文件 ⇒ 签字对产测序列无影响(`pending 82→82`、`步 530→530`) | 板卡 A/B 实测 |
-| F4 | `POST /api/v1/diagnose` 返回 503 `Missing credentials`,而 `.env` 中 `OPENAI_API_KEY` **已配置**且 `validation_alias` 键名精确匹配 ⇒ 接线 bug,非配置问题 | 板卡 curl + 读 config |
+| F4 | `POST /api/v1/diagnose` 返回 503 `Missing credentials`。`.env` 中 `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL` **三个键存在但值长度为 0** ⇒ **不是接线 bug,是凭据从未填过**;`main.py` 的 `if settings.openai_api_key:` 判断正确,已正常走降级分支 | 板卡 awk 量值长度 + 进程内读 settings |
 | F5 | `GET /api/v1/knowledge/graph` 返回 503 `Connection refused`;FalkorDB 单元 inactive、6379 无监听、`.env` 无 `FALKORDB_URL` ⇒ 依赖齐备但从未部署 | 板卡 systemctl/ss/psql |
 | F6 | `fmeas` 表 **0 行**;`api/v1` 中**无 `nodes.py`**,节点/工位无 CRUD;`GET /dashboard/stations` 返回的是 NATS worker 心跳,非工位台账 | 板卡 psql + 路由清点 |
 | F7 | `hybrid_fusion.py` 是**纯后端无关**的 RRF(`Σ 1/(k+rank)`),合并两份排序列表 ⇒ 图腿移除后退化为单路向量排序,功能正常 | 读源码 |
 | F8 | ATERag MCP 17 个工具,**无导出 bundle 的工具**(`export_studio.py` 仅为脚本);`list_models` 已返回 `{products:{型号:domain}}` | 装饰器全量清点 |
 | F9 | `FAULTORDB` 是硬依赖(`falkordb>=1.7.1`、`semantica[graph-falkordb,shacl]>=0.6.7`);被移除的是 Neo4j 而非 FalkorDB | `pyproject.toml` 注释原文 |
 | F10 | 菜单按 `app_menus.required_permissions` 过滤,权限词汇是 `system:read`/`node:read` 等命名空间,而 `ROLE_SCOPES` 只发扁平 `admin/read/write/execute` ⇒ 交集为空,登录后主界面全空 | 板卡 API 实测 |
+| F11 | **凭据在板上已存在,只是变量名体系不同**:ATERag `.env` 有 `LLM_API_KEY`(35 字符)、`LLM_BASE`(76)、`LLM_MODEL`(24)、`EMBED_API_KEY`(35)、`EMBED_MODEL`(22);ATEStudio 的三个 `OPENAI_*` 全为空值 | 板卡 awk 量值长度(不回显值) |
+| F12 | ATEStudio 故障索引器因无 key 而**以零向量写入**(「failure indexer runs without embeddings」),故向量库里目前没有可用的真实向量;且诊断已有 `build_retrieval_only_result` 的**无 LLM 路径** | 读 `main.py` 与 `diagnosis_service` |
 
 ## 3. 通则:能力声称可用前必须有端到端实测
 
@@ -185,7 +187,7 @@ D6 原文:「Agent 只读 MCP;写回走管理面」。新路径不违反:
 
 | 期 | 内容 | 依赖 |
 |---|---|---|
-| **P0** | 修 `/diagnose` 接线 bug(F4)+ 建工位故障案例库 | 无 |
+| **P0** | 诊断链路落地:①把「未配置」从 503 改成显式可读状态 ②配齐 ATEStudio 的 embedding 凭据(变量名与 ATERag 不同,需确认)③用**无 LLM 的 retrieval-only 路径**先让诊断建议可用 ④建工位故障案例库(关系表) | 无 |
 | **P1** | 移除知识图谱与 FalkorDB(含 §6.4 闸门) | P0 |
 | **P2** | 菜单重组 + 术语改名 + 上下文选择器 + 厂区/工位建模与迁移 | P1 |
 | **P3** | ATERag 导出工具 + spool 约定 | P2(可并行) |
@@ -195,6 +197,16 @@ D6 原文:「Agent 只读 MCP;写回走管理面」。新路径不违反:
 | **P7** | e2e 扩展 + 操作手册更新 | P4–P6 |
 
 P0/P1 提前的理由:`/diagnose` 是故障智能的地基,而移除图谱会让它第一次真正可用 —— **先让它能跑,再拆掉拖垮它的部分**。
+
+### 10.1 P0 的两处修正
+
+原 P0 写的是「修 `/diagnose` 接线 bug」。**这个前提是错的**(F4),已更正为凭据未填。
+
+同时补充一条与嵌入模型有关的约束:
+
+> **索引期与查询期的嵌入模型必须一致。** 故障索引器此前以**零向量**写入,故向量库目前没有可用向量;启用真实嵌入后需**重建索引**,否则旧记录与新查询的向量空间不匹配,检索会静默退化 —— 不报错,只是找不到。
+
+因此 P0 的第一步不需要任何密钥:先把「未配置」显式化,并用已有的 retrieval-only 路径跑通。凭据配置与索引重建可并行推进。
 
 ## 11. 明确不做
 
