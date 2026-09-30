@@ -66,6 +66,32 @@ def _dsn_to_admin(base: str, dbname: str) -> str:
     return f"{head}/{dbname}{query}"
 
 
+def _for_asyncpg(url: str) -> str:
+    """Strip the SQLAlchemy driver suffix for a direct asyncpg connect.
+
+    ``asyncpg.connect`` parses the DSN itself and does not understand
+    ``postgresql+asyncpg://``.
+    """
+    scheme, sep, rest = url.partition("://")
+    if sep and "+" in scheme:
+        scheme = scheme.split("+", 1)[0]
+    return f"{scheme}://{rest}" if sep else url
+
+
+def _for_alembic(url: str) -> str:
+    """Pin the asyncpg driver, because ``alembic/env.py`` builds an async engine.
+
+    Given a bare ``postgresql://`` URL, Alembic reaches for psycopg2 — which
+    this project does not depend on — and fails with a ModuleNotFoundError that
+    reads like a missing dependency rather than a driver mismatch.
+    """
+    scheme, sep, rest = url.partition("://")
+    if not sep:
+        return url
+    scheme = scheme.split("+", 1)[0]
+    return f"{scheme}+asyncpg://{rest}"
+
+
 def _run_sql(url: str, sql: str) -> None:
     """Execute one statement via asyncpg, synchronously from the test's view."""
     import asyncio
@@ -73,7 +99,7 @@ def _run_sql(url: str, sql: str) -> None:
     async def go() -> None:
         import asyncpg
 
-        conn = await asyncpg.connect(_dsn_to_admin(url, url.split("/")[-1].split("?")[0]))
+        conn = await asyncpg.connect(_for_asyncpg(url))
         try:
             await conn.execute(sql)
         finally:
@@ -88,7 +114,7 @@ def _query(url: str, sql: str) -> list[tuple]:
     async def go() -> list[tuple]:
         import asyncpg
 
-        conn = await asyncpg.connect(_dsn_to_admin(url, url.split("/")[-1].split("?")[0]))
+        conn = await asyncpg.connect(_for_asyncpg(url))
         try:
             return await conn.fetch(sql)
         finally:
@@ -111,7 +137,7 @@ def _alembic(url: str, *args: str) -> subprocess.CompletedProcess[str]:
     """
     env = dict(os.environ)
     env["PYTHONPATH"] = str(REPO_ROOT / "src")
-    env["ATE_CLOUD_DATABASE_URL"] = url
+    env["ATE_CLOUD_DATABASE_URL"] = _for_alembic(url)
     return subprocess.run(
         [sys.executable, "-m", "alembic", *args],
         cwd=REPO_ROOT,
