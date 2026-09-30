@@ -28,6 +28,7 @@ from typing import Any, cast
 
 from ate_cloud.config import settings
 from ate_cloud.nats.sse_bridge import SSEBridge
+from ate_cloud.services.qdrant_query import qdrant_points, query_points
 from shared.events import Event, EventType
 
 logger = logging.getLogger(__name__)
@@ -374,11 +375,14 @@ class FailureIndexer:
         """
         try:
             vector = await self._embed(query)
-            results = self._qdrant_client.search(
-                collection_name=self._collection_name,
-                query_vector=vector,
-                limit=top_k,
-                with_payload=True,
+            results = qdrant_points(
+                query_points(
+                    self._qdrant_client,
+                    collection_name=self._collection_name,
+                    query=vector,
+                    limit=top_k,
+                    with_payload=True,
+                )
             )
             return [
                 {

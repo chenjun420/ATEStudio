@@ -286,7 +286,7 @@ class TestSearchSimilarFailures:
         self, indexer: FailureIndexer, mock_qdrant: MagicMock
     ) -> None:
         """search_similar_failures returns empty list on Qdrant error."""
-        mock_qdrant.search.side_effect = ConnectionError("no qdrant")
+        mock_qdrant.query_points.side_effect = ConnectionError("no qdrant")
         results = await indexer.search_similar_failures("VISA timeout")
         assert results == []
 
@@ -298,8 +298,8 @@ class TestSearchSimilarFailures:
         mock_embedding.return_value = [0.1, 0.2, 0.3]
         from qdrant_client.http.models import ScoredPoint
 
-        mock_qdrant.search.return_value = [
-            ScoredPoint(
+        mock_qdrant.query_points.return_value = type(
+            "R", (), {"points": [ScoredPoint(
                 id="pt-1",
                 version=1,
                 score=0.95,
@@ -321,7 +321,8 @@ class TestSearchSimilarFailures:
                     "run_id": "run-005",
                 },
             ),
-        ]
+        ]},
+        )()
 
         results = await indexer.search_similar_failures("VISA timeout", top_k=2)
 
@@ -338,14 +339,14 @@ class TestSearchSimilarFailures:
     ) -> None:
         """Query text is embedded before calling Qdrant search."""
         mock_embedding.return_value = [0.5, 0.6, 0.7]
-        mock_qdrant.search.return_value = []
+        mock_qdrant.query_points.return_value = type("R", (), {"points": []})()
 
         await indexer.search_similar_failures("VISA timeout on DMM_CH1")
 
         mock_embedding.assert_called_once_with("VISA timeout on DMM_CH1")
-        mock_qdrant.search.assert_called_once()
-        search_kwargs = mock_qdrant.search.call_args[1]
-        assert search_kwargs["query_vector"] == [0.5, 0.6, 0.7]
+        mock_qdrant.query_points.assert_called_once()
+        search_kwargs = mock_qdrant.query_points.call_args[1]
+        assert search_kwargs["query"] == [0.5, 0.6, 0.7]
         assert search_kwargs["limit"] == 5  # default top_k
 
 

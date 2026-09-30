@@ -477,7 +477,7 @@ class TestFailureIndexerIntegration:
         from ate_cloud.services.failure_indexer import FailureIndexer
 
         mock_qdrant = MagicMock()
-        mock_qdrant.search.return_value = []
+        mock_qdrant.query_points.return_value = type("R", (), {"points": []})()
         mock_openai_embeddings.aembed_query.return_value = [0.5] * 1536
 
         service = EmbeddingService(api_key="test", model="text-embedding-3-small", dimensions=1536)
@@ -490,6 +490,7 @@ class TestFailureIndexerIntegration:
         results = await indexer.search_similar_failures("VISA timeout")
         assert results == []
         mock_openai_embeddings.aembed_query.assert_called_once_with("VISA timeout")
-        # Qdrant search must receive the real vector
-        search_kwargs = mock_qdrant.search.call_args[1]
-        assert search_kwargs["query_vector"] == [0.5] * 1536
+        # Qdrant search must receive the real vector. Note the keyword: the
+        # installed client (>=1.12) calls it ``query``, not ``query_vector``.
+        search_kwargs = mock_qdrant.query_points.call_args[1]
+        assert search_kwargs["query"] == [0.5] * 1536

@@ -43,6 +43,7 @@ from ate_cloud.services.graph_service import GraphService
 from ate_cloud.services.hybrid_fusion import reciprocal_rank_fusion
 from ate_cloud.services.hybrid_fusion import rerank as rerank_fuse
 from ate_cloud.services.kg_retrieval import extract_keyword, fault_entity_id, retrieve_faults
+from ate_cloud.services.qdrant_query import qdrant_points, query_points
 from ate_cloud.services.query_rewrite import QueryRewriter
 from ate_platform.common.circuit_breaker import CircuitBreaker, CircuitBreakerOpenError
 
@@ -181,11 +182,14 @@ class HybridRetriever:
             CircuitBreakerOpenError: If the Qdrant circuit is OPEN.
         """
         async def _do_search() -> list[dict[str, Any]]:
-            hits = self._qdrant_client.search(
-                collection_name=self._collection_name,
-                query_vector=query_vector,
-                limit=top_k,
-                with_payload=True,
+            hits = qdrant_points(
+                query_points(
+                    self._qdrant_client,
+                    collection_name=self._collection_name,
+                    query=query_vector,
+                    limit=top_k,
+                    with_payload=True,
+                )
             )
             return [self._vector_hit_to_result(h) for h in hits]
 
