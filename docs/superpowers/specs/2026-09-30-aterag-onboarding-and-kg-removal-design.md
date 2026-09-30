@@ -30,14 +30,27 @@
 | F10 | 菜单按 `app_menus.required_permissions` 过滤,权限词汇是 `system:read`/`node:read` 等命名空间,而 `ROLE_SCOPES` 只发扁平 `admin/read/write/execute` ⇒ 交集为空,登录后主界面全空 | 板卡 API 实测 |
 | F11 | **凭据在板上已存在,只是变量名体系不同**:ATERag `.env` 有 `LLM_API_KEY`(35 字符)、`LLM_BASE`(76)、`LLM_MODEL`(24)、`EMBED_API_KEY`(35)、`EMBED_MODEL`(22);ATEStudio 的三个 `OPENAI_*` 全为空值 | 板卡 awk 量值长度(不回显值) |
 | F12 | ATEStudio 故障索引器因无 key 而**以零向量写入**(「failure indexer runs without embeddings」),故向量库里目前没有可用的真实向量;且诊断已有 `build_retrieval_only_result` 的**无 LLM 路径** | 读 `main.py` 与 `diagnosis_service` |
+| F13 | **`qdrant-client>=1.12.0` 移除了 `QdrantClient.search()`**(改为 `query_points()`)。两处调用点(`hybrid_retriever`、`failure_indexer`)调的都是被移除的方法,异常被 `except Exception` 降级为 `logger.warning` 后 `return []` ⇒ **向量检索腿从未通过**。`/diagnose` 仍返回 200 与看似专业的根因,证据栏写 "No historical cases retrieved (top 0)",而同一向量手工调 Qdrant 有 0.71 的命中 | 板上 `/opt/atestudio/logs/api.log` 读到 `'QdrantClient' object has no attribute 'search'`;同向量手工 REST 查询 score=0.7078 |
+| F14 | 服务 stdout/stderr 指向 **`/opt/atestudio/logs/api.log`**,不在 journald ⇒ `journalctl -u ate-cloud` 几乎无输出。排查此类问题必须看该文件 | 读 `/proc/<pid>/fd/1` 与 journald 对比 |
+| F15 | 部署的嵌入模型是 `qwen3.7-text-embedding`,**实测 1024 维**(代码默认 1536 是 OpenAI `text-embedding-3-small` 的尺寸);其可用凭据在 **ATERag 的 `.env`**,变量名为 `LLM_*` / `EMBED_*`,与 ATEStudio 的 `OPENAI_*` 体系不同;且 `OPENAI_EMBEDDING_MODEL` 这个键**在板上 `.env` 里根本不存在** | 板上真实调用 embeddings 端点量维度;awk 量各键值长度 |
+| F16 | 向量载荷若**只带 id 不带正文**,下游归纳环节会自行补内容: 首次端到端运行时,第二条证据引用把「工装夹具接触不良」描述成「电容 ESR 衰减与稳压器修调偏移」—— 流畅、自信、错误,正是 §9 点名的「部件错误」类 | 板上端到端诊断返回的 `evidence_citations` 与案例正文对照 |
+| F17 | LangChain `OpenAIEmbeddings` 默认本地分词并**发送 token id**,该 tokenizer 属 OpenAI;对 Qwen 模型切分本就错误,且 DashScope 兼容端点直接拒收(`input must be an array of strings`) | 板上对照实验: 默认参数失败, `check_embedding_ctx_length=False` 成功 |
 
 ## 3. 通则:能力声称可用前必须有端到端实测
 
-本项目已出现**四个「建好但从未启用」的能力**:F1 前端未挂载、F2 scope 无人授予、F4 诊断接线断、F5 图谱依赖未部署。四者都通过了当时全部既有检查。
+本项目已出现**六个「建好但从未启用」的能力**:F1 前端未挂载、F2 scope 无人授予、F4 诊断无凭据、F5 图谱依赖未部署、**F13 向量检索调用了已移除的客户端方法**、**F16 检索只带 id 导致引用靠编**。六者都通过了当时全部既有检查。
 
-因此立此通则:
+F13 与 F16 是本通则成立的最强证据: 它们**没有报错、没有 404、没有 403**。`/diagnose` 返回 200、给出置信度 0.75 的根因与三条修复步骤, 看上去完全正常 —— 唯一的症状是「检索结果恒为空」, 而恒为空看起来正好像「本来就没有相似历史」。若不是把案例真的录进去、再用同一个向量手工查一次 Qdrant, 这条腿可以再「正常」运行很久。
+
+因此立此通则,并补三条具体化的推论:
 
 > 任何能力在被声称可用之前,必须有**从入口到结果的端到端实测**。仅有单元测试、仅有构建成功、仅有 stamp 记录,均不构成可用证据。无法实测的能力按「暗着」处理。
+
+推论一(响应正常不等于能力可用):必须检验**返回内容的实质**, 而非状态码。一个恒空的检索结果 + 一段自信的生成, 危害大于一次显式失败。
+
+推论二(依赖 API 改名要主动防):测试应断言「代码调用的每个第三方客户端方法, 装的这个版本确实存在」。这类断裂没有异常可循, 只在运行到那一行时才出现, 而那一行通常被 ``except`` 兜着。已落地为 `tests/cloud/test_qdrant_client_compat.py`(AST 扫描 + 断言)。
+
+推论三(降级要留痕且要能被问):`except Exception: return []` 这种「优雅降级」会把断裂伪装成正常。降级可以接受, 但降级状态必须能被查询到并呈现给用户 —— 这就是 §6 里 readiness 端点的由来。
 
 该通则由 `scripts/verify_flow_http.py` 承载(本会话已新增,39 项),后续每期必须扩展它而非另建脚本。
 
