@@ -47,9 +47,28 @@ def app(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
     return application
 
 
-def _set_state(app: FastAPI, *, embedding: bool, qdrant: bool) -> None:
+class _FakeQdrant:
+    """Reports a point count, the way the real ``QdrantClient`` does."""
+
+    def __init__(self, points: int | None = 0) -> None:
+        self._points = points
+        self.collection = settings_qdrant_collection()
+
+    def get_collection(self, name: str) -> object:
+        if self._points is None:
+            raise RuntimeError("collection not found")
+        return type("Info", (), {"points_count": self._points})()
+
+
+def settings_qdrant_collection() -> str:
+    from ate_cloud.config import settings
+
+    return settings.qdrant_collection_failures
+
+
+def _set_state(app: FastAPI, *, embedding: bool, qdrant: bool, points: int | None = 0) -> None:
     app.state.embedding_service = object() if embedding else None
-    app.state.qdrant_client = object() if qdrant else None
+    app.state.qdrant_client = _FakeQdrant(points) if qdrant else None
 
 
 def _readiness(app: FastAPI) -> dict:
@@ -107,7 +126,9 @@ class TestTheFirstDeliveryTargetIsNotAFault:
 
     def test_retrieval_without_llm_is_still_a_suggestion(self, app: FastAPI, monkeypatch) -> None:
         monkeypatch.setattr(diagnose_module.settings, "openai_api_key", "", raising=False)
-        _set_state(app, embedding=True, qdrant=True)
+        # A populated index, so this exercises the LLM axis and not the
+        # history axis — the two are reported independently.
+        _set_state(app, embedding=True, qdrant=True, points=12)
         r = _readiness(app)
 
         assert r["available"] is True
@@ -140,6 +161,62 @@ class TestEndpointIsCheapAndSideEffectFree:
         monkeypatch.setattr(diagnose_module, "EmbeddingService", explode)
         _set_state(app, embedding=True, qdrant=True)
         assert TestClient(app).get("/diagnose/readiness").status_code == 200
+
+
+class TestConfiguredIsNotTheSameAsUseful:
+    """An empty index answers every query with "no similar past faults".
+
+    That answer is indistinguishable from a line that has genuinely never
+    failed, so an operator concludes either that the tool is broken or that
+    nothing is wrong. Reporting such a line as fully available is the same
+    mistake as the four capabilities that were built, deployed, and never run —
+    the UI asserting something the data does not support.
+    """
+
+    def test_an_empty_index_is_reported_as_empty(self, app: FastAPI, monkeypatch) -> None:
+        monkeypatch.setattr(diagnose_module.settings, "openai_api_key", "sk-test", raising=False)
+        _set_state(app, embedding=True, qdrant=True, points=0)
+        r = _readiness(app)
+
+        assert r["available"] is True, "机制可用是事实, 空库不是故障"
+        assert r["indexed_cases"] == 0
+        assert r["has_history"] is False
+        assert "为空" in r["detail"]
+
+    def test_a_populated_index_says_how_much(self, app: FastAPI, monkeypatch) -> None:
+        monkeypatch.setattr(diagnose_module.settings, "openai_api_key", "sk-test", raising=False)
+        _set_state(app, embedding=True, qdrant=True, points=37)
+        r = _readiness(app)
+
+        assert r["has_history"] is True
+        assert r["indexed_cases"] == 37
+        assert "37" in r["detail"]
+
+    def test_an_empty_index_is_not_a_blocker(self, app: FastAPI) -> None:
+        """Nothing is broken, so nothing is listed as blocking.
+
+        Reporting it as a blocker would push the design towards treating a model
+        key as a prerequisite, and would train operators to ignore the list.
+        """
+        _set_state(app, embedding=True, qdrant=True, points=0)
+        r = _readiness(app)
+
+        assert r["available"] is True
+        assert r["blockers"] == []
+
+    def test_an_unreadable_count_is_none_not_zero(self, app: FastAPI) -> None:
+        """"Count failed" and "there are none" lead to opposite advice.
+
+        Reporting a failed read as 0 would tell an operator their history is
+        gone. Reporting it as None says the question could not be answered.
+        """
+        _set_state(app, embedding=True, qdrant=True, points=None)
+        r = _readiness(app)
+
+        assert r["indexed_cases"] is None
+        assert r["has_history"] is False
+        # And it must not have taken the whole report down with it.
+        assert r["available"] is True
 
 
 class TestReadinessMatchesWhatDiagnoseActuallyDoes:

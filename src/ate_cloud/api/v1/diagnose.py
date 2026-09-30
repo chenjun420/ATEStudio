@@ -11,6 +11,7 @@ each lazily built once and cached on ``app.state`` (mirrors faults.py), so
 requests reuse one shared DiagnosisService.
 """
 
+import logging
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -35,6 +36,8 @@ from ate_cloud.services.falkordb_graph_service import (
 )
 from ate_cloud.services.graph_service import GraphService
 from ate_cloud.services.hybrid_retriever import HybridRetriever
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/diagnose", tags=["diagnosis"])
 
@@ -273,9 +276,22 @@ async def diagnose_readiness(request: Request) -> dict[str, Any]:
     # past faults" — indistinguishable from a line that has never failed.
     blockers.extend(getattr(state, "failure_index_blockers", []) or [])
 
-    available = retrieval and not any(
-        b.startswith("Qdrant collection") for b in blockers
-    )
+    available = retrieval and not any(b.startswith("Qdrant collection") for b in blockers)
+
+    # Configured is not the same as useful. An index holding zero points answers
+    # every query with "no similar past faults" — indistinguishable from a line
+    # that has genuinely never failed, so the operator concludes either that the
+    # tool is broken or that nothing is wrong. The count lets the UI say which.
+    #
+    # Reported as None when it cannot be read rather than as 0, because "the
+    # count failed" and "there are no cases" lead to opposite advice.
+    indexed_cases: int | None = None
+    if qdrant:
+        try:
+            info = state.qdrant_client.get_collection(settings.qdrant_collection_failures)
+            indexed_cases = int(getattr(info, "points_count", 0) or 0)
+        except Exception as exc:  # noqa: BLE001 — a count failure is not a readiness failure
+            logger.debug("readiness: could not read indexed case count: %s", exc)
 
     return {
         # `available` is deliberately narrower than "the route exists".
@@ -287,13 +303,27 @@ async def diagnose_readiness(request: Request) -> dict[str, Any]:
             "llm_writeup": available and llm,
         },
         "blockers": blockers,
+        # Not a blocker: the pipeline is fine, there is simply nothing in it yet.
+        # Reported separately so "no similar past faults" is legible as a fact
+        # about the line rather than as a malfunction.
+        "indexed_cases": indexed_cases,
+        "has_history": bool(indexed_cases),
         "detail": (
-            "诊断建议可用 (无 LLM 时仅返回检索结果)"
-            if available and not llm
+            "故障诊断未启用"
+            if not retrieval
             else (
-                "诊断建议与 LLM 归纳均可用"
-                if available
-                else ("故障诊断未启用" if not retrieval else "故障索引不可用, 诊断无法检索历史")
+                "故障索引不可用, 诊断无法检索历史"
+                if not available
+                else (
+                    f"可用, 但故障案例库为空 ({indexed_cases} 条) —— 诊断只会依据规格"
+                    "与通用失效模式, 不含本线历史"
+                    if not indexed_cases
+                    else (
+                        "诊断建议可用 (无 LLM 时仅返回检索结果)"
+                        if not llm
+                        else f"诊断建议与 LLM 归纳均可用 (已索引 {indexed_cases} 条案例)"
+                    )
+                )
             )
         ),
     }
