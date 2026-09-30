@@ -344,7 +344,25 @@ async def delete_user(
     db: DBSession,
     current_user: User = Security(get_current_user, scopes=["admin"]),
 ) -> None:
-    """Delete a user (admin scope required).
+    """Delete a user. Admin accounts are refused.
+
+    An account holding the ``admin`` role cannot be deleted, whoever asks and
+    however many admins exist.
+
+    Why the whole role and not just the last one
+    --------------------------------------------
+    ``admin`` is the only role that carries ``aterag:import``, so deleting an
+    admin does not merely lose a login — it can remove the only account able to
+    run the review wizard's import, plan and commit steps, with no way back
+    except direct database surgery. ``/me/deactivate`` already refuses to
+    disable the last active admin; leaving deletion unguarded meant the same
+    lockout was one HTTP call away through a different verb.
+
+    The escape hatch is deliberately two steps: ``PUT /users/{id}`` to demote,
+    then delete. Demotion is a visible, deliberate act naming the role change;
+    deletion silently removing the last holder of a capability is not. If that
+    two-step is too easy, the fix is to guard demotion of the last admin too —
+    see the note in the test module for what is and is not covered here.
 
     Args:
         user_id: The unique user identifier.
@@ -352,12 +370,21 @@ async def delete_user(
         current_user: Authenticated admin user.
 
     Raises:
-        HTTPException: 404 if user not found.
+        HTTPException: 404 if user not found; 403 if the target is an admin.
     """
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    if user.role == "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "admin 账号不可删除。请先把它降级 (PUT /users/{id} {\"role\": \"read\"}), "
+                "再删除 —— 降级是显式动作, 而删除不该顺手带走唯一的 aterag:import 持有者。"
+            ),
+        )
 
     await db.delete(user)
     await db.commit()
