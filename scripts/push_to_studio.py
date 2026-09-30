@@ -63,6 +63,7 @@ class PushPlan:
     step_count: int
     segment_count: int
     settle_s: float
+    pending: list[dict[str, str]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
     @property
@@ -72,6 +73,12 @@ class PushPlan:
     def blocking_reasons(self, *, allow_gaps: bool) -> list[str]:
         """Everything standing between this plan and the line."""
         reasons: list[str] = []
+        if self.pending:
+            reasons.append(
+                f"{len(self.pending)} 条条件未经人审(status=draft), 已排除在执行序列之外。"
+                " 按红线未批准的条件不得作为产测判据 —— 需先在评审中签字, "
+                "再重新规划纳入。"
+            )
         if self.gaps and not allow_gaps:
             reasons.append(
                 f"{len(self.gaps)} 个测量步骤无数值判据 (exec 协议下会静默报通过)。"
@@ -99,6 +106,7 @@ def build(bundle_path: Path) -> PushPlan:
         step_count=plan.step_count,
         segment_count=len(plan.segments),
         settle_s=plan.total_settle_s,
+        pending=list(plan.pending),
         warnings=list(plan.warnings),
     )
 
@@ -112,7 +120,18 @@ def report(pp: PushPlan, *, allow_gaps: bool, apply: bool) -> bool:
     print(f"逐台稳定等待: {pp.settle_s:.1f}s ({pp.settle_s / 60:.1f} 分钟)")
     print(f"脚本        : {len(pp.scripts)} 个, 其中 {len(pp.unwired)} 个未接线")
     print(f"无判据测量  : {len(pp.gaps)} 个")
+    print(f"未批准条件  : {len(pp.pending)} 条 (status=draft, 已排除出执行序列)")
     print()
+
+    if pp.pending:
+        print("=== 未批准条件 (红线: 不得作为产测判据) ===")
+        by_kind: dict[str, int] = {}
+        for c in pp.pending:
+            by_kind[c["kind"]] = by_kind.get(c["kind"], 0) + 1
+        for k, n in sorted(by_kind.items(), key=lambda kv: -kv[1]):
+            print(f"  {k:22} {n:3} 条")
+        print("  -> 评审签字后重新规划即可纳入")
+        print()
 
     if pp.gaps:
         print("=== 无判据的测量步骤 (exec 协议下会报通过) ===")

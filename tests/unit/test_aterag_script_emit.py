@@ -201,20 +201,35 @@ class TestPlanGaps:
         assert plan_gaps(_plan(_step("read_telemetry", {}))) == []
 
     def test_real_bundle_gaps_are_reported(self) -> None:
-        """Known real gaps: 3 measurements reach the plan with no bounds.
+        """No unjudgeable measurement survives into the real plan.
 
-        Asserted rather than hard-coded to zero — this number is the honest
-        state of the spec, and it should change when the spec or the extractor
-        is fixed, not when someone edits a test.
+        Two things had to be true to get here. ATERag's ``output_ripple_bw``
+        and ``output_bus_voltage_drop`` rules were re-classified: both
+        describe *how to measure*, not *what to judge*, and planning them as
+        measurements produced steps with no bounds. And the remaining
+        unjudgeable one, SR-1103, was a ``draft`` industry-method proposal, so
+        it is now held out of the sequence entirely.
+
+        Zero is the assertion because both fixes are permanent; if a new
+        unjudgeable measurement appears, the gate has to fire again.
         """
         p = Path(r"F:\Workspace\ATERag\rag_storage\exports\studio_bundle.json")
         if not p.exists():
             pytest.skip("需要 ATERag 导出的真实 bundle")
         bundle = BundleModel.model_validate_json(p.read_text(encoding="utf-8"))
         plan = plan_flow(bundle, load_bindings())
-        gaps = plan_gaps(plan)
-        assert len(gaps) == 3
-        assert {g.condition_kind for g in gaps} == {"output_voltage", "ripple"}
+        assert plan_gaps(plan) == []
+
+    def test_draft_only_plan_still_has_a_gap(self) -> None:
+        """With drafts included the old problem reappears — which is why the
+        default excludes them. Guards against someone 'fixing' the gap by
+        loosening the red line."""
+        p = Path(r"F:\Workspace\ATERag\rag_storage\exports\studio_bundle.json")
+        if not p.exists():
+            pytest.skip("需要 ATERag 导出的真实 bundle")
+        bundle = BundleModel.model_validate_json(p.read_text(encoding="utf-8"))
+        plan = plan_flow(bundle, load_bindings(), include_draft=True)
+        assert plan_gaps(plan), "包含 draft 后应当重新出现无判据测量"
 
 
 # ── draft safety ────────────────────────────────────────────────────────────
@@ -256,8 +271,12 @@ class TestRealPlan:
             pytest.skip("需要 ATERag 导出的真实 bundle")
         bundle = BundleModel.model_validate_json(p.read_text(encoding="utf-8"))
         plan = plan_flow(bundle, load_bindings())
-        assert plan.step_count > 600
-        assert len(generate_all(plan)) < 200
+        assert plan.step_count > 400
+        # Expressed as a ratio of the plan's own size rather than a magic
+        # number: what matters is that deduplication happens, not the exact
+        # count, which moves whenever the spec does. One script per step would
+        # be hundreds of files that can each be edited and drift.
+        assert len(generate_all(plan)) * 4 < plan.step_count
 
     def test_every_action_in_the_table_is_reachable(self) -> None:
         """A table entry for an action nothing emits is a promise nothing keeps —

@@ -188,6 +188,101 @@ class TestSetupCoalescing:
 # ── ordering & safety ───────────────────────────────────────────────────────
 
 
+class TestDraftRedLine:
+    """Unapproved conditions must not enter the executable sequence.
+
+    This is the project's own rule — an industry-method proposal stays
+    ``draft`` until a human signs it, and a signed-off criterion is what makes
+    a measurement a quality standard rather than a suggestion. Planning draft
+    conditions anyway put 168 of 698 PA601 steps (24%) on the line with nobody
+    having reviewed the criteria they judge against.
+    """
+
+    def test_draft_conditions_are_excluded(self) -> None:
+        req = RequirementModel(
+            requirement_code="SR-1",
+            title="t",
+            input_conditions=[
+                _clause("input_voltage", "input", {"typ": 110.0, "unit": "Vac"}),
+            ],
+            output_conditions=[
+                ClauseModel(
+                    kind="output_voltage", text="提案", role="output",
+                    value={"note": "无判据"}, status="draft",
+                )
+            ],
+            scenarios=[ScenarioModel(scenario_id="s0", seq=0)],
+        )
+        plan = plan_flow(_bundle([req]), load_bindings())
+        actions = {s.action for seg in plan.segments for s in seg.steps}
+        assert "measure_dc_voltage" not in actions
+        assert any("未经人审" in w for w in plan.warnings)
+
+    def test_pending_is_reported_not_dropped(self) -> None:
+        """"The spec requires this but nobody approved how to measure it" is
+        exactly what a review meeting needs; a silent omission reads as full
+        coverage."""
+        req = RequirementModel(
+            requirement_code="SR-1",
+            title="t",
+            input_conditions=[_clause("input_voltage", "input", {"typ": 110.0})],
+            output_conditions=[
+                ClauseModel(
+                    kind="output_voltage", text="提案", role="output",
+                    value={"note": "x"}, status="draft",
+                )
+            ],
+            scenarios=[ScenarioModel(scenario_id="s0", seq=0)],
+        )
+        plan = plan_flow(_bundle([req]), load_bindings())
+        assert len(plan.pending) == 1
+        assert plan.pending[0]["status"] == "draft"
+        assert plan.pending[0]["kind"] == "output_voltage"
+
+    def test_include_draft_is_opt_in(self) -> None:
+        """Previewing with drafts is legitimate; it must never be the default."""
+        req = RequirementModel(
+            requirement_code="SR-1",
+            title="t",
+            input_conditions=[_clause("input_voltage", "input", {"typ": 110.0})],
+            output_conditions=[
+                ClauseModel(
+                    kind="output_voltage", text="提案", role="output",
+                    value={"min": 1.0, "max": 2.0}, status="draft",
+                )
+            ],
+            scenarios=[ScenarioModel(scenario_id="s0", seq=0)],
+        )
+        with_draft = plan_flow(_bundle([req]), load_bindings(), include_draft=True)
+        assert any(s.action == "measure_dc_voltage"
+                   for seg in with_draft.segments for s in seg.steps)
+
+    def test_real_plan_contains_no_draft_derived_steps(self) -> None:
+        """The end-to-end statement of the red line, on real data."""
+        bundle_path = Path(r"F:\Workspace\ATERag\rag_storage\exports\studio_bundle.json")
+        if not bundle_path.exists():
+            pytest.skip("需要 ATERag 导出的真实 bundle")
+        import json
+
+        raw = json.loads(bundle_path.read_text(encoding="utf-8"))
+        draft_pairs = {
+            (r["requirement_code"], c["kind"])
+            for r in raw["requirements"]
+            for side in ("input_conditions", "output_conditions")
+            for c in r[side]
+            if c["status"] == "draft"
+        }
+        assert draft_pairs, "样本里应当有 draft 条件, 否则这个测试是空的"
+        bundle = BundleModel.model_validate_json(bundle_path.read_text(encoding="utf-8"))
+        plan = plan_flow(bundle, load_bindings())
+        leaked = [
+            s for seg in plan.segments for s in seg.steps
+            if (s.requirement_code, s.params.get("condition_kind")) in draft_pairs
+        ]
+        assert not leaked, f"{len(leaked)} 步来自未批准条件"
+        assert len(plan.pending) == len(draft_pairs)
+
+
 class TestOrdering:
     def test_setup_precedes_measurement(self) -> None:
         """A measurement taken before the source is set reads the wrong state."""
@@ -235,6 +330,47 @@ class TestOrdering:
         text = plan.to_yaml()
         assert "power_cycle.py" in text
         assert "destructive-segment-fence" in text
+
+    def test_repeated_kinds_within_a_scenario_get_distinct_ids(self) -> None:
+        """One requirement may carry several conditions of the same kind.
+
+        PA601's SR-1701 has four ``presence`` clauses (four reported bits to
+        read). Four steps named the same thing is four nodes with one id in the
+        dependency graph, so the scheduler can silently skip three of them —
+        and a skipped measurement is a requirement that stops being tested
+        without anything reporting it.
+        """
+        req = RequirementModel(
+            requirement_code="SR-1701",
+            title="遥测上报",
+            input_conditions=[_clause("input_voltage", "input", {"typ": 110.0})],
+            output_conditions=[
+                _clause("presence", "output", {"note": f"bit{i}"}) for i in range(4)
+            ],
+            scenarios=[ScenarioModel(scenario_id="s0", seq=0)],
+        )
+        plan = plan_flow(_bundle([req]), load_bindings())
+        ids = [s.id for seg in plan.segments for s in seg.steps]
+        assert len(ids) == len(set(ids)), f"同类条件生成了重名步骤: {ids}"
+        assert len([i for i in ids if "presence" in i]) == 4
+
+    def test_real_plan_has_no_id_collisions(self) -> None:
+        """The 74-collision case, pinned.
+
+        Fixed twice over: ATERag's disambiguated codes no longer use ``@``/``#``
+        (YAML-reserved), and repeated kinds within a scenario get an ordinal.
+        Both were needed — the first alone left 16 collisions. Asserting the
+        end state, because the backstop silently makes ids unique while making
+        them unreadable, and nobody would notice from the output.
+        """
+        p = Path(r"F:\Workspace\ATERag\rag_storage\exports\studio_bundle.json")
+        if not p.exists():
+            pytest.skip("需要 ATERag 导出的真实 bundle")
+        bundle = BundleModel.model_validate_json(p.read_text(encoding="utf-8"))
+        plan = plan_flow(bundle, load_bindings())
+        ids = [s.id for seg in plan.segments for s in seg.steps]
+        assert len(ids) == len(set(ids))
+        assert not [w for w in plan.warnings if "冲突" in w], plan.warnings
 
     def test_plan_is_deterministic(self) -> None:
         """Same spec in, same plan out — otherwise a review is meaningless."""

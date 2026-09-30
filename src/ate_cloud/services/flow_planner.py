@@ -192,6 +192,8 @@ class FlowPlan:
     #: silently dropped. A scenario with no steps is a requirement nobody
     #: is testing.
     unmapped: list[dict[str, str]] = field(default_factory=list)
+    #: Conditions excluded because they are not yet approved.
+    pending: list[dict[str, str]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
     @property
@@ -343,11 +345,36 @@ def _setup_signature(bindings: dict[tuple[str, str], Binding], model: Requiremen
     return "|".join(parts)
 
 
+def _has_duplicate_kind(model: RequirementModel, kind: str) -> bool:
+    """Whether a requirement carries the same output kind more than once.
+
+    Recomputed per condition, so it is O(n²) on a requirement's clause list.
+    That is a deliberate trade: the lists are single-digit and a cached index
+    would have to be threaded through two call sites for a microsecond of
+    gain. Correctness of the step id is not the place to be clever.
+    """
+    return sum(1 for c in model.output_conditions if c.kind == kind) > 1
+
+
+def _has_duplicate_input_kind(model: RequirementModel, kind: str) -> bool:
+    """Same as :func:`_has_duplicate_kind`, for the input side."""
+    return sum(1 for c in model.input_conditions if c.kind == kind) > 1
+
+
 def _cond_value(clause: Any) -> str:
     v = clause.value
     if not v:
         return str(clause.text)[:24]
     return str(json.dumps(v, sort_keys=True, ensure_ascii=False))
+
+
+#: Characters kept verbatim when slugifying a requirement code into a step id.
+#:
+#: ``.`` is included deliberately: ATERag's disambiguated codes carry limit
+#: values (``m0.85``, ``m11.1``), and dropping the dot would collapse
+#: ``m0.85`` and ``m085`` onto the same id. The DSL parser accepts dots — it
+#: only requires a non-empty id — so there is no reason to mangle them.
+_SLUG_KEEP = "-_."
 
 
 def _slug(s: str) -> str:
@@ -358,15 +385,33 @@ def _slug(s: str) -> str:
     """
     out = []
     for ch in s:
-        out.append(ch if (ch.isalnum() or ch in "-_") else "_")
+        out.append(ch if (ch.isalnum() or ch in _SLUG_KEEP) else "_")
     return "".join(out) or "x"
 
 
-def plan_flow(bundle: BundleModel, bindings: dict[tuple[str, str], Binding] | None = None) -> FlowPlan:
-    """Plan the whole product's sequence from a bundle."""
+def plan_flow(
+    bundle: BundleModel,
+    bindings: dict[tuple[str, str], Binding] | None = None,
+    *,
+    include_draft: bool = False,
+) -> FlowPlan:
+    """Plan the whole product's sequence from a bundle.
+
+    ``include_draft=False`` is the default and is a **red line**, not a
+    convenience. ATERag marks industry-method proposals as ``draft`` until a
+    human signs them off, and the project's rule is that an unapproved
+    condition must not become a production criterion. Planning them anyway
+    would put 24% of the PA601 sequence (168 of 698 steps) on the line
+    unauthenticated — criteria nobody reviewed, judged against, and signed.
+
+    Excluded conditions are reported in :attr:`FlowPlan.pending` rather than
+    dropped, because "the spec requires this but nobody has approved how to
+    measure it" is exactly what a review meeting needs to see.
+    """
     binds = bindings or load_bindings()
     segments: list[Segment] = []
     unmapped: list[dict[str, str]] = []
+    pending: list[dict[str, str]] = []
     warnings: list[str] = []
 
     # Group scenarios by setup signature across the whole product. Grouping
@@ -375,6 +420,8 @@ def plan_flow(bundle: BundleModel, bindings: dict[tuple[str, str], Binding] | No
     # re-set the source once per requirement.
     buckets: dict[str, list[tuple[RequirementModel, ScenarioModel]]] = defaultdict(list)
     for model in bundle.requirements:
+        if not include_draft:
+            _collect_pending(model, pending)
         for scen in model.scenarios:
             sig = _setup_signature(binds, model, scen)
             buckets[sig].append((model, scen))
@@ -413,7 +460,7 @@ def plan_flow(bundle: BundleModel, bindings: dict[tuple[str, str], Binding] | No
             # 步骤, 依赖图出现歧义, 调度器会跳过后一个。带段号后 id 全局唯一,
             # 而"该段内已施加过什么"仍由 applied 单独判定, 两者职责分开。
             steps, miss = _plan_scenario(
-                binds, model, scen, prev_id, applied, seg_index=len(segments)
+                binds, model, scen, prev_id, applied, len(segments), include_draft
             )
             for m in miss:
                 unmapped.append(
@@ -439,6 +486,11 @@ def plan_flow(bundle: BundleModel, bindings: dict[tuple[str, str], Binding] | No
             f"{len(unmapped)} 个场景的条件无绑定, 这些需求不会被测到 —— "
             "补 config/test_method_bindings.yaml 后重新规划"
         )
+    if pending:
+        warnings.append(
+            f"{len(pending)} 条条件未经人审(status=draft), 已排除在执行序列之外。"
+            " 按红线未批准的条件不得作为产测判据; 评审签字后重新规划即可纳入。"
+        )
 
     # A plan whose only content is a clamp and a release is worse than no plan:
     # it looks like coverage and tests nothing.
@@ -453,23 +505,52 @@ def plan_flow(bundle: BundleModel, bindings: dict[tuple[str, str], Binding] | No
         doc_version=bundle.doc_version,
         segments=segments,
         unmapped=unmapped,
+        pending=pending,
         warnings=warnings,
     )
 
 
+def _collect_pending(model: RequirementModel, out: list[dict[str, str]]) -> None:
+    """Record unapproved conditions instead of planning them.
+
+    Reported rather than dropped: "the spec requires this but nobody has
+    approved how to measure it" is exactly the gap a review meeting exists to
+    close, and a planner that silently omits it leaves the impression the spec
+    is fully covered.
+    """
+    for side, clauses in (
+        ("input", model.input_conditions),
+        ("output", model.output_conditions),
+    ):
+        for c in clauses:
+            if c.status != "approved":
+                out.append(
+                    {
+                        "requirement_code": model.requirement_code,
+                        "side": side,
+                        "kind": c.kind,
+                        "status": c.status,
+                        "confidence": c.confidence,
+                        "method_ref": c.method_ref,
+                        "text": c.text[:120],
+                    }
+                )
+
+
 def _disambiguate_step_ids(segments: list[Segment], warnings: list[str]) -> None:
-    """Make every step id globally unique, deterministically.
+    """Final backstop: make every step id globally unique, deterministically.
 
-    Requirement codes are slugified for the DSL (spaces and ``#``/``@`` are not
-    valid in a step id), and that slug is lossy: ``SR-1223#m0m1`` and
-    ``SR-1223@m0m1`` both become ``SR-1223_m0m1``. Two different requirements
-    then emit identically-named steps, and a dependency graph with duplicate
-    node ids is ambiguous — the scheduler may skip one, and a skipped
-    measurement is a requirement that silently stops being tested.
+    This is a *backstop*, not the mechanism. The two real sources of collision
+    are handled at the source — segment index in the id base, and an ordinal
+    for repeated kinds within a scenario. This exists because a duplicate id
+    silently corrupts the dependency graph, and a dependency graph that is
+    quietly wrong is worse than one that is loudly broken: the scheduler may
+    skip a step, and a skipped measurement is a requirement that stops being
+    tested without anything reporting it.
 
-    Resolved by appending an occurrence ordinal in plan order. Deterministic
-    (plan order is deterministic) and readable, which a content hash would not
-    be. ``depends_on`` is rewritten so the graph stays consistent.
+    Reaching here means an id-construction rule changed and lost a case. So it
+    warns, and names the colliding ids — the fix belongs wherever they are
+    built, not here.
     """
     seen: dict[str, int] = {}
     renames: dict[str, str] = {}
@@ -482,10 +563,10 @@ def _disambiguate_step_ids(segments: list[Segment], warnings: list[str]) -> None
                 renames[st.id] = new_id
                 st.id = new_id
     if renames:
+        sample = sorted(renames)[:3]
         warnings.append(
-            f"{len(renames)} 个步骤 id 因需求码 slug 化而冲突, 已加序号区分。"
-            " 需求码含 #/@ 等字符时会发生 —— 若 id 变得难以阅读, 建议在 ATERag 侧"
-            "改用更规整的消歧后缀"
+            f"{len(renames)} 个步骤 id 仍发生冲突(已加序号兜底), 样例: {sample}。"
+            " 请检查 id 构造规则 —— 兜底只保证唯一, 不保证 id 仍能读懂它测的是什么"
         )
         for seg in segments:
             for st in seg.steps:
@@ -499,6 +580,7 @@ def _plan_scenario(
     prev_id: str | None,
     applied: set[tuple[str, str]],
     seg_index: int = 0,
+    include_draft: bool = False,
 ) -> tuple[list[PlanStep], list[str]]:
     """Plan one scenario's steps: setup actions first, then measurements.
 
@@ -520,6 +602,9 @@ def _plan_scenario(
     # ---- 1. setup: input-side conditions, in SETUP_ORDER ----
     setup_items: list[tuple[int, Any, Any]] = []
     for cl in model.input_conditions:
+        if not include_draft and cl.status != "approved":
+            # 红线: 未签字的条件不进执行序列。已由 _collect_pending 记录上报。
+            continue
         b = binds.get((cl.kind, "input"))
         if b is None:
             missing.append(f"input/{cl.kind}")
@@ -530,6 +615,7 @@ def _plan_scenario(
             rank = len(SETUP_ORDER)
         setup_items.append((rank, b, cl))
     setup_items.sort(key=lambda x: x[0])
+    setup_kind_seq: dict[str, int] = {}
 
     for _, b, cl in setup_items:
         # 批次级设置(温箱)不参与去重: 它的稳定时间以小时计, 是整批换温点时
@@ -542,9 +628,14 @@ def _plan_scenario(
             if key in applied:
                 continue
             applied.add(key)
+        # input 侧同样可能有同类条件(如一条需求里两条不同的输入电压档),
+        # 序号规则与 output 侧一致。
+        n = setup_kind_seq.get(cl.kind, 0)
+        setup_kind_seq[cl.kind] = n + 1
+        ordinal = f"_{n + 1}" if _has_duplicate_input_kind(model, cl.kind) else ""
         steps.append(
             PlanStep(
-                id=f"{base}_{_slug(cl.kind)}",
+                id=f"{base}_{_slug(cl.kind)}{ordinal}",
                 type="action",
                 action=b.action,
                 requirement_code=model.requirement_code,
@@ -571,14 +662,25 @@ def _plan_scenario(
         prev_id = steps[-1].id
 
     # ---- 2. measurement: output-side conditions ----
+    # 同一场景里同类条件可以出现多次(SR-1701 有 4 条 presence, 要读 4 个
+    # 上报位), 必须靠序号区分。不加序号会生成重名步骤, 依赖图出现歧义节点,
+    # 调度可能跳过其中一个 —— 被跳过的测量就是一条悄悄不再被测的需求。
+    # 这比"事后给重复项贴 _d1"更可取: 序号在生成处就有语义, 读 id 就知道
+    # 是该场景的第几个同类测量。
+    kind_seq: dict[str, int] = {}
     for cl in model.output_conditions:
+        if not include_draft and cl.status != "approved":
+            continue
         b = binds.get((cl.kind, "output"))
         if b is None:
             missing.append(f"output/{cl.kind}")
             continue
+        n = kind_seq.get(cl.kind, 0)
+        kind_seq[cl.kind] = n + 1
+        ordinal = f"_{n + 1}" if _has_duplicate_kind(model, cl.kind) else ""
         steps.append(
             PlanStep(
-                id=f"{base}_m_{_slug(cl.kind)}",
+                id=f"{base}_m_{_slug(cl.kind)}{ordinal}",
                 type="action",
                 action=b.action,
                 requirement_code=model.requirement_code,

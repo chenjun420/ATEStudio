@@ -185,6 +185,16 @@ def plan_gaps(plan: FlowPlan) -> list[PlanGap]:
     return gaps
 
 
+def pending_conditions(plan: FlowPlan) -> list[dict[str, str]]:
+    """Unapproved conditions held out of the executable plan.
+
+    Surfaced by the upload gate as a blocking reason, not merely a note. The
+    alternative — a plan that quietly omits them — reads as full coverage,
+    and the requirements behind them ship untested.
+    """
+    return list(plan.pending)
+
+
 def generate_script(step: PlanStep) -> GeneratedScript:
     """Render one step's script."""
     driver, method, nature = DRIVER_TABLE.get(step.action, ("stub", "noop", "stub"))
