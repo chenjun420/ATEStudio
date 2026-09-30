@@ -5,6 +5,8 @@ from pathlib import Path
 
 import nats
 from fastapi import FastAPI
+from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
 from nats.aio.client import Client as NatsClient
 
 from ate_cloud.api.v1.router import api_router
@@ -213,6 +215,66 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             _nats_client = None
 
 
+def _mount_spa(app: FastAPI) -> None:
+    """Serve the built single-page app at "/".
+
+    Mounted last so ``/api/v1`` keeps winning, and as a catch-all rather than
+    a bare ``StaticFiles`` mount because the router is in history mode
+    (``createWebHistory``): a deep link like ``/aterag-review`` is served by
+    vue-router, not by a file, so anything that is not a real asset has to
+    return ``index.html`` or a page refresh mid-flow lands on a 404.
+
+    The dist directory being absent is a supported state, not a crash: in
+    development the API is run without a build. It is logged loudly rather
+    than skipped silently, because a *deployed* box whose UI is unreachable
+    looks exactly like a healthy one from every check that exists — the
+    process is up, the health endpoint answers, and the deploy stamp says the
+    frontend was built. That combination is what made this go unnoticed.
+    """
+    dist = Path(settings.frontend_dist_dir)
+    if not dist.is_absolute():
+        dist = Path.cwd() / dist
+    index = dist / "index.html"
+
+    if not index.is_file():
+        print(  # noqa: T201
+            f"No SPA at {dist} (index.html missing); serving the API only. "
+            "Build the frontend or set ATE_FRONTEND_DIST_DIR."
+        )
+        return
+
+    assets_dir = dist / "assets"
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def spa(full_path: str) -> Response:
+        """Serve a real file if there is one, else hand back the SPA shell.
+
+        API paths are passed through untouched. A catch-all that answered them
+        with the HTML shell would turn every typo'd or unauthorised endpoint
+        into a 200 that fails to parse — the caller then debugs a JSON decode
+        error a long way from the actual mistake. Letting the API router's own
+        404 (or its 401) stand keeps the failure where it belongs.
+        """
+        if full_path == "api" or full_path.startswith("api/"):
+            return JSONResponse({"detail": "Not Found"}, status_code=404)
+
+        if full_path:
+            candidate = (dist / full_path).resolve()
+            # Reject escapes: a path like "../../.env" would otherwise be read
+            # out of the parent of dist and served as a static asset.
+            if candidate.is_file() and candidate.is_relative_to(dist.resolve()):
+                return FileResponse(candidate)
+        return FileResponse(index)
+
+    # Assets are mounted separately so long-lived file caching can apply to
+    # them while index.html stays uncached — a cached shell pins every user to
+    # a stale bundle hash after a deploy, which reads as "the fix did not take".
+    # Guarded because a missing assets/ would make StaticFiles raise at import.
+    if assets_dir.is_dir():
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+    print(f"SPA mounted at / from {dist}")  # noqa: T201
+
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title=settings.app_name,
@@ -221,6 +283,7 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
     app.include_router(api_router, prefix="/api/v1")
+    _mount_spa(app)
     return app
 
 

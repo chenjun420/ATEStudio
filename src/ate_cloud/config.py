@@ -84,6 +84,23 @@ class Settings(BaseSettings):
         description="Directory containing per-run JSONL recording files",
     )
 
+    # Built single-page app to serve at "/".
+    #
+    # This exists because the deploy script builds the frontend, records
+    # `frontend_built: true` in its stamp, and then nothing ever serves the
+    # result: `create_app` mounted only the API router, so every asset path
+    # 404'd while the stamp claimed the UI was up. The stamp was the only
+    # record of the build, and it recorded a build, not a reachable page.
+    #
+    # Relative by default and resolved against the process CWD, which the
+    # systemd unit pins to the checkout (/opt/atestudio). The env var is the
+    # escape hatch for a layout that puts dist elsewhere.
+    frontend_dist_dir: str = Field(
+        default="frontend/dist",
+        validation_alias="ATE_FRONTEND_DIST_DIR",
+        description="Directory holding the built SPA (index.html + assets/)",
+    )
+
     # Simulation mode — when True, all drivers are created in SIM mode
     # (no PyVISA connections, simulated instrument responses)
     simulation_mode: bool = Field(
