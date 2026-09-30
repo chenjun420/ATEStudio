@@ -24,17 +24,29 @@ services:
   # ---------------------------------------------------------------------------
   nats:
     profiles: [dev, cloud]
-    image: nats:2.10-alpine
+    # 2.10 and 2.11 are EOL and receive no further security updates. 2.14.7 is
+    # the current maintenance line and already carries every published fix
+    # (CVE-2026-33222 JetStream stream-restore auth bypass, fixed 2.12.6;
+    #  CVE-2026-28 Connz pagination crash, fixed 2.14.3). 2.15.0 was skipped
+    # deliberately: its notes warn that `js_raft_delete_range` — default-on in
+    # 2.15 — is "safe when upgrading from 2.14 but may cause problems when
+    # upgrading directly from 2.12 or earlier", and this stack was on 2.10.
+    image: nats:2.14.7-alpine
     # RH-2: explicit file-storage template (config/nats-server.conf) pins
     # store_dir to /var/lib/nats/jetstream; the named volume mounted there
     # makes JetStream state durable across container recreation.
+    # The monitoring port is configured in the conf file (bound to loopback).
+    # Passing `-m 8222` here would override it and re-expose /connz on all
+    # interfaces, so the flag is deliberately absent.
     command: >-
       -js
       --config /etc/nats/nats-server.conf
-      -m 8222
     ports:
       - "4222:4222"
-      - "8222:8222"
+      # 8222 is intentionally NOT published: the server binds it to 127.0.0.1
+      # inside the container, so a host mapping would both fail and advertise
+      # that a monitoring port exists. The healthcheck below runs inside the
+      # container and uses localhost, which still works.
     volumes:
       - ./config/nats-server.conf:/etc/nats/nats-server.conf:ro
       - nats-jetstream-data:/var/lib/nats/jetstream
