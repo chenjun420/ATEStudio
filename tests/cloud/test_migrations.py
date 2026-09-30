@@ -215,21 +215,26 @@ def migrated_db() -> str:
 
 
 def _fk_map(url: str, table: str) -> dict[str, str]:
-    """column -> fully qualified referenced table, from information_schema."""
+    """column -> referenced table, read straight from the catalog.
+
+    Deliberately ``pg_constraint`` rather than ``information_schema``: for a
+    foreign key, ``information_schema.key_column_usage`` describes the
+    *referenced* columns, so joining it to ``referential_constraints`` to read
+    the delete rule silently yields nothing. That produced a test which asserted
+    "no foreign key exists" and looked like it had found a schema defect — when
+    the schema was fine and the query was not.
+    """
     rows = _query(
         url,
         f"""
-        SELECT kcu.column_name,
-               ccu.table_schema || '.' || ccu.table_name AS ref_table
-        FROM information_schema.table_constraints tc
-        JOIN information_schema.key_column_usage kcu
-          ON tc.constraint_name = kcu.constraint_name
-         AND tc.table_schema = kcu.table_schema
-        JOIN information_schema.constraint_column_usage ccu
-          ON ccu.constraint_name = tc.constraint_name
-         AND ccu.table_schema = tc.table_schema
-        WHERE tc.constraint_type = 'FOREIGN KEY'
-          AND tc.table_name = '{table}'
+        SELECT a.attname AS column_name, rt.relname AS ref_table
+        FROM pg_constraint c
+        JOIN pg_class t ON t.oid = c.conrelid
+        JOIN pg_class rt ON rt.oid = c.confrelid
+        JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = c.conkey[1]
+        WHERE c.contype = 'f'
+          AND t.relname = '{table}'
+          AND t.relnamespace = 'public'::regnamespace
         """,
     )
     return {r["column_name"]: r["ref_table"] for r in rows}
@@ -263,11 +268,11 @@ class TestForeignKeysPointWhereTheyWereMeantTo:
 
     def test_station_belongs_to_plant(self, migrated_db: str) -> None:
         fks = _fk_map(migrated_db, "stations")
-        assert fks.get("plant_id") == "public.plants"
+        assert fks.get("plant_id") == "plants"
 
     def test_fault_case_belongs_to_station(self, migrated_db: str) -> None:
         fks = _fk_map(migrated_db, "station_fault_cases")
-        assert fks.get("station_id") == "public.stations"
+        assert fks.get("station_id") == "stations"
 
     def test_fault_case_evidence_link_survives_diagnosis_pruning(self, migrated_db: str) -> None:
         """``diagnoses`` is prunable evidence; the case that outlives it is not.
@@ -276,21 +281,26 @@ class TestForeignKeysPointWhereTheyWereMeantTo:
         diagnosis, which is the same failure as cascading from plant to station.
         """
         fks = _fk_map(migrated_db, "station_fault_cases")
-        assert fks.get("source_diagnosis_id") == "public.diagnoses"
+        assert fks.get("source_diagnosis_id") == "diagnoses"
 
 
 class TestDeleteBehaviourIsWhatTheDesignSays:
     def _delete_rule(self, url: str, table: str, column: str) -> str:
         rows = _query(
             url,
-            """
-            SELECT rc.delete_rule AS rule
-            FROM information_schema.referential_constraints rc
-            JOIN information_schema.key_column_usage kcu
-              ON rc.constraint_name = kcu.constraint_name
-             AND rc.constraint_schema = kcu.constraint_schema
-            WHERE kcu.table_name = '{table}' AND kcu.column_name = '{column}'
-              AND rc.constraint_schema = 'public'
+            f"""
+            SELECT CASE c.confdeltype
+                     WHEN 'a' THEN 'NO ACTION' WHEN 'c' THEN 'CASCADE'
+                     WHEN 'n' THEN 'SET NULL' WHEN 'd' THEN 'SET DEFAULT'
+                     WHEN 'r' THEN 'RESTRICT'
+                   END AS rule
+            FROM pg_constraint c
+            JOIN pg_class t ON t.oid = c.conrelid
+            JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = c.conkey[1]
+            WHERE c.contype = 'f'
+              AND t.relname = '{table}'
+              AND a.attname = '{column}'
+              AND t.relnamespace = 'public'::regnamespace
             """,
         )
         assert rows, f"{table}.{column} 上没有外键"
