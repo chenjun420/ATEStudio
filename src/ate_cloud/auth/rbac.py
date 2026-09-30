@@ -13,13 +13,36 @@ When the database is seeded with Role/Permission records, the async
 functions query the DB for up-to-date scopes. If the DB is not seeded
 (or the role is not found), they fall back to the hardcoded ROLE_SCOPES
 defaults for backward compatibility.
+
+The fallback is the one that actually runs
+-----------------------------------------
+``get_current_user`` compares the required scope against the *token's* scopes,
+and those are baked at login by :func:`get_effective_scopes` — which consults
+only this dict plus the ``User.scopes`` column. ``get_db_role_scopes`` exists
+but is not on the login path, so seeding the Role table does not change who can
+call what. Anything a route requires must therefore appear here, or the route is
+unreachable.
+
+That is not hypothetical: ``require_scopes("aterag:import")`` guards the ATERag
+bundle import and the flow planner, and ``aterag:import`` was in no role's list.
+Every account, admin included, got 403 — so the review wizard's steps 1, 4 and 5
+could not be completed by anyone. The token check being the *only* check is what
+hid it: the endpoints registered fine, the tests mocked the dependency, and the
+deploy passed.
 """
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+#: Scope gating ingestion of an ATERag bundle. Kept separate from ``write`` on
+#: purpose: an import overwrites authoritative spec-derived rows and can
+#: invalidate already-reviewed conditions, which is not the same act as editing
+#: one record. The import module's own note is "operator roles cannot ingest", so
+#: only ``admin`` carries it.
+SCOPE_ATERAG_IMPORT = "aterag:import"
+
 ROLE_SCOPES: dict[str, list[str]] = {
-    "admin": ["admin", "read", "write", "execute"],
+    "admin": ["admin", "read", "write", "execute", SCOPE_ATERAG_IMPORT],
     "write": ["read", "write"],
     "read": ["read"],
     "execute": ["execute"],
