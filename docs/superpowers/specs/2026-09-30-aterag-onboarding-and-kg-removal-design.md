@@ -35,6 +35,10 @@
 | F15 | 部署的嵌入模型是 `qwen3.7-text-embedding`,**实测 1024 维**(代码默认 1536 是 OpenAI `text-embedding-3-small` 的尺寸);其可用凭据在 **ATERag 的 `.env`**,变量名为 `LLM_*` / `EMBED_*`,与 ATEStudio 的 `OPENAI_*` 体系不同;且 `OPENAI_EMBEDDING_MODEL` 这个键**在板上 `.env` 里根本不存在** | 板上真实调用 embeddings 端点量维度;awk 量各键值长度 |
 | F16 | 向量载荷若**只带 id 不带正文**,下游归纳环节会自行补内容: 首次端到端运行时,第二条证据引用把「工装夹具接触不良」描述成「电容 ESR 衰减与稳压器修调偏移」—— 流畅、自信、错误,正是 §9 点名的「部件错误」类 | 板上端到端诊断返回的 `evidence_citations` 与案例正文对照 |
 | F17 | LangChain `OpenAIEmbeddings` 默认本地分词并**发送 token id**,该 tokenizer 属 OpenAI;对 Qwen 模型切分本就错误,且 DashScope 兼容端点直接拒收(`input must be an array of strings`) | 板上对照实验: 默认参数失败, `check_embedding_ctx_length=False` 成功 |
+| F18 | 板上(192.168.5.24)**Neo4j 与 FalkorDB 均不存在**:6379 关闭、无 FalkorDB 服务/数据目录;Neo4j 无二进制/systemd 单元/进程/`/var/lib/neo4j`/`/opt/neo4j`,7474/7687 双闭;两者均不在依赖/lock/import 中。|
+| F19 | `structlog` 被 18 个文件**模块级** import 却从未声明,仅靠 `semantica` 传递带入;移除后板上服务无法启动。`pyarrow` 同类但被 `try/except` 吞掉,Parquet 导出静默降级为 CSV。已声明并加测试。|
+| F20 | 删除 `api/v1/knowledge.py` 会让全部 `/knowledge` 路由**静默消失**(141→135),无 ImportError——因 `knowledge_reads` 是 import 那个模块的 router 挂载的。已改显式挂载 + 计数断言。|
+| F21 | `deploy_cloud.sh` 的 DEPLOY-3 会 `die`,除非 6379 答 PING **且** `MODULE LIST` 含 `graph`;没有任何一次部署满足过。每一层都被建成用来掩盖图从未部署这一事实。|
 
 ## 3. 通则:能力声称可用前必须有端到端实测
 
@@ -157,6 +161,27 @@ FMEA 表保留,转为工位故障案例库的结构模板。
 
 移除期间唯一的功能判据:**`/diagnose` 在板上仍能以 Qdrant 单路返回结果**。另需:服务 active、`/api/v1/health/db` 200、`/` 200、前端全量测试通过。
 
+### 6.5 执行结果(2026-09-30 已完成)
+
+板上实测 14/14 通过,`.deploy/current.json` 记录 `knowledge_graph_removed: true`。以下四条是执行中新查明的事实,不在原规格内。
+
+**F18 · Neo4j 从未存在,FalkorDB 也从未存在——两个图后端都没跑过。**
+规格 F9 记的是「被移除的是 Neo4j 而非 FalkorDB」,言下之意是 FalkorDB 在用。板上实测相反:6379 关闭、无 FalkorDB 服务、无数据目录;Neo4j 连二进制、systemd 单元、进程、`/var/lib/neo4j`、`/opt/neo4j` 都不存在,7474/7687 双闭。两者都不在 `pyproject.toml` / `uv.lock` / 任何 import 里。
+所以 `purge_neo4j.sh` 也一并删除:它要擦除的服务不存在,留着会让人以为还有一个「Neo4j 清理」步骤要记得做。
+
+**F19 · `structlog` 被 18 个文件模块级 import,却从未声明为依赖。**
+它只是因为 `semantica` 依赖它才进了 venv。移除 `semantica` 后,板上服务**直接起不来**,回溯指向 `structlog`,与真正的变更原因毫无关联。本地测试一条也没红——本地环境本来就有。
+同类的 `pyarrow` 后果更隐蔽:`report_exporter.py` 用 `try/except` 包住它来做 Parquet 导出,缺了就退回 CSV。守卫正常工作,于是 Parquet 导出从「能用」静默变成「不能用」,只有一行没人看的日志。
+两者已声明,并由 `tests/cloud/test_declared_dependencies.py` 常态化守住不变式:*模块级*第三方 import 必须是直接声明的依赖;被 try 包住和函数内惰性 import 是另一回事,分开记(`ortools` 保持不声明,`_ORTOOLS_AVAILABLE` + 启发式回退就是它的契约)。
+
+**F20 · 删掉 `api/v1/knowledge.py` 会让全部 `/knowledge` 路由静默消失。**
+`knowledge_reads.py` 是通过 `from .knowledge import router` 挂到那个模块的 router 上的。模块一删,挂载列表少了一项,没有 ImportError,没有警告——141 条路径直接变 135,追溯与需求读取接口无声消失。现已改为在 `router.py` 显式挂载,并由 `test_auth_enforcement.py` 的挂载计数(30)守住。
+
+**F21 · 部署脚本的硬闸门比图本身更能说明问题。**
+`deploy_cloud.sh` 的 DEPLOY-3 会 `die`,除非 6379 答上 PING **且** `MODULE LIST` 里有 `graph` 模块。也就是说:部署会拒绝继续,直到一个应用用不上的服务起来——而这个项目没有任何一次部署满足过它。这不是「功能没启用」,是**每一层都被建造成用来掩盖那个缺失**的。
+
+顺带修掉一个既有隐患:`core.autocrlf=true` 且无 `.gitattributes`,Windows 上任何一次全新检出会把所有 `.sh` 变成 CRLF,而部署脚本是 bash 跑的。已用 `*.sh text eol=lf` 钉死。
+
 ## 7. 导入向导
 
 三步 + 交接既有评审向导(评审向导不改,本会话修复零回归):
@@ -208,6 +233,8 @@ D6 原文:「Agent 只读 MCP;写回走管理面」。新路径不违反:
 | **P5** | 导入向导 UI + 各视图按上下文分域 | P4 |
 | **P6** | 注记起草进界面(可裁剪) | P5 |
 | **P7** | e2e 扩展 + 操作手册更新 | P4–P6 |
+
+**进度:P0、P1 已完成并部署至 192.168.5.24。** P1 板上实测 14/14(见 §6.5)。下一期为 P2。
 
 P0/P1 提前的理由:`/diagnose` 是故障智能的地基,而移除图谱会让它第一次真正可用 —— **先让它能跑,再拆掉拖垮它的部分**。
 
