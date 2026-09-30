@@ -86,6 +86,12 @@ export default {
     calibration: 'Calibration',
     fmea: 'FMEA Management',
     userManagement: 'User Management',
+    fixtureDesigner: 'Fixture Designer',
+    simulationConsole: 'Simulation Console',
+    operatorPanel: 'Operator Panel',
+    roleManagement: 'Roles & Permissions',
+    knowledgeGraph: 'Knowledge Graph',
+    traceabilityMatrix: 'Traceability Matrix',
   },
   settings: {
     themeMode: 'Theme Mode',

@@ -4,6 +4,8 @@ import { useRouter, useRoute, RouterView } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useApps } from '@/composables/useApps'
 import { useAuth } from '@/composables/useAuth'
+import { appLabel, menuLabel } from '@/composables/menuLabels'
+import { useLocale } from '@/composables/useLocale'
 import PasswordChange from '@/views/PasswordChange.vue'
 import OfflineStatusIndicator from '@/components/OfflineStatusIndicator.vue'
 import {
@@ -22,6 +24,11 @@ const route = useRoute()
 const { t } = useI18n()
 const { apps, currentAppMenus, loading, loadApps, loadAppMenus } = useApps()
 const { user, logout } = useAuth()
+const { locale, locales, setLocale } = useLocale()
+
+/** Display names for the app tabs and the sidebar. */
+const appName = (app: { code: string; name: string }): string => appLabel(app, t)
+const itemName = (item: { code: string; name: string }): string => menuLabel(item, t)
 
 const passwordChangeRef = ref<InstanceType<typeof PasswordChange> | null>(null)
 
@@ -171,7 +178,7 @@ function handleCommand(command: string): void {
         <el-icon :size="22" class="header-logo" @click="goHome">
           <component :is="iconMap[activeApp?.icon || 'Monitor'] || Monitor" />
         </el-icon>
-        <span class="header-title">{{ activeApp?.name || 'ATE Studio' }}</span>
+        <span class="header-title">{{ activeApp ? appName(activeApp) : 'ATE Studio' }}</span>
       </div>
 
       <!-- Horizontal menu in center -->
@@ -189,7 +196,7 @@ function handleCommand(command: string): void {
             :index="menu.route_path"
           >
             <el-icon><component :is="menuIconMap[menu.icon || 'List'] || Monitor" /></el-icon>
-            <span>{{ menu.name }}</span>
+            <span>{{ itemName(menu) }}</span>
           </el-menu-item>
         </el-menu>
       </nav>
@@ -202,6 +209,29 @@ function handleCommand(command: string): void {
           <el-icon><ArrowLeft /></el-icon>
           <span>{{ t('common.home') }}</span>
         </el-button>
+
+        <!--
+          Language switch.
+
+          A radio group rather than a toggle: with two locales a toggle has to
+          invent a label for the state you are switching *to*, which is wrong
+          half the time. The group shows the current choice directly.
+
+          The labels are the language's own name ("中文" / "English") rather
+          than a translation of it — a user looking for English is looking for
+          the word "English", and "英文" only helps if they read Chinese, which
+          is the case this control exists to escape.
+        -->
+        <el-radio-group
+          class="locale-switch"
+          :model-value="locale"
+          size="small"
+          @update:model-value="setLocale($event as 'zh-CN' | 'en')"
+        >
+          <el-radio-button v-for="loc in locales" :key="loc" :value="loc">
+            {{ loc === 'zh-CN' ? '中文' : 'English' }}
+          </el-radio-button>
+        </el-radio-group>
 
         <el-dropdown class="user-dropdown" @command="handleCommand">
           <div class="user-trigger">
