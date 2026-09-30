@@ -183,4 +183,10 @@ async def browse_knowledge_graph(
         ) from exc
 
 
+# P5: condition read/review endpoints register on the same router, imported
+# for the side effect. Last on purpose — FastAPI matches routes in registration
+# order, and keeping the additions after the existing ones means a future
+# "/conditions/{id}" style path cannot shadow an existing route by accident.
+from . import knowledge_conditions as _knowledge_conditions  # noqa: E402,F401
+
 __all__: list[str] = []

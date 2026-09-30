@@ -1,0 +1,117 @@
+/* ============================================================================
+ * TDesign-blue re-theme for Element Plus (D11)
+ * ============================================================================
+ *
+ * Decision: re-theme Element Plus rather than adopt TDesign as a second
+ * component library. Two UI frameworks in one app means every dialog, table
+ * and form gets implemented twice, with two sets of focus traps, two keyboard
+ * behaviours and two accessibility stories — and the mismatch is visible at
+ * every boundary where they meet. Overriding CSS variables is reversible and
+ * touches no component code.
+ *
+ * What this file does NOT do: restyle components by class selector. Element
+ * Plus exposes its palette as CSS custom properties precisely so themes can
+ * override them; reaching past them into internal class names produces a
+ * stylesheet that breaks on any Element Plus upgrade.
+ *
+ * Palette provenance: TDesign brand blue.
+ *   brand      #0052D9   primary actions
+ *   brand-1..9 the standard TDesign blue ramp used for hover/active/disabled
+ *   success    #2BA471   approved / passed
+ *   warning    #E37318   draft / pending
+ *   error      #D54941   failed / blocking
+ *
+ * The semantic colours matter more than the brand hue. In this app green means
+ * "signed off and safe to run on a line" and orange means "awaiting a human
+ * decision". Those two must be distinguishable at a glance and to the ~8% of
+ * operators with a colour vision deficiency — hence distinct lightness, not
+ * just distinct hue.
+ * ========================================================================== */
+
+:root {
+  /* ── TDesign brand ramp ────────────────────────────────────────────────── */
+  --td-brand-1: #f2f3ff;
+  --td-brand-2: #d9e1ff;
+  --td-brand-3: #b5c7ff;
+  --td-brand-4: #8eabff;
+  --td-brand-5: #618dff;
+  --td-brand-6: #366ef4;
+  --td-brand-7: #0052d9;
+  --td-brand-8: #003cab;
+  --td-brand-9: #002a7c;
+
+  /* ── Element Plus primary remap ─────────────────────────────────────────
+   * Element Plus derives the whole interactive set (hover, active, plain,
+   * disabled) from --el-color-primary plus its light/dark levels, so setting
+   * the nine levels is enough. Skipping the light/dark levels and setting only
+   * the base leaves hovers at the old Element blue — a visible seam on every
+   * button. */
+  --el-color-primary: var(--td-brand-7);
+  --el-color-primary-light-3: var(--td-brand-6);
+  --el-color-primary-light-5: var(--td-brand-5);
+  --el-color-primary-light-7: var(--td-brand-4);
+  --el-color-primary-light-8: var(--td-brand-3);
+  --el-color-primary-light-9: var(--td-brand-2);
+  --el-color-primary-dark-2: var(--td-brand-8);
+
+  /* ── Semantic status ───────────────────────────────────────────────────
+   * Lightness-separated as well as hue-separated: green/amber/red is the most
+   * common colour-blind collision in industrial UIs, and here these colours
+   * carry "is this safe to ship". */
+  --el-color-success: #2ba471;
+  --el-color-success-light-3: #5cbc92;
+  --el-color-success-light-5: #86cbae;
+  --el-color-success-light-7: #b1dbcb;
+  --el-color-success-light-8: #c8e7d9;
+  --el-color-success-light-9: #e0f1e9;
+  --el-color-success-dark-2: #218357;
+
+  --el-color-warning: #e37318;
+  --el-color-warning-light-3: #e9924b;
+  --el-color-warning-light-5: #efb17d;
+  --el-color-warning-light-7: #f5cfae;
+  --el-color-warning-light-8: #f9dfc7;
+  --el-color-warning-light-9: #fcefe3;
+  --el-color-warning-dark-2: #b65c13;
+
+  --el-color-error: #d54941;
+  --el-color-error-light-3: #dd6f69;
+  --el-color-error-light-5: #e59591;
+  --el-color-error-light-7: #ecbdb9;
+  --el-color-error-light-8: #f2d3d1;
+  --el-color-error-light-9: #f9e9e8;
+  --el-color-error-dark-2: #aa3934;
+
+  --el-color-info: #8b9bab;
+  --el-color-info-light-3: #a5b2bf;
+  --el-color-info-light-5: #bdc8d2;
+  --el-color-info-light-7: #d5dde5;
+  --el-color-info-light-8: #e1e7ec;
+  --el-color-info-light-9: #f0f3f6;
+  --el-color-info-dark-2: #6f7d8b;
+
+  /* ── Review workflow semantics ──────────────────────────────────────────
+   * Custom tokens for the ATERag review screens, so the wizard does not
+   * hard-code hex values and can be re-themed from here alone. */
+  --aterag-approved: var(--el-color-success);
+  --aterag-draft: var(--el-color-warning);
+  --aterag-blocking: var(--el-color-error);
+  --aterag-neutral: var(--el-color-info);
+}
+
+/* Dark mode: same hues, TDesign's dark surface ramp. Not a filter over the
+ * light theme — filtering inverts the brand blue into a colour that no longer
+ * matches the design system or the printed work instructions. */
+html.dark {
+  --el-bg-color: #181818;
+  --el-bg-color-overlay: #242424;
+  --el-bg-color-page: #1d1d1d;
+  --el-fill-color-blank: #1d1d1d;
+  --el-fill-color-light: #262626;
+  --el-text-color-primary: #e7e7e7;
+  --el-text-color-regular: #c2c2c2;
+  --el-text-color-secondary: #9b9b9b;
+  --el-border-color: #3a3a3a;
+  --el-border-color-light: #333;
+  --el-border-color-lighter: #2a2a2a;
+}

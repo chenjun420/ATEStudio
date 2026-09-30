@@ -27,6 +27,8 @@ from ate_cloud.schemas.aterag_bundle import (
     contract_mismatch_report,
 )
 from ate_cloud.services.aterag_importer import ATERagImporter
+from ate_cloud.services.aterag_script_emit import plan_gaps
+from ate_cloud.services.flow_planner import plan_flow
 
 router = APIRouter(prefix="/imports", tags=["imports"])
 
@@ -34,6 +36,42 @@ router = APIRouter(prefix="/imports", tags=["imports"])
 def get_importer() -> ATERagImporter:
     """Importer factory (overridable in tests via dependency_overrides)."""
     return ATERagImporter()
+
+
+@router.post("/aterag/plan")
+async def plan_aterag_bundle(
+    bundle: BundleModel,
+    _: Annotated[Any, Depends(require_scopes("aterag:import"))] = None,
+) -> dict[str, Any]:
+    """Plan the test sequence for a bundle. Writes nothing.
+
+    Separate from the import because planning is a *review* question — "what
+    would this test, and what is missing?" — asked before anyone commits. The
+    wizard shows the answer next to the sign-off decision, so an approver can
+    see that a requirement has no executable steps while they are still in the
+    room to act on it.
+
+    Planning happens server-side rather than in the browser on purpose: the
+    planner needs the binding table, and shipping that table to the client to
+    reproduce the sequence there would create two implementations that can
+    disagree about the sequence that runs on the line.
+    """
+    assert_contract(bundle, strict=True)
+
+    plan = plan_flow(bundle)
+    gaps = plan_gaps(plan)
+    return {
+        "product_code": plan.product_code,
+        "segments": len(plan.segments),
+        "steps": plan.step_count,
+        "settle_s": round(plan.total_settle_s, 1),
+        "batch_setups": plan.batch_setups,
+        "unmapped": plan.unmapped,
+        "gaps": [g.to_dict() for g in gaps],
+        "pending": plan.pending,
+        "warnings": plan.warnings,
+        "plan_yaml": plan.to_yaml(),
+    }
 
 
 @router.post("/aterag")

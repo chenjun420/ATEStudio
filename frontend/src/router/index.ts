@@ -208,6 +208,12 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/TraceabilityMatrix.vue'),
         meta: { title: '需求追溯矩阵' },
       },
+      {
+        path: 'aterag-review',
+        name: 'AteragReviewWizard',
+        component: () => import('@/views/AteragReviewWizard.vue'),
+        meta: { title: 'ATERag 规格评审' },
+      },
     ],
   },
 

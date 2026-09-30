@@ -8,7 +8,11 @@ import App from './App.vue'
 import router from './router'
 import i18n from './i18n'
 import { initTheme } from './composables/useTheme'
+// TDesign-blue re-theme (D11). Imported AFTER Element Plus's own stylesheet so
+// the variable overrides win, and after style.css so the design tokens in it
+// (which the wizard's custom properties reference) are defined first.
 import './style.css'
+import './styles/terdesign-blue.css'
 
 const app = createApp(App)
 
