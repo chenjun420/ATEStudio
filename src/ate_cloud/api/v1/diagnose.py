@@ -266,21 +266,35 @@ async def diagnose_readiness(request: Request) -> dict[str, Any]:
         blockers.append("缺少 OPENAI_API_KEY —— 症状/故障向量无法嵌入, 检索退化")
     if not qdrant:
         blockers.append("Qdrant 不可用 —— 故障向量库无法读取")
+    # Set by the lifespan when the collection's vector width disagreed with the
+    # configured model. The client and the collection can both be present while
+    # nothing has ever been indexed, so presence checks alone would report this
+    # capability as available and every future diagnosis would return "no similar
+    # past faults" — indistinguishable from a line that has never failed.
+    blockers.extend(getattr(state, "failure_index_blockers", []) or [])
+
+    available = retrieval and not any(
+        b.startswith("Qdrant collection") for b in blockers
+    )
 
     return {
         # `available` is deliberately narrower than "the route exists".
-        "available": retrieval,
+        "available": available,
         "capabilities": {
-            "retrieval": retrieval,
+            "retrieval": available,
             # A suggestion needs retrieval; an LLM only writes it up.
-            "suggestion": retrieval,
-            "llm_writeup": retrieval and llm,
+            "suggestion": available,
+            "llm_writeup": available and llm,
         },
         "blockers": blockers,
         "detail": (
             "诊断建议可用 (无 LLM 时仅返回检索结果)"
-            if retrieval and not llm
-            else ("诊断建议与 LLM 归纳均可用" if retrieval else "故障诊断未启用")
+            if available and not llm
+            else (
+                "诊断建议与 LLM 归纳均可用"
+                if available
+                else ("故障诊断未启用" if not retrieval else "故障索引不可用, 诊断无法检索历史")
+            )
         ),
     }
 

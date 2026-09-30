@@ -13,7 +13,7 @@ from ate_cloud.api.v1.router import api_router
 from ate_cloud.config import settings
 from ate_cloud.nats.sse_bridge import SSEBridge
 from ate_cloud.services.execution_status_relay import ExecutionStatusRelay
-from ate_cloud.services.failure_indexer import FailureIndexer
+from ate_cloud.services.failure_indexer import EmbeddingDimensionMismatchError, FailureIndexer
 from ate_cloud.services.script_versioning import ScriptVersioningService
 
 # Global NATS client (optional - not blocking startup)
@@ -118,9 +118,25 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             embedding_service=embedding_service,
             embedding_dim=settings.embedding_dimensions,
         )
-        await failure_indexer.ensure_collection()
-        failure_indexer.subscribe_to_events(bridge)
-        app.state.failure_indexer = failure_indexer
+        try:
+            await failure_indexer.ensure_collection()
+        except EmbeddingDimensionMismatchError as exc:
+            # Recorded rather than raised: the mismatch means "this capability
+            # is off", not "the service cannot start". Swallowing it silently is
+            # what made this failure invisible before — index_failure logs and
+            # never raises, so fault history just stopped growing.
+            # /diagnose/readiness reads this and stops claiming availability.
+            print(f"Failure indexing disabled: {exc}")  # noqa: T201
+            app.state.failure_index_blockers = [str(exc)]
+            app.state.failure_indexer = None
+            # Nulled locally too, so nothing downstream is handed an indexer
+            # that was never subscribed. ExecutionStatusRelay takes None for
+            # "no indexing", which is the truth here.
+            failure_indexer = None
+        else:
+            app.state.failure_index_blockers = []
+            failure_indexer.subscribe_to_events(bridge)
+            app.state.failure_indexer = failure_indexer
 
         # Automatic failure→KG evolution (task 16): after a failure is
         # indexed, evolve the ontology KG via the task-7 pipeline. The
@@ -157,10 +173,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             app.state.graph_service = graph_service
             return pipeline
 
-        failure_indexer.set_evolution_trigger(
-            FailureEvolutionTrigger(resolve=_resolve_failure_pipeline).evolve_from_failure
-        )
-        print(f"Failure indexer initialized with Qdrant at {settings.qdrant_url}")  # noqa: T201
+        if failure_indexer is not None:
+            failure_indexer.set_evolution_trigger(
+                FailureEvolutionTrigger(resolve=_resolve_failure_pipeline).evolve_from_failure
+            )
+            print(  # noqa: T201
+                "Failure indexer initialized with Qdrant at "
+                f"{settings.qdrant_url} (dim={settings.embedding_dimensions})"
+            )
     except ImportError:
         print("qdrant-client not installed; failure indexing disabled")  # noqa: T201
     except Exception as e:

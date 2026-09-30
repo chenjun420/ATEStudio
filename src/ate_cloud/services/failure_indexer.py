@@ -56,6 +56,15 @@ _METADATA_FIELDS: list[str] = [
 ]
 
 
+class EmbeddingDimensionMismatchError(RuntimeError):
+    """The Qdrant collection's vector width is not what the model produces.
+
+    Separate from the generic error path so callers can treat it as "the
+    capability is off" rather than "Qdrant is unreachable" — the two need
+    different fixes, and only one of them is worth retrying.
+    """
+
+
 class FailureIndexer:
     """Indexes failed test execution events in Qdrant for similarity search.
 
@@ -111,7 +120,22 @@ class FailureIndexer:
         self._evolution_hook = hook
 
     async def ensure_collection(self) -> None:
-        """Create Qdrant collection if it does not exist."""
+        """Create the Qdrant collection if absent; refuse if its width is wrong.
+
+        The width check is the point of this method. Vector width is a property
+        of the embedding model, and models differ: OpenAI's
+        ``text-embedding-3-small`` is 1536, the Qwen text-embedding model this
+        deployment uses is 1024. Change one without the other and every upsert
+        fails — inside ``index_failure``, which runs as a background task and
+        logs rather than raises. So the failure mode is not an error, it is
+        fault history that quietly stops accumulating while the dashboard keeps
+        reporting the same totals.
+
+        Refusing loudly is also the right call over auto-recreating: a recreate
+        would delete the history that does match, to fix a problem that is one
+        environment variable away. Reindex deliberately, or point the config at
+        the model the collection was built with.
+        """
         try:
             from qdrant_client.http import models as qmodels
 
@@ -131,8 +155,27 @@ class FailureIndexer:
                     self._collection_name,
                     self._embedding_dim,
                 )
-            else:
-                logger.debug("Qdrant collection '%s' already exists", self._collection_name)
+                return
+
+            info = self._qdrant_client.get_collection(self._collection_name)
+            existing = getattr(info.config.params, "vectors", None)
+            existing_size = getattr(existing, "size", None)
+            if existing_size is not None and existing_size != self._embedding_dim:
+                raise EmbeddingDimensionMismatchError(
+                    f"Qdrant collection {self._collection_name!r} holds "
+                    f"{existing_size}-dim vectors but the configured embedding "
+                    f"model produces {self._embedding_dim}-dim vectors "
+                    f"(ATE_CLOUD_EMBEDDING_DIMENSIONS). Failure history would not "
+                    f"be indexed, and the dashboard totals would silently stop "
+                    f"changing. Fix the setting to match the model, or reindex "
+                    f"into a new collection deliberately."
+                )
+            logger.debug("Qdrant collection '%s' already exists", self._collection_name)
+        except EmbeddingDimensionMismatchError:
+            # Deliberate and not swallowed: the caller records it on app.state so
+            # /diagnose/readiness can report the capability as degraded instead
+            # of available. A log line nobody reads is the old failure mode.
+            raise
         except Exception as e:
             logger.error("Failed to ensure Qdrant collection '%s': %s", self._collection_name, e)
 

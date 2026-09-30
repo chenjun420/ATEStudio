@@ -61,7 +61,24 @@ class Settings(BaseSettings):
     # Qdrant configuration
     qdrant_url: str = "http://localhost:6333"
     qdrant_collection_failures: str = "ate_failures"
+    #: Vector width. This is NOT a free choice: it must equal what the configured
+    #: embedding model actually returns, and models differ. OpenAI's
+    #: text-embedding-3-small is 1536; the Qwen text-embedding model this
+    #: deployment uses is 1024 (measured, not assumed). A mismatch against an
+    #: existing Qdrant collection is detected at startup — see
+    #: ``FailureIndexer.ensure_collection`` — because the alternative is insert
+    #: failures that are logged and never raised, i.e. fault history silently
+    #: stops accumulating.
     embedding_dimensions: int = 1536  # DeepAgents / OpenAI compatible
+    #: Whether to tokenize locally and send token ids instead of strings.
+    #: Defaults off, and the default is the deliberate choice: the tokenizer
+    #: would be OpenAI's, which is the wrong tokenizer for any non-OpenAI
+    #: embedding model — it mis-splits long text into batches, and providers
+    #: that do not use that tokenizer reject the payload outright. DashScope's
+    #: OpenAI-compatible endpoint answers ``input must be an array of strings``.
+    #: Turn on only for a real OpenAI endpoint, and accept that the chunking is
+    #: then tuned to OpenAI's tokenizer.
+    embedding_check_ctx_length: bool = False
 
     # Upload queue settings
     upload_queue_max_size: int = Field(

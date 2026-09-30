@@ -129,12 +129,19 @@ class TestEnsureCollection:
 
     @pytest.mark.asyncio
     async def test_skips_when_collection_exists(self, indexer: FailureIndexer, mock_qdrant: MagicMock) -> None:
-        """ensure_collection skips when collection already exists."""
+        """ensure_collection skips when collection already exists.
+
+        The stub has to report a vector width as well now: ``ensure_collection``
+        checks it, and a bare MagicMock attribute is not an int, so an
+        unconfigured stub reads as a mismatch. That is the check working, not the
+        test being wrong — a wrong width is exactly what it exists to catch.
+        """
         from qdrant_client.http.models import CollectionDescription
 
         mock_qdrant.get_collections.return_value.collections = [
             CollectionDescription(name="ate_failures")
         ]
+        mock_qdrant.get_collection.return_value.config.params.vectors.size = 3
         mock_qdrant.create_collection.reset_mock()
 
         await indexer.ensure_collection()
