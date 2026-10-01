@@ -37,19 +37,47 @@ ROUTER = REPO / "frontend" / "src" / "router" / "index.ts"
 _PATH = re.compile(r"""path:\s*['"]([^'"]+)['"]""")
 
 
-def _seeded_route_paths() -> set[str]:
-    out: set[str] = set()
-    for app in default_apps:
-        for menu in app["menus"]:
-            if menu.get("route_path"):
-                out.add(menu["route_path"])
+def _walk(menus: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Every seed row, groups and pages alike, in tree order."""
+    out: list[dict[str, object]] = []
+    for menu in menus:
+        out.append(menu)
+        children = menu.get("children")
+        if children:
+            out.extend(_walk(children))  # type: ignore[arg-type]
     return out
 
 
+def _seeded_rows() -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for app in default_apps:
+        rows.extend(_walk(app["menus"]))
+    return rows
+
+
+def _seeded_route_paths() -> set[str]:
+    return {str(m["route_path"]) for m in _seeded_rows() if m.get("route_path")}
+
+
 def _router_paths() -> set[str]:
+    """Declared paths, minus the 404 catch-all.
+
+    The catch-all is ``/:pathMatch(.*)*``. Its ``:`` prefix makes it a wildcard
+    for the segment matcher below, so leaving it in made **every** single-segment
+    tail "resolve" -- including ones that do not exist:
+
+        /ops  +  'faultcase'  ->  'faultcase' matches ':pathMatch(.*)*'  ->  True
+
+    So a menu repointed from ``/ops/fault-cases`` to ``/ops/faultcase`` passed
+    this file's central check. Found by mutation: the check that exists to
+    prevent "the menu points at nothing" was passing a menu that pointed at
+    nothing. The router's own version is declared by the trailing ``*`` on the
+    repeat, so dropping literals containing ``*`` removes it without
+    special-casing the route name.
+    """
     if not ROUTER.is_file():
         pytest.skip(f"找不到路由源文件: {ROUTER}")
-    return set(_PATH.findall(ROUTER.read_text(encoding="utf-8")))
+    return {p for p in _PATH.findall(ROUTER.read_text(encoding="utf-8")) if "*" not in p}
 
 
 def _segments(path: str) -> list[str]:
@@ -108,14 +136,53 @@ class TestSeededRoutesResolve:
     def test_the_seed_declares_routes(self) -> None:
         assert len(_seeded_route_paths()) >= 15, "种子菜单的 route_path 数量异常"
 
+    def test_every_seed_row_has_a_code(self) -> None:
+        """Codes are the idempotency key for seeding and the i18n key for labels.
+
+        A row without one cannot be re-seeded and cannot be translated, so it
+        would silently fall back to its Chinese database name in every locale.
+        """
+        missing = [
+            f"{app['code']}/{m.get('name', '?')}"
+            for app in default_apps
+            for m in _walk(app["menus"])
+            if not m.get("code")
+        ]
+        assert not missing, f"种子行缺少 code: {missing}"
+
+    def test_groups_are_exactly_the_rows_without_a_route(self) -> None:
+        """The group/page split is defined by ``route_path``, so it needs a guard.
+
+        Making ``route_path`` nullable (alembic f2b3c4d5e6a7) opened a way for the
+        distinction to rot: a group that grew a route becomes a menu entry that
+        navigates to a page that does not exist, and a page that lost its route
+        becomes a header above nothing. Both are silent.
+
+        So: a group has children and no route; a page has a route. Nesting deeper
+        than group → page is what the spec's "depth 3" forbids, and the sidebar
+        renders exactly two levels.
+        """
+        offenders: list[str] = []
+        for app in default_apps:
+            for row in _walk(app["menus"]):
+                has_children = bool(row.get("children"))
+                has_route = bool(row.get("route_path"))
+                if has_children and not has_route:
+                    continue  # a group, as intended
+                if has_route and not has_children:
+                    continue  # a page, as intended
+                offenders.append(
+                    f"{app['code']}/{row.get('code')}: "
+                    f"route={row.get('route_path')!r} children={len(row.get('children') or [])}"
+                )
+        assert not offenders, (
+            "种子行的分组/页面结构不对 —— 分组必须有子项且无路由, 页面必须有路由且无子项:\n"
+            + "\n".join(f"  {o}" for o in offenders)
+        )
+
     def test_no_seeded_route_is_a_duplicate(self) -> None:
         """Two menus on the same path is a routing bug waiting to happen."""
-        seen = [
-            m["route_path"]
-            for app in default_apps
-            for m in app["menus"]
-            if m.get("route_path")
-        ]
+        seen = [str(m["route_path"]) for m in _seeded_rows() if m.get("route_path")]
         dupes = {p for p in seen if seen.count(p) > 1}
         assert not dupes, f"重复的 route_path: {sorted(dupes)}"
 
@@ -128,16 +195,61 @@ class TestSeededRoutesResolve:
         unresolved = [r for r in sorted(_seeded_route_paths()) if not _resolves(r)]
         assert not unresolved, f"菜单指向这些路径, 但 Vue 路由里拼不出来: {unresolved}"
 
+    def test_a_route_that_does_not_exist_does_not_resolve(self) -> None:
+        """The negative case, which the summary test above cannot express.
+
+        Every other check here asks "does a real path resolve?". Nothing asked
+        the opposite, so the resolver could grow a false positive and stay green
+        — which is exactly what happened: the 404 catch-all
+        ``/:pathMatch(.*)*`` counted as declaring any single-segment tail, so
+        ``/ops/faultcase`` resolved and a menu repointed from
+        ``/ops/fault-cases`` passed unnoticed.
+
+        Each path below is one segment off a parent that *does* exist, which is
+        the shape that matched the catch-all.
+        """
+        for bogus in (
+            "/ops/faultcase",       # real: /ops/fault-cases
+            "/ops/station",         # real: /ops/stations
+            "/dev/traceabilty",     # real: /dev/traceability
+            "/ops/deeply/nested/menu",
+        ):
+            assert not _resolves(bogus), (
+                f"{bogus} 在路由表里不存在, 但解析器说它能解析 —— "
+                "解析器对不存在的路径返回了 True"
+            )
+
+    def test_the_catch_all_route_is_excluded_from_the_literal_set(self) -> None:
+        """Guards the guard.
+
+        If the router ever stops using ``*`` for the 404 catch-all, this filter
+        silently stops excluding it and the negative test above starts failing
+        for the wrong reason. Asserting the exclusion is what makes the failure
+        legible.
+        """
+        literals = _router_paths()
+        assert "/:pathMatch(.*)*" not in literals, (
+            "404 兜底路由又回到字面量集合里了 —— 任何单段子路径都会被它匹配上"
+        )
+        assert _PATH.findall(ROUTER.read_text(encoding="utf-8")), "路由表里一个字面量都没有了"
+
     def test_the_resolver_actually_resolves_the_common_shape(self) -> None:
         """Pin the fix for the spurious 19.
 
         If the join logic regressed into "matches nothing", the summary test
         above would go red for the wrong reason and look like a product break.
+
+        The router declares parents absolutely (``/ops``) and children relatively
+        (``stations``), so no literal ever reads ``/ops/stations`` and a naive
+        comparison matches nothing.
         """
         literals = _router_paths()
-        assert "/node" in literals and "stations" in literals, (
+        assert "/ops" in literals and "stations" in literals, (
             "路由表的形状变了(父路由不再绝对、子路由不再相对), "
             "本文件的拼接解析需要跟着改"
         )
-        assert _resolves("/node/stations")
-        assert _resolves("/node/stations/:id")
+        assert "/ops/stations" not in literals, (
+            "出现了拼接形式的字面量 —— 解析逻辑的前提变了"
+        )
+        assert _resolves("/ops/stations")
+        assert _resolves("/dev/sequences")

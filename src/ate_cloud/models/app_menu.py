@@ -50,7 +50,11 @@ class AppMenu(Base):
     )
     code: Mapped[str] = mapped_column(String(64), nullable=False)
     name: Mapped[str] = mapped_column(String(128), nullable=False)
-    route_path: Mapped[str] = mapped_column(String(256), nullable=False)
+    #: NULL for a group row. A group is a container in the sidebar: clicking it
+    #: expands, it does not navigate. The column used to be NOT NULL, which
+    #: forced every group to invent a path -- and an invented path is a menu
+    #: entry pointing at a page that does not exist. See alembic f2b3c4d5e6a7.
+    route_path: Mapped[str | None] = mapped_column(String(256), nullable=True)
     route_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     icon: Mapped[str | None] = mapped_column(String(64), nullable=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

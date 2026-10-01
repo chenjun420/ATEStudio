@@ -234,7 +234,22 @@ D6 原文:「Agent 只读 MCP;写回走管理面」。新路径不违反:
 | **P6** | 注记起草进界面(可裁剪) | P5 |
 | **P7** | e2e 扩展 + 操作手册更新 | P4–P6 |
 
-**进度:P0、P1 已完成并部署至 192.168.5.24。** P1 板上实测 14/14(见 §6.5)。下一期为 P2。
+**进度:P0、P1 已完成并部署至 192.168.5.24。** P1 板上实测 14/14(见 §6.5)。
+
+**P2 已完成代码与测试,尚未上板。** 交付内容:
+
+| 项 | 落点 |
+|---|---|
+| 两级 IA(顶栏 2 模式 + 分组侧栏) | `api/v1/apps.py` 种子重写、`layouts/AppLayout.vue` |
+| 术语改名 工位(工位列表 / 工位执行器 / 工位管理) | 路由、i18n、`menuLabels.ts`、`views/` |
+| 上下文选择器 两级 | `composables/useContext.ts`、`components/ContextSelector.vue` |
+| 型号聚合 + 产品类型(经 ATERag 只读 MCP) | `api/v1/models_catalog.py`、`services/aterag_catalog.py` |
+| 工位列表 / 工位故障案例库 两个新页面 | `views/StationList.vue`、`views/FaultCaseLibrary.vue` |
+| 分组菜单需要可空 `route_path` | 迁移 `f2b3c4d5e6a7` |
+
+**尚未做**:上板部署与端到端实测(SSH 凭据未就绪)、`/diagnose/readiness` 置灰不可用菜单。
+后者原计划在 P2,现推后 —— 需要先有一次板端运行才能确定哪些能力真不可用,凭空置灰
+是另一种形式的界面说谎。
 
 P0/P1 提前的理由:`/diagnose` 是故障智能的地基,而移除图谱会让它第一次真正可用 —— **先让它能跑,再拆掉拖垮它的部分**。
 
@@ -259,3 +274,30 @@ P0/P1 提前的理由:`/diagnose` 是故障智能的地基,而移除图谱会让
 - `PN2000-24A` fixture 是否真客户数据 —— 只有用户知道
 - `domain_rules/power/rules.yaml` 的 `source` 字段仍含 `PA601` 可识别痕迹
 - NATS 4222 无鉴权
+
+### 12.1 P2 已消掉的待决项(留档,因为当时判断错过)
+
+**厂区/工位建成前,运行监控的上下文选择器无数据可选** —— 已消掉。`plants` /
+`stations` 在 P0 建好,P2 补了前端客户端(`api/plants.ts` 与两个新页面),厂区→工位
+这一级现在有真实数据。
+
+**「产品类型 → 型号」的第二级缺数据源** —— 这条当时被写成了「结构缺失」,是错的。
+型号与产品类型的映射在 ATERag 侧**早就存在**:
+
+- `ATERag/src/aterag/registry.py`:`ProductEntry{domain, doc_number, doc_version}`
+  按 `model_id` 建索引,持久化成一个 YAML;
+- `ATERag/src/aterag/mcp_server/server.py:610`:`list_models` 工具返回
+  `{products: {型号: 产品类型}, domains: {产品类型: 状态}}`;
+- 该工具**早已**在 ATERag 的只读 MCP 白名单 `ALLOWED_TOOLS` 里。
+
+缺的只是 ATEStudio 这一侧的接线 —— 本库 `test_requirements` 有 `product_code`、
+`product_configs` 有 `product_type`,两者之间无键。P2 补上了:
+`services/aterag_catalog.py` 经只读 MCP 取这一级(不走文件、不走对方数据库,
+符合 D2/D6),`GET /api/v1/models` 因此带回 `product_type`。
+
+取不到时**诚实降级**:响应带 `catalog_source="unavailable"` 与 `catalog_warning`,
+前端把该级**置灰并说明原因**,而不是让这一级悄悄消失 —— 消失会被读成「设计就是
+单级」。
+
+> 教训:当时写下的「要等 P4 的 bundle 契约才会有」,是把「本库没有」当成了「没有」。
+> 跨仓库的结论, 在写下来之前应当先去对面仓库确认一次。

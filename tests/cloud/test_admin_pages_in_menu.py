@@ -76,8 +76,31 @@ class TestMenusAreSeeded:
             assert _menu(code)["required_permissions"], code
 
 
-class TestDropdownNoLongerCarriesThem:
-    """The dropdown must not keep a second, differently-gated entry point."""
+class TestDropdownIsNavigationNotASecondGate:
+    """The dropdown may point at these pages, but it must not decide access.
+
+    What changed, and why it is not a regression
+    ---------------------------------------------
+    The spec's top bar has exactly two items (产测开发 / 运行监控), so system
+    administration is reached from the account dropdown (§4.4). That put these
+    two pages back in the dropdown as navigation shortcuts.
+
+    What did **not** change is where access is decided, which is the whole point
+    of this file:
+
+    * they remain seeded menu rows under ``system`` with
+      ``required_permissions: ["admin:read"]``, which the server evaluates;
+    * their routes carry ``meta.requiresAdmin``;
+    * the endpoints behind them are scope-checked.
+
+    So the dropdown item is a shortcut to a page the server already protects.
+    Before, the dropdown item *was* the entry point and its visibility came from
+    a token-derived flag the server never read — which is what made it advisory.
+
+    The distinction this class pins: a dropdown command must navigate to the same
+    path the menu uses. If it ever grows its own gate, or its own fetches, or
+    diverges from the menu's route, the two gates are back.
+    """
 
     @pytest.fixture(scope="class")
     @classmethod
@@ -86,9 +109,8 @@ class TestDropdownNoLongerCarriesThem:
 
         Comments have to go: the code that made this change explains *why* in
         prose, and that prose necessarily names ``command="users"`` and
-        ``isAdmin`` — the very strings being asserted absent. Matching raw text
-        therefore fails on the explanation of the fix, which is both silly and
-        fragile in the other direction (deleting the comment would "fix" it).
+        ``isAdmin`` — the very strings being asserted on. Matching raw text
+        therefore fails on the explanation of the change.
         """
         assert LAYOUT.is_file(), f"找不到 {LAYOUT}"
         src = LAYOUT.read_text(encoding="utf-8")
@@ -97,37 +119,59 @@ class TestDropdownNoLongerCarriesThem:
         return src
 
     @pytest.mark.parametrize("code", ADMIN_ONLY)
-    def test_no_dropdown_item(self, layout: str, code: str) -> None:
-        assert f'command="{code}"' not in layout, (
-            f"{code} 仍在右上角下拉里 —— 用户要的是它出现在系统管理菜单下, "
-            f"而不是两个地方各有一个入口"
+    def test_dropdown_command_navigates_to_the_menu_route(
+        self, layout: str, code: str
+    ) -> None:
+        """A shortcut, not a second implementation.
+
+        The command has to push the *same* path the seeded menu row carries. If
+        the two ever differ, one of them is showing a page the other does not
+        offer — and whichever is wrong, the user cannot tell which.
+        """
+        assert f'command="{code}"' in layout, f"下拉里的 {code} 入口不见了"
+        branch = re.search(rf"case\s+'{code}'\s*:(.*?)break;?", layout, re.S)
+        assert branch, f"handleCommand 里没有 '{code}' 分支 —— 下拉项会静默无反应"
+        expected = _menu(code)["route_path"]
+        assert expected in branch.group(1), (
+            f"下拉的 {code} 跳向的路径与菜单不一致: 菜单是 {expected}"
         )
 
     @pytest.mark.parametrize("code", ADMIN_ONLY)
-    def test_no_dead_command_case(self, layout: str, code: str) -> None:
-        """A `case 'users':` with no matching item is dead code.
+    def test_dropdown_does_not_fetch_or_decide(self, layout: str, code: str) -> None:
+        """No data call, no permission check — just a route.
 
-        Kept deliberately absent so a future `command="users"` fails at review
-        time instead of silently doing nothing.
+        Anything more in this branch is a second gate wearing a shortcut's
+        clothes: it would have its own notion of who may see the page, and the two
+        notions would eventually disagree.
         """
-        assert not re.search(rf"case\s+'{code}'\s*:", layout), (
-            f"handleCommand 里还留着 '{code}' 分支, 但下拉已无对应项"
-        )
+        branch = re.search(rf"case\s+'{code}'\s*:(.*?)break;?", layout, re.S)
+        assert branch, f"没有 '{code}' 分支"
+        body = branch.group(1)
+        for forbidden in ("http", "fetch(", "api.", "hasScope", "permissions"):
+            assert forbidden not in body, (
+                f"下拉的 {code} 分支里出现了 {forbidden!r} —— "
+                "下拉应当只负责跳转, 访问权由菜单与服务端判定"
+            )
 
     def test_dropdown_keeps_the_personal_actions(self, layout: str) -> None:
-        """Relocating admin pages must not take the account actions with them."""
+        """Restructuring the dropdown must not take the account actions with it."""
         for command in ("settings", "password", "logout"):
             assert f'command="{command}"' in layout, f"下拉里的 {command} 不见了"
 
-    def test_admin_flag_is_no_longer_bound(self, layout: str) -> None:
-        """``isAdmin`` gated those items on a client-side flag.
+    def test_the_personal_group_is_not_gated_by_is_admin(self, layout: str) -> None:
+        """``isAdmin`` may hide a shortcut, but not a personal action.
 
-        Leaving it destructured invites the next control to be gated the same
-        way — advisory visibility that the server never checks.
+        修改密码 / 语言 / 主题 belong to whoever is signed in. Gating them on an
+        admin flag would lock a normal user out of changing their own password —
+        and it is the kind of copy-paste that brought the admin items here in the
+        first place.
         """
-        assert "isAdmin" not in layout, "isAdmin 仍被解构, 但已无使用点"
+        for command in ("password", "logout"):
+            pattern = re.compile(
+                rf'v-if="[^"]*isAdmin[^"]*"\s*>\s*<el-dropdown-item\s+command="{command}"'
+            )
+            assert not pattern.search(layout), f"{command} 被 isAdmin 挡住了"
 
-    def test_stripping_comments_is_actually_working(self, layout: str) -> None:
         """Guards the guard.
 
         If the comment stripper silently stopped matching, every assertion above

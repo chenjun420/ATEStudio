@@ -23,42 +23,58 @@
 
 import type { AppMenuItem } from '@/api/apps'
 
-/** Menu `code` (as seeded in the backend) → i18n key under `menu.`. */
+/**
+ * Menu `code` (as seeded in the backend) -> i18n key under `menu.`.
+ *
+ * Groups are listed alongside pages. AppLayout resolves group labels through the
+ * same table, and the parity test walks it, so a group missing here is a group
+ * whose label is pinned to one language.
+ */
 const MENU_KEY_BY_CODE: Record<string, string> = {
-  // node-mgmt
-  stations: 'menu.stationList',
-  'node-detail': 'menu.nodeDetail',
-  // flow-mgmt
+  // -- 产测开发 (test-dev) ------------------------------------------------
+  traceability: 'menu.traceabilityMatrix',
+  'condition-review': 'menu.conditionReview',
   sequences: 'menu.sequenceList',
   'sequence-editor': 'menu.flowEditor',
-  'flow-templates': 'menu.nodeTemplates',
+  'flow-templates': 'menu.flowNodeTemplates',
   scripts: 'menu.scriptManagement',
-  'node-binding': 'menu.nodeFlowBinding',
   'fixture-designer': 'menu.fixtureDesigner',
-  // exec-monitor
+  'station-management': 'menu.stationManagement',
+  // groups
+  requirements: 'menu.groupRequirements',
+  process: 'menu.groupProcess',
+  'station-binding': 'menu.groupStationBinding',
+
+  // -- 运行监控 (runtime) -------------------------------------------------
   dashboard: 'menu.dashboard',
   history: 'menu.executionHistory',
   measurements: 'menu.measurements',
   reports: 'menu.reports',
   tracing: 'menu.tracing',
   'simulation-console': 'menu.simulationConsole',
-  'operator-panel': 'menu.operatorPanel',
-  // system
-  settings: 'menu.settings',
-  changeover: 'menu.productChangeover',
+  stations: 'menu.stationList',
+  workers: 'menu.workerRegistry',
   calibration: 'menu.calibration',
+  changeover: 'menu.productChangeover',
+  'fault-cases': 'menu.faultCaseLibrary',
   fmea: 'menu.fmea',
+  // groups
+  line: 'menu.groupLine',
+  execution: 'menu.groupExecution',
+  debug: 'menu.groupDebug',
+  'station-ops': 'menu.groupStationOps',
+  fault: 'menu.groupFault',
+
+  // -- 系统 (system) ------------------------------------------------------
+  settings: 'menu.settings',
   users: 'menu.userManagement',
   roles: 'menu.roleManagement',
-  // defined in AppLayout until the backend seed learns them
-  traceability: 'menu.traceabilityMatrix',
 }
 
-/** Top-level app `code` → i18n key. */
+/** Top-level app `code` -> i18n key. */
 const APP_KEY_BY_CODE: Record<string, string> = {
-  'node-mgmt': 'menu.nodeManagement',
-  'flow-mgmt': 'menu.flowManagement',
-  'exec-monitor': 'menu.executionMonitoring',
+  'test-dev': 'menu.testDevelopment',
+  runtime: 'menu.runtimeMonitoring',
   system: 'menu.systemManagement',
 }
 

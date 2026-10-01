@@ -1,5 +1,5 @@
 /**
- * Tests for StationManagement.vue view component.
+ * Tests for WorkerRegistry.vue -- the executor-process registry at /ops/workers.
  *
  * Verifies:
  * - Table renders with correct columns and worker data.
@@ -22,7 +22,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { ref, reactive, nextTick, h, defineComponent } from 'vue'
 import ElementPlus from 'element-plus'
-import StationManagement from '../StationManagement.vue'
+import WorkerRegistry from '../WorkerRegistry.vue'
 import type { WorkerInfo } from '@/api/stations'
 import type { WorkerStatus } from '@/composables/useStations'
 
@@ -238,7 +238,7 @@ function createExpiringWorker(overrides: Partial<WorkerInfo> = {}): WorkerInfo {
 }
 
 function mountComponent() {
-  return mount(StationManagement, {
+  return mount(WorkerRegistry, {
     global: {
       plugins: [ElementPlus],
       stubs: {
@@ -251,7 +251,7 @@ function mountComponent() {
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
-describe('StationManagement', () => {
+describe('WorkerRegistry', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockState = reactive(createMockState())

@@ -13,7 +13,10 @@ class AppMenuResponse(BaseModel):
     parent_id: str | None = None
     code: str
     name: str
-    route_path: str
+    #: NULL marks a group: a sidebar container that expands rather than
+    #: navigates. A non-NULL value must resolve to a real frontend route —
+    #: ``tests/cloud/test_menu_routes_resolve.py`` asserts it.
+    route_path: str | None = None
     route_name: str | None = None
     icon: str | None = None
     sort_order: int
@@ -59,7 +62,8 @@ class MenuCreateRequest(BaseModel):
 
     code: str
     name: str
-    route_path: str
+    #: Omit or pass null to create a group row.
+    route_path: str | None = None
     route_name: str | None = None
     icon: str | None = None
     sort_order: int = 0

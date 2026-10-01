@@ -39,176 +39,376 @@ router = APIRouter(prefix="/apps", tags=["apps"])
 # dynamic segment (e.g. /operator/:station_id) the entry points at a concrete
 # default path because AppLayout strips /:param segments on menu click.
 default_apps: list[dict[str, Any]] = [
+    # ── 产测开发 ────────────────────────────────────────────────────────────
+    # Top-level mode 1. Engineering state: author the test, do not run it.
+    # NI TestStand's architecture card puts the split at "depending on mode,
+    # edit, execute, and debug test sequences" — mode is what separates the
+    # engineering surface from the operating surface, so it is the top level.
     {
-        "code": "node-mgmt",
-        "name": "节点管理",
-        "description": "管理测试节点注册、状态监控及配置下发",
-        "icon": "Monitor",
+        "code": "test-dev",
+        "name": "产测开发",
+        "description": "规格书驱动的需求、用例与产测流程编排",
+        "icon": "Edit",
         "sort_order": 1,
         "menus": [
             {
-                "code": "stations",
-                "name": "节点列表",
-                "route_path": "/node/stations",
-                "route_name": "StationManagement",
-                "icon": "List",
+                "code": "requirements",
+                "name": "需求与用例",
+                "route_path": None,
+                "route_name": None,
+                "icon": "Document",
                 "sort_order": 1,
-                "required_permissions": ["node:read"],
+                # Union of the pages below: a group with no requirement of its own
+                # would be visible to every account, because the filter reads an
+                # empty list as 'no restriction'. See test_a_group_requires_what_its_
+                # pages_require.
+                "required_permissions": ["knowledge:read", "knowledge:write"],
+                "children": [
+                    # Lands the mode. 型号总览 is the spec's intended landing page
+                    # but belongs to P5 (import wizard), so the page that already
+                    # answers "what does this model have to be tested against"
+                    # takes the position: every requirement, its cases and its
+                    # conditions, with the approval state visible per row.
+                    {
+                        "code": "traceability",
+                        "name": "需求追溯矩阵",
+                        "route_path": "/dev/traceability",
+                        "route_name": "TraceabilityMatrix",
+                        "icon": "Share",
+                        "sort_order": 1,
+                        "required_permissions": ["knowledge:read"],
+                    },
+                    {
+                        "code": "condition-review",
+                        "name": "条件评审向导",
+                        "route_path": "/dev/condition-review",
+                        "route_name": "AteragReviewWizard",
+                        "icon": "Checked",
+                        "sort_order": 2,
+                        "required_permissions": ["knowledge:read", "knowledge:write"],
+                    },
+                ],
             },
             {
-                "code": "node-detail",
-                "name": "节点详情",
-                "route_path": "/node/stations/:id",
-                "route_name": "NodeDetail",
-                "icon": "View",
+                "code": "process",
+                "name": "流程与脚本",
+                "route_path": None,
+                "route_name": None,
+                "icon": "Connection",
                 "sort_order": 2,
-                "required_permissions": ["node:read"],
+                # Union of the pages below: a group with no requirement of its own
+                # would be visible to every account, because the filter reads an
+                # empty list as 'no restriction'. See test_a_group_requires_what_its_
+                # pages_require.
+                "required_permissions": ["flow:read"],
+                "children": [
+                    {
+                        "code": "sequences",
+                        "name": "流程列表",
+                        "route_path": "/dev/sequences",
+                        "route_name": "SequenceList",
+                        "icon": "List",
+                        "sort_order": 1,
+                        "required_permissions": ["flow:read"],
+                    },
+                    # Points at the parameterless editor, not at ``sequences/:id``.
+                    # Clicking a menu strips ``:param`` segments, so a dynamic path
+                    # here would land on the list page while the menu claimed to
+                    # open the editor.
+                    {
+                        "code": "sequence-editor",
+                        "name": "流程编排",
+                        "route_path": "/dev/editor",
+                        "route_name": "SequenceEditor",
+                        "icon": "Edit",
+                        "sort_order": 2,
+                        "required_permissions": ["flow:read"],
+                    },
+                    # 流程节点模板 keeps 节点. A flow node is a step in the test
+                    # sequence graph; a 工位 is a physical position on the line.
+                    # The spec renames the station concept and keeps this one
+                    # (§4.2 lists it as 流程节点模板), and conflating them would
+                    # put "where do I stand" in the sequence editor.
+                    {
+                        "code": "flow-templates",
+                        "name": "流程节点模板",
+                        "route_path": "/dev/templates",
+                        "route_name": "NodeTemplates",
+                        "icon": "CopyDocument",
+                        "sort_order": 3,
+                        "required_permissions": ["flow:read"],
+                    },
+                    {
+                        "code": "scripts",
+                        "name": "脚本管理",
+                        "route_path": "/dev/scripts",
+                        "route_name": "ScriptManagement",
+                        "icon": "Document",
+                        "sort_order": 4,
+                        "required_permissions": ["flow:read"],
+                    },
+                    {
+                        "code": "fixture-designer",
+                        "name": "工装设计调试器",
+                        "route_path": "/dev/fixture-designer",
+                        "route_name": "FixtureDesigner",
+                        "icon": "SetUp",
+                        "sort_order": 5,
+                        "required_permissions": ["flow:read"],
+                    },
+                ],
+            },
+            {
+                "code": "station-binding",
+                "name": "工位绑定",
+                "route_path": None,
+                "route_name": None,
+                "icon": "Link",
+                "sort_order": 3,
+                # Union of the pages below: a group with no requirement of its own
+                # would be visible to every account, because the filter reads an
+                # empty list as 'no restriction'. See test_a_group_requires_what_its_
+                # pages_require.
+                "required_permissions": ["flow:read", "node:read"],
+                "children": [
+                    # 节点流程绑定 renamed to 工位管理 (§4.5): what it binds is a
+                    # 工位 to a flow, and both halves now say so.
+                    {
+                        "code": "station-management",
+                        "name": "工位管理",
+                        "route_path": "/dev/station-management",
+                        "route_name": "StationManagement",
+                        "icon": "Link",
+                        "sort_order": 1,
+                        "required_permissions": ["flow:read", "node:read"],
+                    },
+                ],
             },
         ],
     },
+    # ── 运行监控 ────────────────────────────────────────────────────────────
+    # Top-level mode 2. Operating state: run the test, watch it, debug it.
     {
-        "code": "flow-mgmt",
-        "name": "流程管理",
-        "description": "可视化流程编排、版本化管理及节点流程绑定",
-        "icon": "Connection",
+        "code": "runtime",
+        "name": "运行监控",
+        "description": "产线实时运行、执行数据与故障诊断",
+        "icon": "DataLine",
         "sort_order": 2,
         "menus": [
             {
-                "code": "sequences",
-                "name": "流程列表",
-                "route_path": "/flow/sequences",
-                "route_name": "SequenceList",
-                "icon": "List",
-                "sort_order": 1,
-                "required_permissions": ["flow:read"],
-            },
-            {
-                "code": "sequence-editor",
-                "name": "流程编排",
-                "route_path": "/flow/editor",
-                "route_name": "SequenceEditor",
-                "icon": "Edit",
-                "sort_order": 2,
-                "required_permissions": ["flow:read"],
-            },
-            {
-                "code": "flow-templates",
-                "name": "流程节点模板",
-                "route_path": "/flow/templates",
-                "route_name": "NodeTemplates",
-                "icon": "CopyDocument",
-                "sort_order": 3,
-                "required_permissions": ["flow:read"],
-            },
-            {
-                "code": "scripts",
-                "name": "脚本管理",
-                "route_path": "/flow/scripts",
-                "route_name": "ScriptManagement",
-                "icon": "Document",
-                "sort_order": 4,
-                "required_permissions": ["flow:read"],
-            },
-            {
-                "code": "node-binding",
-                "name": "节点流程绑定",
-                "route_path": "/flow/binding",
-                "route_name": "NodeFlowBinding",
-                "icon": "Link",
-                "sort_order": 5,
-                "required_permissions": ["flow:read", "node:read"],
-            },
-            {
-                "code": "fixture-designer",
-                "name": "工装设计调试器",
-                "route_path": "/flow/fixture-designer",
-                "route_name": "FixtureDesigner",
-                "icon": "SetUp",
-                "sort_order": 6,
-                "required_permissions": ["flow:read"],
-            },
-        ],
-    },
-    {
-        "code": "exec-monitor",
-        "name": "执行监控",
-        "description": "实时监控测试执行状态、历史记录及报告导出",
-        "icon": "DataLine",
-        "sort_order": 3,
-        "menus": [
-            {
-                "code": "dashboard",
-                "name": "实时看板",
-                "route_path": "/monitor/dashboard",
-                "route_name": "Dashboard",
+                "code": "line",
+                "name": "产线运行",
+                "route_path": None,
+                "route_name": None,
                 "icon": "Odometer",
                 "sort_order": 1,
+                # Union of the pages below: a group with no requirement of its own
+                # would be visible to every account, because the filter reads an
+                # empty list as 'no restriction'. See test_a_group_requires_what_its_
+                # pages_require.
                 "required_permissions": ["exec:read"],
+                "children": [
+                    {
+                        "code": "dashboard",
+                        "name": "实时看板",
+                        "route_path": "/ops/dashboard",
+                        "route_name": "Dashboard",
+                        "icon": "Odometer",
+                        "sort_order": 1,
+                        "required_permissions": ["exec:read"],
+                    },
+                    # 操作员面板 is deliberately absent.
+                    #
+                    # It used to be seeded pointing at /operator/default, because
+                    # a menu entry needs a concrete path and ``:station_id`` has
+                    # none. That made the menu claim a page existed for every
+                    # station while actually opening one for a station called
+                    # "default", which does not exist.
+                    #
+                    # It is a per-station screen: it is for the operator standing
+                    # at a station. The route stays at /operator/:station_id, and
+                    # the 工位列表 page links into it per row — the only place a
+                    # station id is actually known. Re-adding it as a menu entry
+                    # would need a station picker in front of it first.
+                ],
             },
             {
-                "code": "history",
-                "name": "执行历史",
-                "route_path": "/monitor/history",
-                "route_name": "ExecutionHistory",
-                "icon": "Clock",
+                "code": "execution",
+                "name": "执行与数据",
+                "route_path": None,
+                "route_name": None,
+                "icon": "DataLine",
                 "sort_order": 2,
+                # Union of the pages below: a group with no requirement of its own
+                # would be visible to every account, because the filter reads an
+                # empty list as 'no restriction'. See test_a_group_requires_what_its_
+                # pages_require.
                 "required_permissions": ["exec:read"],
+                "children": [
+                    {
+                        "code": "history",
+                        "name": "执行历史",
+                        "route_path": "/ops/history",
+                        "route_name": "ExecutionHistory",
+                        "icon": "Clock",
+                        "sort_order": 1,
+                        "required_permissions": ["exec:read"],
+                    },
+                    {
+                        "code": "measurements",
+                        "name": "测量数据",
+                        "route_path": "/ops/measurements",
+                        "route_name": "MeasurementExplorer",
+                        "icon": "TrendCharts",
+                        "sort_order": 2,
+                        "required_permissions": ["exec:read"],
+                    },
+                    {
+                        "code": "tracing",
+                        "name": "追溯查询",
+                        "route_path": "/ops/tracing",
+                        "route_name": "TracingViewer",
+                        "icon": "Search",
+                        "sort_order": 3,
+                        "required_permissions": ["exec:read"],
+                    },
+                    {
+                        "code": "reports",
+                        "name": "测试报告",
+                        "route_path": "/ops/reports",
+                        "route_name": "Reports",
+                        "icon": "Tickets",
+                        "sort_order": 4,
+                        "required_permissions": ["exec:read"],
+                    },
+                ],
             },
             {
-                "code": "measurements",
-                "name": "测量数据",
-                "route_path": "/monitor/measurements",
-                "route_name": "MeasurementExplorer",
-                "icon": "TrendCharts",
+                "code": "debug",
+                "name": "调试",
+                "route_path": None,
+                "route_name": None,
+                "icon": "VideoPlay",
                 "sort_order": 3,
                 "required_permissions": ["exec:read"],
+                "children": [
+                    {
+                        "code": "simulation-console",
+                        "name": "仿真调试控制台",
+                        "route_path": "/ops/simulation",
+                        "route_name": "SimulationConsole",
+                        "icon": "VideoPlay",
+                        "sort_order": 1,
+                        "required_permissions": ["exec:read"],
+                    },
+                ],
             },
             {
-                "code": "reports",
-                "name": "测试报告",
-                "route_path": "/monitor/reports",
-                "route_name": "Reports",
-                "icon": "Tickets",
+                "code": "station-ops",
+                "name": "工位运维",
+                "route_path": None,
+                "route_name": None,
+                "icon": "Setting",
                 "sort_order": 4,
-                "required_permissions": ["exec:read"],
+                # Union of the pages below: a group with no requirement of its own
+                # would be visible to every account, because the filter reads an
+                # empty list as 'no restriction'. See test_a_group_requires_what_its_
+                # pages_require.
+                "required_permissions": ["node:read", "system:read"],
+                "children": [
+                    # Reads the Station table built in P0 (plants -> stations),
+                    # which is what the plant/station context selector is scoped
+                    # to. Distinct from 工位执行器 below.
+                    {
+                        "code": "stations",
+                        "name": "工位列表",
+                        "route_path": "/ops/stations",
+                        "route_name": "StationList",
+                        "icon": "List",
+                        "sort_order": 1,
+                        "required_permissions": ["node:read"],
+                    },
+                    # The worker registry: executor processes that report
+                    # heartbeats and run flows. It used to be titled 节点列表,
+                    # which claimed it was the station list while reading a
+                    # different table entirely.
+                    {
+                        "code": "workers",
+                        "name": "工位执行器",
+                        "route_path": "/ops/workers",
+                        "route_name": "WorkerRegistry",
+                        "icon": "Cpu",
+                        "sort_order": 2,
+                        "required_permissions": ["node:read"],
+                    },
+                    {
+                        "code": "calibration",
+                        "name": "校准管理",
+                        "route_path": "/ops/calibration",
+                        "route_name": "CalibrationPanel",
+                        "icon": "Aim",
+                        "sort_order": 3,
+                        "required_permissions": ["system:read"],
+                    },
+                    {
+                        "code": "changeover",
+                        "name": "产品切换",
+                        "route_path": "/ops/changeover",
+                        "route_name": "ProductChangeover",
+                        "icon": "Switch",
+                        "sort_order": 4,
+                        "required_permissions": ["system:read"],
+                    },
+                ],
             },
             {
-                "code": "tracing",
-                "name": "追溯查询",
-                "route_path": "/monitor/tracing",
-                "route_name": "TracingViewer",
-                "icon": "Search",
+                "code": "fault",
+                "name": "故障智能",
+                "route_path": None,
+                "route_name": None,
+                "icon": "Warning",
                 "sort_order": 5,
-                "required_permissions": ["exec:read"],
-            },
-            {
-                "code": "simulation-console",
-                "name": "仿真调试控制台",
-                "route_path": "/monitor/simulation",
-                "route_name": "SimulationConsole",
-                "icon": "VideoPlay",
-                "sort_order": 6,
-                "required_permissions": ["exec:read"],
-            },
-            # OperatorView route is /operator/:station_id; AppLayout strips
-            # /:param segments on menu click, so point at a concrete default.
-            {
-                "code": "operator-panel",
-                "name": "操作员面板",
-                "route_path": "/operator/default",
-                "route_name": "OperatorView",
-                "icon": "User",
-                "sort_order": 7,
-                "required_permissions": ["exec:read"],
+                # Union of the pages below: a group with no requirement of its own
+                # would be visible to every account, because the filter reads an
+                # empty list as 'no restriction'. See test_a_group_requires_what_its_
+                # pages_require.
+                "required_permissions": ["node:read", "node:write", "system:read"],
+                "children": [
+                    {
+                        "code": "fault-cases",
+                        "name": "工位故障案例库",
+                        "route_path": "/ops/fault-cases",
+                        "route_name": "FaultCaseLibrary",
+                        "icon": "Collection",
+                        "sort_order": 1,
+                        "required_permissions": ["node:read", "node:write"],
+                    },
+                    {
+                        "code": "fmea",
+                        "name": "FMEA管理",
+                        "route_path": "/ops/fmea",
+                        "route_name": "FmeaManagement",
+                        "icon": "Tickets",
+                        "sort_order": 2,
+                        "required_permissions": ["system:read"],
+                    },
+                ],
             },
         ],
     },
+    # ── 系统 ────────────────────────────────────────────────────────────────
+    # Not a top-level mode. The spec's top bar has exactly two items, so system
+    # administration is reached from the account dropdown (§4.4) — but the
+    # entries stay menu rows rather than becoming dropdown items, because
+    # test_admin_pages_in_menu.py documents why: a page reachable only by
+    # remembering a dropdown is a page nobody finds, and a `v-if="isAdmin"`
+    # display flag is advisory where `required_permissions` is enforced.
     {
         "code": "system",
         "name": "系统管理",
-        "description": "系统配置、产品切换及校准管理",
+        "description": "系统配置、用户与角色权限",
         "icon": "Setting",
-        "sort_order": 4,
+        "sort_order": 3,
         "menus": [
             {
                 "code": "settings",
@@ -220,46 +420,12 @@ default_apps: list[dict[str, Any]] = [
                 "required_permissions": ["system:read"],
             },
             {
-                "code": "changeover",
-                "name": "产品切换",
-                "route_path": "/system/changeover",
-                "route_name": "ProductChangeover",
-                "icon": "Switch",
-                "sort_order": 2,
-                "required_permissions": ["system:read"],
-            },
-            {
-                "code": "calibration",
-                "name": "校准管理",
-                "route_path": "/system/calibration",
-                "route_name": "CalibrationPanel",
-                "icon": "Aim",
-                "sort_order": 3,
-                "required_permissions": ["system:read"],
-            },
-            {
-                "code": "fmea",
-                "name": "FMEA管理",
-                "route_path": "/system/fmea",
-                "route_name": "FmeaManagement",
-                "icon": "Tickets",
-                "sort_order": 4,
-                "required_permissions": ["system:read"],
-            },
-            # User and role administration used to be reachable only from the
-            # top-right account dropdown. Two reasons they belong in the menu:
-            # a page you can only reach by remembering a dropdown is a page
-            # nobody finds, and the menu is where per-role access is actually
-            # expressed. The ``admin:read`` requirement does that job on the
-            # server, whereas the dropdown gated on a client-side ``isAdmin``
-            # flag that the API never checked.
-            {
                 "code": "users",
                 "name": "用户管理",
                 "route_path": "/system/users",
                 "route_name": "UserManagement",
                 "icon": "User",
-                "sort_order": 5,
+                "sort_order": 2,
                 "required_permissions": ["admin:read"],
             },
             {
@@ -268,12 +434,38 @@ default_apps: list[dict[str, Any]] = [
                 "route_path": "/system/roles",
                 "route_name": "RoleManagement",
                 "icon": "Lock",
-                "sort_order": 6,
+                "sort_order": 3,
                 "required_permissions": ["admin:read"],
             },
         ],
     },
 ]
+
+
+def _iter_seed_menus(
+    menus: list[dict[str, Any]], parent_code: str | None = None
+) -> list[dict[str, Any]]:
+    """Flatten the seed tree into parent-before-child order.
+
+    Each row carries ``_parent_code`` — the parent's seed code — because
+    ``seed_apps`` cannot fill in ``parent_id`` during a single pass: a parent's
+    id is a fresh uuid that does not exist until the parent row is written, and
+    the parent may not have been created yet when the child is visited. So the
+    flat list keeps the code and ``seed_apps`` resolves it in a second pass.
+
+    Returns copies. ``default_apps`` is a module-level constant shared across
+    every seed invocation, so popping ``children`` off the caller's dicts would
+    silently turn the second seed call into a flat one — and the symptom would
+    be a menu that loses its groups the second time the seed runs.
+    """
+    flat: list[dict[str, Any]] = []
+    for menu in menus:
+        children = menu.get("children") or []
+        row = {k: v for k, v in menu.items() if k != "children"}
+        row["_parent_code"] = parent_code
+        flat.append(row)
+        flat.extend(_iter_seed_menus(children, menu["code"]))
+    return flat
 
 
 def _filter_menus_by_permissions(
@@ -324,7 +516,15 @@ def _filter_menus_by_permissions(
 
 
 def _build_menu_tree(menus: list[AppMenu]) -> list[AppMenuTree]:
-    """Build a nested menu tree from flat menu list."""
+    """Build a nested menu tree from a flat menu list.
+
+    Groups are pruned when every page under them has been filtered out. A group
+    row carries no permission requirement of its own — it is a container, and
+    its pages carry theirs — so after permission filtering a group can be left
+    holding nothing. Rendering it would put a header in the sidebar above no
+    entries, which reads as a page that failed to load rather than as an
+    absence.
+    """
     by_id: dict[str, AppMenuTree] = {}
     for m in menus:
         by_id[m.id] = AppMenuTree(
@@ -347,7 +547,19 @@ def _build_menu_tree(menus: list[AppMenu]) -> list[AppMenuTree]:
             by_id[node.parent_id].children.append(node)
         else:
             roots.append(node)
-    return roots
+
+    def prune(nodes: list[AppMenuTree]) -> list[AppMenuTree]:
+        kept: list[AppMenuTree] = []
+        for node in nodes:
+            node.children = prune(node.children)
+            # A routeless node is a group: keep it only if something survived
+            # underneath. A node with a route is a page and is always kept.
+            if node.route_path or node.children:
+                kept.append(node)
+        kept.sort(key=lambda n: (n.sort_order, n.code))
+        return kept
+
+    return prune(roots)
 
 
 @router.get("", response_model=AppListResponse)
@@ -550,17 +762,43 @@ async def delete_menu(
 
 @router.post("/seed", response_model=dict)
 async def seed_apps(db: AsyncSession = Depends(get_db)) -> dict[str, object]:
-    """Seed default apps and menus. Idempotent — uses code as unique key.
+    """Seed default apps and menus. Idempotent — code is the key.
 
-    If a menu already exists, its required_permissions are updated to match
-    the seed data (other fields are left unchanged).
+    Existing rows are brought up to date rather than left alone. Three fields
+    have to converge on the seed, because the seed is the thing that changed:
+
+    ``route_path``
+        Reorganising the navigation renames routes. A row that kept its old
+        path would keep navigating to a route that may no longer exist — a menu
+        entry pointing at nothing, which is the failure this whole phase is
+        about. Updating ``required_permissions`` alone is not enough.
+    ``parent_id``
+        A page that moved under a group needs the link, or it renders as a
+        top-level entry with no header above it.
+    ``required_permissions``
+        Unchanged in spirit, kept for the same reason as before.
+
+    Rows whose code is no longer in the seed are deactivated, not deleted. The
+    four-app navigation this seed replaced (``node-mgmt``, ``flow-mgmt``,
+    ``exec-monitor`` and their menus) would otherwise stay visible forever,
+    because seeding only ever adds. Deactivation is reversible from the
+    database if the change turns out to be wrong; deletion is not, and the
+    rollback of a menu restructure is exactly the case where you want it.
     """
     created_apps = 0
     created_menus = 0
     updated_menus = 0
+    deactivated_apps = 0
+    deactivated_menus = 0
+    reactivated_apps = 0
+
+    seed_app_codes = {a["code"] for a in default_apps}
+    seed_menu_codes: dict[str, set[str]] = {
+        a["code"]: {m["code"] for m in _iter_seed_menus(a["menus"])} for a in default_apps
+    }
 
     for app_data in default_apps:
-        menus_data = app_data["menus"]
+        menus_data = _iter_seed_menus(app_data["menus"])
         # Non-mutating copy without the "menus" key (default_apps is a
         # module-level constant shared across seed invocations).
         app_fields = {k: v for k, v in app_data.items() if k != "menus"}
@@ -570,7 +808,15 @@ async def seed_apps(db: AsyncSession = Depends(get_db)) -> dict[str, object]:
         if app is None:
             app = App(id=str(uuid.uuid4()), **app_fields)
             db.add(app)
+            await db.flush()  # app.id must exist before menus reference it
             created_apps += 1
+        elif not app.is_active:
+            app.is_active = True
+            reactivated_apps += 1
+
+        # seed code -> the ORM row, so a child can name its parent without a
+        # second query.
+        rows: dict[str, AppMenu] = {}
 
         for m_data in menus_data:
             menu_result = await db.execute(
@@ -578,24 +824,77 @@ async def seed_apps(db: AsyncSession = Depends(get_db)) -> dict[str, object]:
             )
             existing = menu_result.scalar_one_or_none()
             if existing is None:
-                menu = AppMenu(
+                # ``_parent_code`` is bookkeeping for the second pass, not a column.
+                fields = {k: v for k, v in m_data.items() if k != "_parent_code"}
+                existing = AppMenu(
                     id=str(uuid.uuid4()),
                     app_id=app.id,
-                    **m_data,
+                    **fields,
                 )
-                db.add(menu)
+                db.add(existing)
+                await db.flush()
                 created_menus += 1
             else:
-                # Update required_permissions if they differ from current DB values
-                seed_perms = m_data.get("required_permissions")
-                if existing.required_permissions != seed_perms:
-                    existing.required_permissions = seed_perms
+                changed = False
+                for field in ("name", "route_path", "route_name", "icon", "sort_order"):
+                    if getattr(existing, field) != m_data.get(field):
+                        setattr(existing, field, m_data.get(field))
+                        changed = True
+                if existing.required_permissions != m_data.get("required_permissions"):
+                    existing.required_permissions = m_data.get("required_permissions")
+                    changed = True
+                if not existing.is_active:
+                    existing.is_active = True
+                    changed = True
+                if changed:
                     updated_menus += 1
+            rows[m_data["code"]] = existing
+
+        # Second pass for parent links: a parent may have been created after the
+        # child was visited, so the id is only known now.
+        for m_data in menus_data:
+            parent_code = m_data.get("_parent_code")
+            if parent_code is None:
+                continue
+            parent = rows.get(parent_code)
+            if parent is None:
+                # The seed is inconsistent: a page names a group that is not
+                # there. Fail loudly rather than leaving the page top-level,
+                # which would render it with no header above it.
+                raise RuntimeError(
+                    f"seed app {app.code!r}: menu {m_data['code']!r} references "
+                    f"unknown parent {parent_code!r}"
+                )
+            child = rows[m_data["code"]]
+            if child.parent_id != parent.id:
+                child.parent_id = parent.id
+                updated_menus += 1
+
+        # Anything under this app that the seed no longer lists is stale.
+        stale = await db.execute(
+            select(AppMenu).where(
+                AppMenu.app_id == app.id, AppMenu.code.not_in(seed_menu_codes[app.code])
+            )
+        )
+        for menu in stale.scalars().all():
+            if menu.is_active:
+                menu.is_active = False
+                deactivated_menus += 1
+
+    # Apps the seed no longer lists at all.
+    orphans = await db.execute(select(App).where(App.code.not_in(seed_app_codes)))
+    for app in orphans.scalars().all():
+        if app.is_active:
+            app.is_active = False
+            deactivated_apps += 1
 
     await db.commit()
     return {
         "created_apps": created_apps,
         "created_menus": created_menus,
         "updated_menus": updated_menus,
+        "deactivated_apps": deactivated_apps,
+        "deactivated_menus": deactivated_menus,
+        "reactivated_apps": reactivated_apps,
         "status": "ok",
     }

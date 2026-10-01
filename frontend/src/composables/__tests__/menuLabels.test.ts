@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import en from '@/i18n/locales/en'
 import zhCN from '@/i18n/locales/zh-CN'
-import { appLabel, menuLabel } from '@/composables/menuLabels'
+import { appLabel, menuLabel, untranslatedAppCodes, untranslatedMenuCodes } from '@/composables/menuLabels'
 import { DEFAULT_LOCALE, SUPPORTED_LOCALES } from '@/i18n'
 
 /**
@@ -23,19 +23,34 @@ import { DEFAULT_LOCALE, SUPPORTED_LOCALES } from '@/i18n'
  *     what it covers rather than letting the fallback hide the gap forever.
  */
 
-/** The seed codes, mirrored from src/ate_cloud/api/v1/apps.py. */
+/**
+ * The seed codes, mirrored from src/ate_cloud/api/v1/apps.py.
+ *
+ * Kept as a hand-written list rather than imported from the backend, because
+ * this is a frontend test with no Node-side view of Python. It is a mirror, so
+ * it can drift — which is why every entry is asserted to resolve below: a code
+ * added to the seed and forgotten here fails nothing, but a code added to the
+ * map and forgotten here would render the database name, and the fallback test
+ * below is the one that would catch it.
+ */
 const SEEDED_MENU_CODES = [
-  'stations', 'node-detail',
+  // 产测开发
+  'traceability', 'condition-review',
   'sequences', 'sequence-editor', 'flow-templates', 'scripts',
-  'node-binding', 'fixture-designer',
+  'fixture-designer', 'station-management',
+  // groups
+  'requirements', 'process', 'station-binding',
+  // 运行监控
   'dashboard', 'history', 'measurements', 'reports', 'tracing',
-  'simulation-console', 'operator-panel',
-  'settings', 'changeover', 'calibration', 'fmea', 'users', 'roles',
-  // defined in AppLayout until the backend seed learns them
-  'traceability',
+  'simulation-console', 'stations', 'workers', 'calibration', 'changeover',
+  'fault-cases', 'fmea',
+  // groups
+  'line', 'execution', 'debug', 'station-ops', 'fault',
+  // 系统
+  'settings', 'users', 'roles',
 ]
 
-const SEEDED_APP_CODES = ['node-mgmt', 'flow-mgmt', 'exec-monitor', 'system']
+const SEEDED_APP_CODES = ['test-dev', 'runtime', 'system']
 
 /** A `t` that returns the key when a translation is missing, like vue-i18n. */
 function translator(dict: Record<string, unknown>): (key: string) => string {
@@ -138,5 +153,27 @@ describe('menu labels resolve through i18n', () => {
     expect(menuLabel({ code: 'users', name: 'x' }, tZh)).toBe('用户管理')
     expect(menuLabel({ code: 'roles', name: 'x' }, tEn)).toBe('Roles & Permissions')
     expect(menuLabel({ code: 'roles', name: 'x' }, tZh)).toBe('角色与权限')
+  })
+
+  it('the map covers exactly the seeded codes — no gaps, no leftovers', () => {
+    // The drift guard for the mirror above. A code in the seed and not in the
+    // map renders the database's Chinese name in an English UI; a code in the
+    // map and not in the seed is dead weight that suggests a rename was only
+    // half done — which is exactly what happened when 节点管理 became 产测开发
+    // and left `node-mgmt`, `flow-mgmt` and `exec-monitor` behind.
+    expect([...untranslatedMenuCodes()].sort()).toEqual([...SEEDED_MENU_CODES].sort())
+    expect([...untranslatedAppCodes()].sort()).toEqual([...SEEDED_APP_CODES].sort())
+  })
+
+  it('no menu code or app code still uses the retired 节点 vocabulary', () => {
+    // 节点 meant two things. Only one was renamed. A flow node is a step in the
+    // sequence graph and keeps the word (流程节点模板); a station is a physical
+    // position and became 工位. So `flow-templates` is expected to keep "flow"
+    // while nothing may be called node-binding / node-detail / node-mgmt.
+    const retired = ['node-mgmt', 'flow-mgmt', 'exec-monitor', 'node-binding', 'node-detail']
+    for (const code of retired) {
+      expect(untranslatedMenuCodes()).not.toContain(code)
+      expect(untranslatedAppCodes()).not.toContain(code)
+    }
   })
 })

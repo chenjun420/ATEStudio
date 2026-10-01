@@ -46,6 +46,7 @@ from ate_cloud.api.v1.health import router as health_router
 from ate_cloud.api.v1.imports import router as imports_router
 from ate_cloud.api.v1.knowledge_reads import router as knowledge_router
 from ate_cloud.api.v1.limits import router as limits_router
+from ate_cloud.api.v1.models_catalog import router as models_router
 from ate_cloud.api.v1.node_flow_bindings import router as node_flow_bindings_router
 from ate_cloud.api.v1.node_templates import router as node_templates_router
 from ate_cloud.api.v1.offline import router as offline_router
@@ -97,6 +98,7 @@ _PROTECTED_ROUTERS = (
     plants_router,
     stations_router,
     fault_cases_router,
+    models_router,
     fmea_router,
     imports_router,
     # Mounted from ``knowledge_reads`` rather than from the deleted

@@ -407,11 +407,15 @@ def test_all_protected_mounts_carry_security_dependency() -> None:
     # The 28th-30th are the station/fault-case routers added for phase 1 fault
     # intelligence: /api/v1/plants, /api/v1/stations and /api/v1/fault-cases.
     # They carry mount-level JWT plus per-endpoint read/write scopes.
+    # The 31st is /api/v1/models — the model aggregate that backs the 产测开发
+    # context selector. It has no product of its own and does not exist in any
+    # role's scope vocabulary, so it is read-only with the same ``read`` scope
+    # every other catalogue endpoint uses.
     #
     # Down one from the knowledge-graph removal: /api/v1/faults went with the
     # subsystem, and /api/v1/knowledge now mounts ``knowledge_reads`` directly
     # rather than the extraction-trigger module that used to own the router.
-    assert len(protected) == 30
+    assert len(protected) == 31
     assert len(anonymous) == 5
 
     anonymous_routers = [_mounted(m) for m in anonymous]
