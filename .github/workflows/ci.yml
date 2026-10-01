@@ -2,12 +2,14 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, dev]
     paths:
       - 'src/**'
       - 'frontend/src/**'
       - 'tests/**'
       - 'pyproject.toml'
+      - 'uv.lock'
+      - '.github/workflows/**'
   pull_request:
     branches: [main, master]
     paths:
@@ -15,6 +17,12 @@ on:
       - 'frontend/src/**'
       - 'tests/**'
       - 'pyproject.toml'
+      - 'uv.lock'
+      - '.github/workflows/**'
+  # The SPA is served by FastAPI from frontend/dist, so a deploy without a
+  # bundle leaves the API ahead of the interface. Being able to publish a
+  # bundle on demand is what makes that recoverable without a code push.
+  workflow_dispatch:
 
 jobs:
   lint:
@@ -72,6 +80,50 @@ jobs:
         run: npx vue-tsc --noEmit
       - name: Vitest run
         run: npx vitest run
+
+  # Publish the SPA bundle to refs/heads/spa-dist so the deploy can install it
+  # without node on the production host.
+  #
+  # `needs: [lint, test, frontend]` is the point of this job: a bundle is only
+  # published from a commit whose Python and frontend checks both passed. The
+  # alternative — building in the deploy — had no such gate, because the
+  # production host ran no checks at all.
+  spa-dist:
+    needs: [lint, test, frontend]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # required to push the spa-dist ref
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The bundle records the SHA it was built from, and the deploy asserts
+          # it against the commit being deployed. With a shallow checkout the
+          # recorded SHA is still correct (it is HEAD), but a shallow history
+          # makes the ref's own parent lookup unreliable, so fetch depth 0.
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+        working-directory: frontend
+      - name: Build and publish bundle to origin/spa-dist
+        run: scripts/frontend/publish_dist.sh
+      - name: Verify the published bundle records this commit
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          # Read the file out of the published ref, not the working tree: this
+          # checks what was actually pushed.
+          recorded="$(git --no-pager show origin/spa-dist:frontend/dist/.build-info.json \
+                      | sed -n 's/.*"source_sha": *"\([0-9a-f]\{40\}\)".*/\1/p')"
+          if [ "$recorded" != "$sha" ]; then
+            echo "::error::bundle records source_sha=$recorded but this run is $sha"
+            exit 1
+          fi
+          echo "bundle records $recorded, matches this run"
 
   # AC-12: 无头仿真输出 JUnit 报告并接入流水线（§7.11）
   # 在 ATE_SIMULATION_MODE=true 下以纯仿真方式运行 v3.2 生产序列，
