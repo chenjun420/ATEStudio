@@ -69,11 +69,89 @@ def is_superuser(scopes: set[str] | frozenset[str] | list[str] | None) -> bool:
     return bool(scopes) and SCOPE_ADMIN in scopes
 
 
+#: Namespaced permission scopes, as the menu seed spells them.
+#:
+#: Two vocabularies meet in this codebase and until now they did not intersect.
+#: Endpoint guards call ``require_scopes("read")`` — a flat word.
+#: ``app_menus.required_permissions`` holds ``knowledge:read``, ``flow:read``,
+#: ``node:write`` and so on. ``get_current_user`` compares against the scopes baked
+#: into the token at login, and those come from :data:`ROLE_SCOPES`. No role held a
+#: single namespaced scope, so every menu was filtered out for every account and
+#: only ``admin`` saw anything — via :func:`is_superuser`, not through a permission
+#: match. The three non-admin roles were indistinguishable in the interface.
+#:
+#: The mapping below is the policy decision that was left open in
+#: ``tests/cloud/test_menu_visibility.py::TestKnownRemainingGap``. It is derived
+#: from the role descriptions at the top of this module, not from the data:
+#:
+#: * ``read`` is "read-only access", so it gets every domain's ``:read`` — except
+#:   the administration ones. 系统设置 / 用户管理 / 角色与权限 are the admin surface;
+#:   handing them to a generic read account is the one grant that cannot be undone
+#:   by narrowing it later, so they stay admin-only.
+#: * ``write`` is "read + write", so it adds the ``:write`` scopes on the same terms.
+#: * ``execute`` is "execution access only (no read/write on resources)". It keeps
+#:   that: no ``knowledge:``/``flow:``/``node:`` read. It does get ``exec:read``,
+#:   because that domain *is* execution — an operator who cannot see what the line
+#:   is doing cannot act on it, and the scope's own name is the justification.
+#: * ``admin`` carries everything, including the administration scopes, so that a
+#:   data-driven guard which does not consult :func:`is_superuser` still passes.
+SCOPE_KNOWLEDGE_READ = "knowledge:read"
+SCOPE_KNOWLEDGE_WRITE = "knowledge:write"
+SCOPE_FLOW_READ = "flow:read"
+SCOPE_NODE_READ = "node:read"
+SCOPE_NODE_WRITE = "node:write"
+SCOPE_EXEC_READ = "exec:read"
+#: Administration surfaces: 系统设置, 用户管理, 角色与权限. Admin only.
+SCOPE_SYSTEM_READ = "system:read"
+SCOPE_ADMIN_READ = "admin:read"
+
+#: Product-data read scopes — everything a read-only account may look at.
+PRODUCT_READ_SCOPES: list[str] = [
+    SCOPE_KNOWLEDGE_READ,
+    SCOPE_FLOW_READ,
+    SCOPE_NODE_READ,
+    SCOPE_EXEC_READ,
+]
+
+#: The scopes that must not reach a non-admin account. Kept as a named set so a
+#: test can assert the exclusion rather than restate it.
+ADMIN_ONLY_SCOPES: frozenset[str] = frozenset({SCOPE_SYSTEM_READ, SCOPE_ADMIN_READ})
+
+#: Write scopes on the same terms as :data:`PRODUCT_READ_SCOPES`: product data,
+#: not administration.
+PRODUCT_WRITE_SCOPES: list[str] = [
+    SCOPE_KNOWLEDGE_WRITE,
+    SCOPE_NODE_WRITE,
+]
+
+
 ROLE_SCOPES: dict[str, list[str]] = {
-    "admin": ["admin", "read", "write", "execute", SCOPE_ATERAG_IMPORT],
-    "write": ["read", "write"],
-    "read": ["read"],
-    "execute": ["execute"],
+    "admin": [
+        "admin",
+        "read",
+        "write",
+        "execute",
+        SCOPE_ATERAG_IMPORT,
+        *PRODUCT_READ_SCOPES,
+        *PRODUCT_WRITE_SCOPES,
+        *sorted(ADMIN_ONLY_SCOPES),
+    ],
+    "write": [
+        "read",
+        "write",
+        *PRODUCT_READ_SCOPES,
+        *PRODUCT_WRITE_SCOPES,
+    ],
+    "read": [
+        "read",
+        *PRODUCT_READ_SCOPES,
+    ],
+    "execute": [
+        "execute",
+        # Execution domain only. See the note on SCOPE_EXEC_READ above for why this
+        # is not simply "nothing beyond execute".
+        SCOPE_EXEC_READ,
+    ],
 }
 
 

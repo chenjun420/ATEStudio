@@ -479,20 +479,26 @@ def _filter_menus_by_permissions(
     - The intersection of user_permissions and required_permissions is non-empty
       (user has at least one of the required permissions)
 
-    The admin bypass is load-bearing, not a convenience. The permission strings
-    on seeded menus — ``system:read``, ``node:read``, ``exec:read``,
-    ``flow:read`` — are a namespaced vocabulary that exists only in this seed
-    data; :data:`ROLE_SCOPES` grants the flat ``admin``/``read``/``write``/
-    ``execute`` set and never names any of them. So without the bypass the
-    intersection is empty for *every* account, each app is dropped for having no
-    visible menu, and a correct login lands on an empty main screen.
+    The admin bypass is load-bearing, not a convenience: it keeps admin reachable
+    even when a guard names a scope no role carries. It used to be the *only* thing
+    keeping the product reachable. :data:`ROLE_SCOPES` granted just the flat
+    ``admin``/``read``/``write``/``execute`` set, so its intersection with the seed's
+    namespaced vocabulary was empty for *every* account, each app was dropped for
+    having no visible menu, and a correct login landed on an empty main screen.
+    ``ROLE_SCOPES`` now carries those scopes per role — the policy is documented in
+    ``auth/rbac.py`` — so the bypass is a safety net rather than the mechanism.
 
-    That is not hypothetical: it is what shipped. Note the asymmetry it leaves —
-    a non-admin with a real role still sees nothing, because no non-admin role
-    holds a menu permission either. Widening the roles is a policy decision
-    (which roles get which domain's ``:read``) and is deliberately not guessed
-    here; ``tests/cloud/test_menu_visibility.py`` states the gap explicitly so it
-    cannot be mistaken for working.
+    Any-of, not all-of: a group's ``required_permissions`` is the union of its
+    children's, so requiring every member would make the group stricter than the
+    pages it contains. Children are filtered individually out of the same flat list
+    before the tree is built, so a page an account cannot reach disappears even when
+    its group survives.
+
+    That gap was not hypothetical: it is what shipped, and it is why the roles were
+    widened. ``tests/cloud/test_menu_visibility.py`` now asserts the mapping in both
+    directions — every seeded permission is reachable by some role, and no
+    administration page is reachable by ``read`` — so the empty screen cannot come
+    back unnoticed.
 
     Args:
         menus: Flat list of AppMenu ORM objects.
@@ -519,11 +525,12 @@ def _build_menu_tree(menus: list[AppMenu]) -> list[AppMenuTree]:
     """Build a nested menu tree from a flat menu list.
 
     Groups are pruned when every page under them has been filtered out. A group
-    row carries no permission requirement of its own — it is a container, and
-    its pages carry theirs — so after permission filtering a group can be left
-    holding nothing. Rendering it would put a header in the sidebar above no
-    entries, which reads as a page that failed to load rather than as an
-    absence.
+    row carries the union of its children's requirements rather than one of its
+    own — a group with no requirement of its own reads as "no restriction" and
+    becomes visible to every account (see :func:`seed_apps`). So a group can
+    outlive the permissions that made it interesting: it stays while any child
+    survives the permission filter, and is dropped only once all of them are
+    filtered out.
     """
     by_id: dict[str, AppMenuTree] = {}
     for m in menus:

@@ -238,10 +238,11 @@ class TestSeedIdempotency:
 def test_seed_data_declares_the_runtime_pages(required: list[str]) -> None:
     """The pages a scope is supposed to grant are actually declared with it.
 
-    The permission strings on menus exist only in this seed; ROLE_SCOPES grants a
-    flat set and never names any of them. A menu requiring a permission nothing
-    holds is a menu nobody sees, which is indistinguishable from a broken UI.
-    """
+          A menu requiring a permission nothing holds is a menu nobody sees, which is
+      indistinguishable from a broken UI. The pairing matters in both directions:
+      a scope with no page, and a page with no scope, are each half of a grant that
+      does not happen. The role side lives in ``auth/rbac.py``.
+      """
     rows = [
         m
         for m in _all_rows()

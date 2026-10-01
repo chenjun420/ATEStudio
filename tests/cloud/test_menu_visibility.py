@@ -36,8 +36,20 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import selectinload
 
-from ate_cloud.api.v1.apps import _filter_menus_by_permissions, default_apps, seed_apps
-from ate_cloud.auth.rbac import ROLE_SCOPES, is_superuser
+from ate_cloud.api.v1.apps import (
+    _build_menu_tree,
+    _filter_menus_by_permissions,
+    default_apps,
+    seed_apps,
+)
+from ate_cloud.auth.rbac import (
+    ADMIN_ONLY_SCOPES,
+    PRODUCT_READ_SCOPES,
+    PRODUCT_WRITE_SCOPES,
+    ROLE_SCOPES,
+    SCOPE_EXEC_READ,
+    is_superuser,
+)
 from ate_cloud.models import Base
 from ate_cloud.models.app_menu import App, AppMenu
 
@@ -88,29 +100,112 @@ class TestSeededMenusAreReachable:
         assert perms, "default_apps 里没有 required_permissions —— 解析方式变了?"
         assert any(":" in p for p in perms), f"意外的取值: {sorted(perms)}"
 
-    def test_no_seeded_permission_is_in_a_role_scope_set(self) -> None:
-        """The trap, stated as a fact.
+    def test_every_seeded_permission_is_granted_by_some_role(self) -> None:
+        """The gap this file was written to make visible is now closed.
 
-        Every seeded permission is namespaced (``domain:verb``) and no role
-        grants any of them. This is why the intersection was empty, and it is
-        asserted rather than assumed so that a future grant shows up here as a
-        deliberate change instead of silently making the admin bypass redundant.
+        It used to assert the opposite — that no seeded permission appears in any
+        role's scope set. That assertion is what kept the product admin-only: the
+        menu vocabulary (``knowledge:read`` and friends) and the role vocabulary
+        (``read``/``write``) did not intersect, so every menu filtered out for
+        every account and only the ``is_superuser`` bypass let admin through.
+
+        Now asserted forwards instead. A permission that *stops* being granted
+        shows up here as a failure rather than as a silently empty sidebar.
         """
         grantable = {s for scopes in ROLE_SCOPES.values() for s in scopes}
-        leaked = _seeded_permissions() & grantable
-        assert not leaked, f"这些菜单权限已由角色直接授予: {sorted(leaked)}"
+        unreachable = _seeded_permissions() - grantable
+        assert not unreachable, (
+            f"这些菜单权限没有任何角色能拿到, 侧栏对谁都是空的: {sorted(unreachable)}"
+        )
 
     def test_admin_satisfies_every_seeded_permission(self) -> None:
-        """The property that matters: an admin can see the whole product."""
+        """The property that matters: an admin can see the whole product.
+
+        Checked two ways. ``is_superuser`` is the bypass that rescued the product
+        while the vocabularies were disjoint, and it stays as the safety net. The
+        explicit grants matter too: a data-driven guard that does not consult
+        ``is_superuser`` would otherwise 403 an admin.
+        """
         admin_scopes = set(ROLE_SCOPES["admin"])
         assert is_superuser(admin_scopes)
-        # is_superuser short-circuits, so assert the pre-bypass view too — it is
-        # what makes the bypass necessary rather than decorative.
-        unmatched = {
-            p for p in _seeded_permissions() if not (admin_scopes & {p})
+        unmatched = {p for p in _seeded_permissions() if not (admin_scopes & {p})}
+        assert not unmatched, (
+            f"admin 的 scope 未直接覆盖这些菜单权限: {sorted(unmatched)} —— "
+            "通配旁路能过，但不做 is_superuser 检查的守卫会 403"
+        )
+
+
+class TestRoleToMenuPolicy:
+    """Which role gets which domain — the decision left open, now made.
+
+    ``auth/rbac.py`` documents the reasoning; these tests exist so that changing
+    the policy is a deliberate edit to a named constant rather than a drift that
+    only shows up as a confusing sidebar.
+    """
+
+    def test_administration_scopes_are_admin_only(self) -> None:
+        """系统设置 / 用户管理 / 角色与权限 must not ride along with `read`.
+
+        This is the one grant that cannot be narrowed later without the user
+        having already seen the pages, so it is asserted for every non-admin role
+        rather than left implicit in a list.
+        """
+        for role, scopes in ROLE_SCOPES.items():
+            if role == "admin":
+                assert ADMIN_ONLY_SCOPES <= set(scopes), "admin 必须持有全部管理面 scope"
+                continue
+            leaked = ADMIN_ONLY_SCOPES & set(scopes)
+            assert not leaked, f"角色 {role} 不该持有管理面权限: {sorted(leaked)}"
+
+    def test_read_role_sees_product_data_but_administration(self) -> None:
+        """`read` is "read-only access", so it reads product data."""
+        read = set(ROLE_SCOPES["read"])
+        assert PRODUCT_READ_SCOPES and set(PRODUCT_READ_SCOPES) <= read
+        # No write scopes, or it is not a read-only account.
+        assert not (set(PRODUCT_WRITE_SCOPES) & read)
+
+    def test_execute_role_gets_the_execution_domain_only(self) -> None:
+        """`execute` is "execution access only (no read/write on resources)".
+
+        The one addition is ``exec:read``: an operator who cannot see what the
+        line is doing cannot act on it. That is a judgement call and it is the
+        narrowest one that makes the role usable — it grants no product read.
+        """
+        execute = set(ROLE_SCOPES["execute"])
+        assert SCOPE_EXEC_READ in execute
+        product_reads = set(PRODUCT_READ_SCOPES) - {SCOPE_EXEC_READ}
+        assert not (product_reads & execute), (
+            f"execute 不该持有资源读权限: {sorted(product_reads & execute)}"
+        )
+
+    def test_write_role_is_read_plus_write(self) -> None:
+        write = set(ROLE_SCOPES["write"])
+        read = set(ROLE_SCOPES["read"])
+        assert read <= write, "write 必须是 read 的超集"
+        assert set(PRODUCT_WRITE_SCOPES) <= write
+
+    def test_non_admin_roles_are_now_distinguishable(self) -> None:
+        """The point of the mapping: the roles no longer behave identically.
+
+        Before the mapping all three non-admin roles saw an identical empty
+        screen, so the interface could not tell them apart at all.
+        """
+        menus = [
+            _menu(f"m{i}", [perm])
+            for i, perm in enumerate(sorted(_seeded_permissions()))
+        ]
+        visibility = {
+            role: len(_filter_menus_by_permissions(menus, set(ROLE_SCOPES[role])))
+            for role in ("read", "write", "execute")
         }
-        assert unmatched, "admin 的 scope 已直接覆盖全部菜单权限, 通配可考虑移除"
-        assert is_superuser(admin_scopes) or not unmatched
+        assert len(set(visibility.values())) > 1, (
+            f"三个非 admin 角色看到的菜单数完全相同: {visibility} —— "
+            "角色到菜单的映射没有区分度"
+        )
+        assert visibility["execute"] > 0, (
+            "execute 角色一个菜单都看不到 —— 它无法知道自己该执行什么"
+        )
+        assert visibility["read"] > 0, "read 角色仍然看不到任何菜单"
 
 
 class TestFilterBehaviour:
@@ -175,26 +270,121 @@ class TestSeededDataIsVisible:
 
 
 class TestKnownRemainingGap:
-    """Non-admin roles still see nothing — stated, not hidden.
+    """The admin-only gap is closed. What remains open, stated.
 
-    No non-admin role holds a namespaced menu permission either, so a ``read``
-    account logs in successfully and lands on the same empty screen. Which roles
-    get which domain's ``:read`` is a policy decision (it is not derivable from
-    the data), so it is left open rather than guessed. This test exists so that
-    gap is visible to whoever reads the suite, and so that closing it turns this
-    red.
+    This class used to assert that ``read``/``write``/``execute`` could see
+    *nothing*, on the grounds that the role→menu mapping is a policy decision and
+    guessing it would be worse than leaving it open. The policy has now been made
+    (see :class:`TestRoleToMenuPolicy`), so the assertion is inverted: those roles
+    must reach the menus their scopes entitle them to.
+
+    What is still deliberately *not* enforced is the finest granularity — a
+    ``read`` account sees every product page, including ones whose only
+    requirement is a ``:read`` in a domain it has no particular stake in. Per-page
+    custom roles would need the Role/Permission tables to be on the login path
+    (``get_db_role_scopes`` is not), so that is separate work.
     """
 
     @pytest.mark.asyncio
-    async def test_non_admin_roles_cannot_see_seeded_menus(self, db: AsyncSession) -> None:
+    async def test_non_admin_roles_now_reach_their_menus(self, db: AsyncSession) -> None:
         await seed_apps(db)
         menus = (
             await db.execute(select(AppMenu).where(AppMenu.is_active.is_(True)))
         ).scalars().all()
+        empty: dict[str, int] = {}
         for role in ("read", "write", "execute"):
             scopes = set(ROLE_SCOPES[role])
             visible = _filter_menus_by_permissions(list(menus), scopes)
-            assert not visible, (
-                f"角色 {role} 现在能看到 {len(visible)} 个菜单 —— "
-                "如果这是有意的, 请把角色到菜单权限的映射写进 ROLE_SCOPES 并更新本测试"
-            )
+            if not visible:
+                empty[role] = 0
+        assert not empty, (
+            f"这些角色登录后侧栏仍然是空的: {empty} —— "
+            "角色到菜单权限的映射回退了"
+        )
+
+    @pytest.mark.asyncio
+    async def test_read_does_not_reach_administration_pages(
+        self, db: AsyncSession
+    ) -> None:
+        """The narrowing that makes the widening acceptable.
+
+        Without this the mapping would be "give read everything", which fixes the
+        empty screen by handing out user administration.
+
+        The assertion is on **pages**, not on any row that mentions an admin scope.
+        A group's ``required_permissions`` is the union of its children's, and the
+        filter is any-of, so a group holding both ``node:read`` and ``system:read``
+        survives for a ``node:read`` holder — correctly, because its
+        administration children are removed individually. Asserting on group rows
+        would demand that a union be stricter than its most permissive member,
+        which would contradict the design and hide legitimate containers.
+        """
+        await seed_apps(db)
+        rows = (
+            await db.execute(select(AppMenu).where(AppMenu.is_active.is_(True)))
+        ).scalars().all()
+        admin_pages = [
+            m for m in rows
+            # A page has a route; a group does not. Only pages are the thing that
+            # must not be handed out.
+            if m.route_path
+            and m.required_permissions
+            and set(m.required_permissions) & ADMIN_ONLY_SCOPES
+        ]
+        assert admin_pages, (
+            "种子里没有任何管理面页面 —— 断言变空洞, 说明权限词汇变了"
+        )
+        visible = _filter_menus_by_permissions(
+            admin_pages, set(ROLE_SCOPES["read"])
+        )
+        assert not visible, (
+            f"read 角色看到了管理面页面: {[m.code for m in visible]}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_admin_pages_reach_admin_only(
+        self, db: AsyncSession
+    ) -> None:
+        """The other half: widening the roles must not have cost admin anything."""
+        await seed_apps(db)
+        rows = (
+            await db.execute(select(AppMenu).where(AppMenu.is_active.is_(True)))
+        ).scalars().all()
+        admin_pages = [
+            m for m in rows
+            if m.route_path
+            and m.required_permissions
+            and set(m.required_permissions) & ADMIN_ONLY_SCOPES
+        ]
+        visible = _filter_menus_by_permissions(admin_pages, set(ROLE_SCOPES["admin"]))
+        assert len(visible) == len(admin_pages), (
+            "admin 看不到部分管理面页面: "
+            f"{sorted(m.code for m in admin_pages if m not in visible)}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_group_holding_an_admin_child_loses_that_child_not_itself(
+        self, db: AsyncSession
+    ) -> None:
+        """Documents the union-plus-any-of behaviour at a leaf.
+
+        工位运维 requires ``[node:read, system:read]`` because 校准管理 and 产品切换
+        need ``system:read`` while 工位列表 and 工位执行器 need ``node:read``. A
+        ``read`` account holds the latter only. The group stays (it still has
+        pages) and the administration pages go — which is the whole point of
+        filtering the flat list before nesting, rather than after.
+        """
+        await seed_apps(db)
+        rows = (
+            await db.execute(select(AppMenu).where(AppMenu.is_active.is_(True)))
+        ).scalars().all()
+        flat = _filter_menus_by_permissions(rows, set(ROLE_SCOPES["read"]))
+        tree = _build_menu_tree(flat)
+        by_code = {n.code: n for n in tree}
+
+        assert "station-ops" in by_code, "工位运维 应保留 —— 它还有 read 可见的子页"
+        kids = {k.code for k in by_code["station-ops"].children}
+        assert {"stations", "workers"} <= kids
+        assert not ({"calibration", "changeover"} & kids), (
+            f"校准/产品切换 不该出现在 read 的菜单里: {sorted(kids)}"
+        )
