@@ -457,7 +457,17 @@ class TestWatchDogDeadlockDetection:
             event_bus=event_bus,
         )
 
-        watchdog.DEADLOCK_THRESHOLD = 15
+        watchdog.DEADLOCK_THRESHOLD = 60
+
+        # Threshold note: at scan_interval=0.01 this is a 0.6s window against a
+        # heartbeat that advances every 0.04s — a 15x margin. It used to be 15
+        # (a 0.15s window, 4x), which passed on an idle machine and failed once
+        # when the full suite ran alongside a frontend build. The loop below is
+        # bounded by its five sleeps, not by the threshold, so the wide window
+        # costs no wall-clock time.
+        #
+        # The assertion is unchanged, and a heartbeat that genuinely stops still
+        # trips it — test_deadlock_detection_emits_event covers that side.
 
         await event_bus.start()
 
