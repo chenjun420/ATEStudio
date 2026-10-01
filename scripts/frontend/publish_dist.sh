@@ -74,6 +74,72 @@ SOURCE_SHA="$(git rev-parse HEAD)"
 SOURCE_REF="$(git rev-parse --abbrev-ref HEAD)"
 [ "${SOURCE_REF}" = "HEAD" ] && SOURCE_REF="(detached)"
 
+# A hash of the frontend *sources*, not of the commit.
+#
+# The deploy originally asserted source_sha == the deployed commit. That is safe
+# but wrong in practice: any backend-only commit changes the SHA while leaving
+# the bundle byte-identical, so every backend deploy would have to wait for a
+# fresh build. That defeats the point of moving the build out of the deploy.
+# Hashing the inputs the build actually reads answers the real question — "would
+# this bundle differ from the current sources?" — so a bundle is rejected exactly
+# when a frontend file changed, and reused otherwise.
+FRONTEND_INPUTS=(
+    frontend
+)
+# node_modules and dist are build products, not inputs. .gitignore does not
+# change the bundle but would move the hash for no reason, and a hash that moves
+# for no reason trains people to ignore it.
+#
+# `git ls-tree` does NOT support the `:!exclude` pathspec magic — that belongs to
+# git log and git diff. Passing it there returns zero rows with exit status 0, so
+# a hash over the empty result is perfectly stable and satisfies every check
+# while tracking no file at all. Both sides therefore list everything and filter
+# afterwards. That mistake was made here once already; the count floor below
+# exists because it is what would have caught it.
+frontend_tree_filter() {
+    # git ls-tree output is "<mode> <type> <sha>\t<path>". The pattern is
+    # anchored on the tab that separates the header from the path, not on the
+    # start of the line, because the line begins with the mode.
+    grep -v -e $'\tfrontend/node_modules/' \
+             -e $'\tfrontend/dist/' \
+             -e $'\tfrontend/\.gitignore$'
+}
+frontend_tree_hash() {
+    git ls-tree -r HEAD -- "${FRONTEND_INPUTS[@]}" \
+        | frontend_tree_filter \
+        | git hash-object --stdin
+}
+frontend_tree_count() {
+    # --name-only output has no object header and no tab.
+    git ls-tree -r --name-only HEAD -- "${FRONTEND_INPUTS[@]}" \
+        | grep -v -e '^frontend/node_modules/' \
+                 -e '^frontend/dist/' \
+                 -e '^frontend/\.gitignore$' \
+        | wc -l | tr -d ' '
+}
+
+FRONTEND_TREE="$(frontend_tree_hash)"
+n_inputs="$(frontend_tree_count)"
+log "frontend tree: ${FRONTEND_TREE} (${n_inputs} tracked files)"
+
+# The hash is only meaningful if it covers the source tree. A broken filter
+# produces a stable hash of nothing, which passes every check while tracking no
+# file at all.
+if [ "${n_inputs}" -lt 50 ]; then
+    die "frontend tree covers only ${n_inputs} files — the exclusion filter is broken"
+fi
+
+# The hash comes from HEAD, while `npm run build` reads the working tree, so
+# publishing with uncommitted frontend edits would attach one commit's provenance
+# to another commit's bytes. Only frontend inputs are checked: an unrelated dirty
+# file does not affect the bundle and must not block a publish.
+dirty_frontend="$(git status --porcelain -- "${FRONTEND_INPUTS[@]}" ':!frontend/dist' ':!frontend/node_modules' || true)"
+if [ -n "${dirty_frontend}" ]; then
+    printf '%s\n' "${dirty_frontend}" >&2
+    die "frontend sources have uncommitted changes, so the bundle built from the working tree would not match the provenance recorded in it.
+Commit them, or publish from a clean checkout."
+fi
+
 log "repository : ${REPO_ROOT}"
 log "source     : ${SOURCE_SHA} (${SOURCE_REF})"
 log "target ref : refs/heads/${DIST_REF}"
@@ -124,6 +190,7 @@ cat > "${BUILD_INFO}" <<JSON
 {
   "source_sha": "${SOURCE_SHA}",
   "source_ref": "${SOURCE_REF}",
+  "frontend_tree": "${FRONTEND_TREE}",
   "built_at": "$(date -Iseconds)",
   "built_by": "${BUILT_BY}",
   "ci_run": "${GITHUB_RUN_ID:-}",
