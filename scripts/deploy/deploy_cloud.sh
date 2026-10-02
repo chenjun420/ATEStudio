@@ -190,6 +190,23 @@ as_service_user() {
         $*"
 }
 
+# Git against the deployment checkout, as the service user.
+#
+# The checkout is owned by the service user, and the person running this script
+# is not that user. `git fetch` has to write .git/FETCH_HEAD, so running it as
+# the SSH account fails with "cannot open '.git/FETCH_HEAD': Permission denied"
+# — which is exactly what happened on the first run against this host. The
+# ownership repair does not help: the tree is already consistent, the caller
+# simply is not its owner.
+#
+# safe.directory is set for the service user's git too, since git refuses to
+# operate on a checkout owned by a different user.
+service_git() {
+    remote_sudo "cd '${APP_DIR}' && sudo -u '${SERVICE_USER}' env \\
+        HOME='${SERVICE_HOME}' git config --global --add safe.directory '${APP_DIR}' \\
+        && sudo -u '${SERVICE_USER}' env HOME='${SERVICE_HOME}' git $*"
+}
+
 # ---------------------------------------------------------------------------
 # Preflight
 # ---------------------------------------------------------------------------
@@ -214,7 +231,7 @@ UNIT_DUMP="$(remote_sudo "cat /etc/systemd/system/${SERVICE_NAME}.service" 2>/de
 
 SERVICE_USER="$(printf '%s\n' "${UNIT_DUMP}" | sed -n 's/^User=//p' | head -1)"
 APP_DIR="$(printf '%s\n' "${UNIT_DUMP}" | sed -n 's/^WorkingDirectory=//p' | head -1)"
-ENV_PATH="$(printf '%s\n' "${UNIT_DUMP}" | sed -n 's/^EnvironmentFile=//p' | grep -v '^-' | head -1)"
+ENV_PATH="$(printf '%s\n' "${UNIT_DUMP}" | sed -n 's/^EnvironmentFile=//p' | grep -v '^-' | head -1 || true)"
 
 [ -n "${SERVICE_USER}" ] || die "no User= in ${SERVICE_NAME}.service"
 [ -n "${APP_DIR}" ]     || die "no WorkingDirectory= in ${SERVICE_NAME}.service"
@@ -271,25 +288,29 @@ log "PASS: :8000 free"
 # ---------------------------------------------------------------------------
 if [ "${SKIP_PULL}" != "1" ]; then
     log "[code] fetching and fast-forwarding to ${REF}..."
-    remote_cmd "git -C '${APP_DIR}' config --global --add safe.directory '${APP_DIR}'" || true
-    remote_cmd "git -C '${APP_DIR}' fetch origin" 2>&1 | tail -3
+    service_git "fetch origin" 2>&1 | tail -3
     # Detached HEAD is the normal state after a scripted checkout and it hides
     # what is deployed from `git log`. Move onto the branch.
-    branch="$(remote_cmd "git -C '${APP_DIR}' rev-parse --abbrev-ref HEAD" || echo HEAD)"
+    branch_cmd="rev-parse --abbrev-ref HEAD"
+    branch="$(service_git "${branch_cmd}" || echo HEAD)"
     if [ "${branch}" = "HEAD" ]; then
         warn "host is on a detached HEAD; moving onto 'dev' so the deploy is visible"
-        remote_cmd "git -C '${APP_DIR}' checkout dev" 2>&1 | tail -2
+        service_git "checkout dev" 2>&1 | tail -2
     fi
-    remote_cmd "git -C '${APP_DIR}' merge --ff-only '${REF}'" 2>&1 | tail -5
+    merge_cmd="merge --ff-only ${REF}"
+    service_git "${merge_cmd}" 2>&1 | tail -5
 else
     warn "SKIP_PULL=1 — deploying whatever is already checked out"
 fi
-DEPLOY_SHA="$(remote_cmd "git -C '${APP_DIR}' rev-parse HEAD")"
-log "PASS: at $(remote_cmd "git -C '${APP_DIR}' rev-parse --short HEAD")"
+sha_cmd="rev-parse HEAD"
+DEPLOY_SHA="$(service_git "${sha_cmd}")"
+short_cmd="rev-parse --short HEAD"
+log "PASS: at $(service_git "${short_cmd}")"
 
 # Refuse to continue with a dirty tree: migrations run against the checkout, so
 # uncommitted edits would make the running code differ from the recorded commit.
-dirty="$(remote_cmd "git -C '${APP_DIR}' status --porcelain --untracked-files=no" || true)"
+status_cmd="status --porcelain --untracked-files=no"
+dirty="$(service_git "${status_cmd}" || true)"
 if [ -n "${dirty}" ]; then
     warn "tracked files are modified on the host:"
     printf '%s\n' "${dirty}" | sed 's/^/    /'
@@ -346,22 +367,34 @@ log "PASS: now at ${after}"
 if [ "${SKIP_FRONTEND}" != "1" ]; then
     if [ "${FRONTEND_SOURCE}" = "bundle" ]; then
         log "[frontend] fetching bundle ref ${DIST_REF}..."
-        remote_cmd "git -C '${APP_DIR}' fetch origin 'refs/heads/${DIST_REF}:refs/remotes/origin/${DIST_REF}' --force" 2>&1 | tail -2
-        # Built up first, then run on the host. Written as one nested
-        # double-quoted "$(remote_cmd "git ... 'ref')" it is a syntax error:
+        bundle_fetch="fetch origin 'refs/heads/${DIST_REF}:refs/remotes/origin/${DIST_REF}' --force"
+        service_git "${bundle_fetch}" 2>&1 | tail -2
+        # Commands are assembled into a variable and then passed to service_git.
+        # Written inline as "$(remote_cmd "git ... 'ref')" it is a syntax error:
         # the inner " closes the outer quote, so the substitution is never
         # closed and bash reports the error at the next `else` — hundreds of
-        # lines away from the line that is actually wrong. This is the rule
-        # noted at the top of this file, and it was violated here.
-        resolve_cmd="git -C '${APP_DIR}' rev-parse 'refs/remotes/origin/${DIST_REF}'"
-        BUNDLE_SHA="$(remote_cmd "${resolve_cmd}")"
+        # lines away from the line that is actually wrong. That rule is noted at
+        # the top of this file; it applies to every git call here, not just the
+        # one it was discovered on.
+        resolve_cmd="rev-parse 'refs/remotes/origin/${DIST_REF}'"
+        BUNDLE_SHA="$(service_git "${resolve_cmd}")"
         log "  bundle commit: ${BUNDLE_SHA}"
 
         log "[frontend] checking the bundle against the deployed frontend sources..."
-        bundle_info="$(remote_cmd "git -C '${APP_DIR}' show 'refs/remotes/origin/${DIST_REF}:frontend/dist/.build-info.json' 2>/dev/null" || true)"
+        show_cmd="show 'refs/remotes/origin/${DIST_REF}:frontend/dist/.build-info.json'"
+        bundle_info="$(service_git "${show_cmd}" || true)"
         recorded_sha="$(printf '%s' "${bundle_info}" | sed -n 's/.*"source_sha": *"\([0-9a-f]*\)".*/\1/p')"
         recorded_tree="$(printf '%s' "${bundle_info}" | sed -n 's/.*"frontend_tree": *"\([^"]*\)".*/\1/p')"
-        deployed_tree="$(remote_cmd "cd '${APP_DIR}' && git ls-tree -r HEAD -- ${FRONTEND_INPUTS[*]} | $(declare -f frontend_tree_filter) frontend_tree_filter | git hash-object --stdin" 2>/dev/null || echo unavailable)"
+        # The filter is written to a temp file on the host and sourced there, so
+        # there is one copy of the rule (this file) and the pipeline stays a
+        # plain pipeline. Passing it through nested quotes instead is both
+        # unreadable and a quoting hazard — see the note at the top of this file.
+        remote_sudo "cat > /tmp/.frontend-filter.sh <<'FILTER_EOF'
+$(declare -f frontend_tree_filter)
+FILTER_EOF"
+        tree_script="cd '${APP_DIR}' && . /tmp/.frontend-filter.sh && git ls-tree -r HEAD -- ${FRONTEND_INPUTS[*]} | frontend_tree_filter | git hash-object --stdin"
+        deployed_tree="$(remote_sudo "sudo -u '${SERVICE_USER}' env HOME='${SERVICE_HOME}' bash -c \"${tree_script}\"" 2>/dev/null || echo unavailable)"
+        remote_sudo "rm -f /tmp/.frontend-filter.sh"
 
         if [ -z "${recorded_tree}" ] || [ "${recorded_tree}" = "unavailable" ]; then
             warn "bundle carries no usable frontend_tree (built before that field"
@@ -390,16 +423,46 @@ Or bypass knowingly:  FRONTEND_SOURCE=local"
         # index.html — but it is still served, and 16 MB of orphaned JS is what
         # makes a bundle impossible to reason about later.
         log "[frontend] installing bundle into ${APP_DIR}/frontend/dist..."
+        # rm -rf runs as root on purpose: the directory is owned by the service
+        # user, and the archive is then written as that user.
         remote_sudo "rm -rf '${APP_DIR}/frontend/dist' && mkdir -p '${APP_DIR}/frontend/dist'"
-        # The pipeline is assembled here and run on the host, not written inside a
-        # double-quoted argument: inside quotes the `|` and the redirection are
-        # literal text, so `tar` would run on the control machine against a
-        # non-existent path. This is the same class of mistake as putting `2>&1`
-        # inside a quoted word inside "$(...)", noted at the top of this file.
-        archive_cmd="cd '${APP_DIR}' && git archive 'refs/remotes/origin/${DIST_REF}' frontend/dist | tar -x -C '${APP_DIR}' --strip-components=2"
-        remote_cmd "${archive_cmd}" 2>&1 | tail -3
+        # Extract INTO the dist directory, with the two leading path components
+        # stripped: the archive holds frontend/dist/... and the target wants the
+        # contents of dist/ directly. Extracting into APP_DIR instead put
+        # index.html and assets/ at the application root, which is how the first
+        # run reported "installed 0 files" while quietly littering the checkout
+        # with 197 untracked files.
+        #
+        # The pipeline lives in the string handed to remote_sudo, which runs it
+        # under `sudo bash -c`, so the `|` is a real pipe there. Two earlier
+        # attempts were wrong: writing it inside a quoted argument made the `|`
+        # literal (tar would run on the control machine), and routing it through
+        # `bash -c "$(printf '%q' ...)"` quoted the whole command into one word,
+        # so bash tried to execute that word as a program name.
+        # Only git needs to be the service user; tar can be root, and the chown
+        # afterwards fixes ownership.
+        archive_cmd="cd '${APP_DIR}' && sudo -u '${SERVICE_USER}' env HOME='${SERVICE_HOME}' git archive 'refs/remotes/origin/${DIST_REF}' frontend/dist | tar -x -C '${APP_DIR}/frontend/dist' --strip-components=2"
+        remote_sudo "${archive_cmd}" 2>&1 | tail -3
+
+        # A run that extracted to the wrong place leaves the application root
+        # full of SPA files. Detect it rather than leaving it to be discovered
+        # later as a mysteriously dirty checkout.
+        # `|| true` is load-bearing, not defensive noise. `ls` on a missing file
+        # exits 2, and under `set -e` a failing command substitution terminates
+        # the script — with ls's status as the exit code and no message. The
+        # first run of this check did exactly that: every preceding step passed,
+        # 198 files were installed, and the deploy then died silently with exit
+        # 2 pointing at nothing. Every `x="$(cmd ...)"` in this script whose cmd
+        # can legitimately fail needs the same guard.
+        stray="$(remote_cmd "ls '${APP_DIR}/index.html' 2>/dev/null" || true)"
+        if [ -n "${stray}" ]; then
+            die "SPA files are sitting in the application root (${APP_DIR}/index.html exists).
+An earlier run extracted with -C APP_DIR instead of -C APP_DIR/frontend/dist.
+Remove the stray files before deploying again:
+  find ${APP_DIR} -maxdepth 1 \\( -name index.html -o -name assets -o -name monacoeditorwork -o -name '.build-info.json' -o -name 'favicon.svg' -o -name 'icons.svg' \\) -exec rm -rf {} +"
+        fi
         remote_sudo "chown -R '${SERVICE_USER}:${SERVICE_USER}' '${APP_DIR}/frontend/dist'"
-        n_files="$(remote_cmd "find '${APP_DIR}/frontend/dist' -type f | wc -l")"
+        n_files="$(remote_cmd "find '${APP_DIR}/frontend/dist' -type f | wc -l" || true)"
         log "PASS: installed ${n_files} files"
     else
         warn "FRONTEND_SOURCE=local — building the SPA on the production host."
