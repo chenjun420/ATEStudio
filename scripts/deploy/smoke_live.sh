@@ -3,53 +3,62 @@
 # smoke_live.sh — agent-runnable LIVE smoke test for an ATE Studio cloud deploy.
 #
 # Verifies a deployed cloud on a bare-metal host (default 192.168.5.25):
-#   * TCP reachability of nginx:80, Qdrant:6333, NATS monitor:8222
-#   * HTTP readiness THROUGH nginx:  GET /api/v1/health/ready  (F3 key check —
-#     the OLD deploy returns 404 for this path; a 404 is a clear FAIL meaning
-#     "old deploy still serving")
-#   (a check for the knowledge graph used to live here and always failed)
-#   * Qdrant: GET /collections returns 200 (expect ate_failures /
-#     the station fault-case index)
-#   * NATS monitor: GET /varz returns 200
-#   * optional POST /api/v1/diagnose reachability — only when SMOKE_AUTH_TOKEN
-#     is set (skipped otherwise; no credentials are ever hardcoded here)
+#   * TCP reachability of the service and of Qdrant
+#   * GET /api/v1/health/ready — HTTP 200 with database AND nats both "ok"
+#   * the SPA is actually being served: GET / returns an index.html, and
+#     GET /.build-info.json returns a bundle that names the commit and the
+#     frontend tree it was built from
+#   * Qdrant: GET /collections returns 200 (the dashboard reads fault vectors
+#     from it, so this is a real dependency, not an optional extra)
+#   * with SMOKE_AUTH_TOKEN set: the authenticated product surface —
+#     /api/v1/auth/me, /api/v1/apps with its nested menus, and the plants /
+#     stations / fault-cases collections
 #
-# This script NEVER contains passwords or keys. Any auth token/password is read
-# ONLY from the environment (SMOKE_AUTH_TOKEN); checks that
-# need auth but have no token are SKIPped with a clear message, never failed.
+# This script NEVER contains passwords or keys. Any auth token is read ONLY from
+# the environment (SMOKE_AUTH_TOKEN); checks that need auth but have no token are
+# SKIPped with a clear message, never failed.
 #
 # Exit status:
-#   0  all REQUIRED checks passed (readiness via nginx). SKIPs never fail.
+#   0  all REQUIRED checks passed. SKIPs never fail.
 #   1  a required check FAILED — including when the target host is unreachable
-#      (the script always returns promptly: every curl uses short timeouts, so
-#      a CI/agent run reports failure rather than hanging).
+#      (every curl uses short timeouts, so a run reports failure rather than
+#      hanging).
 #
 # Usage:
 #   ./scripts/deploy/smoke_live.sh
-#   HOST=192.168.5.25 HTTP_PORT=80 ./scripts/deploy/smoke_live.sh
-#   SMOKE_AUTH_TOKEN=<jwt> ./scripts/deploy/smoke_live.sh   # also tests /diagnose
+#   HOST=192.168.5.25 ./scripts/deploy/smoke_live.sh
+#   SMOKE_AUTH_TOKEN=<jwt> ./scripts/deploy/smoke_live.sh   # also checks the API surface
+#
+# Getting a token:
+#   token=$(curl -sS -X POST http://192.168.5.25:8000/api/v1/auth/login \
+#            -H 'Content-Type: application/json' \
+#            -d '{"username":"<user>","password":"<password>"}' | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
 #
 # Config (env-overridable, all with sensible defaults):
-#   HOST             target host            (default 192.168.5.25)
-#   HTTP_PORT        nginx HTTP port        (default 80)
-#   CLOUD_PORT       direct cloud port      (default 8000; optional direct check)
-#   QDRANT_PORT      Qdrant HTTP port       (default 6333)
-#   NATS_MON_PORT    NATS monitor port      (default 8222)
-#   SMOKE_AUTH_TOKEN JWT for authed probes  (default unset -> those SKIP)
-#   CHECK_CLOUD_DIRECT=1 also probe :8000 directly (default 0)
+#   HOST             target host               (default 192.168.5.25)
+#   HTTP_PORT        the service port         (default 8000)
+#   QDRANT_PORT      Qdrant HTTP port         (default 6333)
+#   SMOKE_AUTH_TOKEN JWT for authed probes    (default unset -> those SKIP)
+#   EXPECT_FRONTHEND_TREE  assert the served bundle was built from this frontend
+#                          tree hash (default unset -> reported, not asserted)
 #
+# There is no reverse proxy in this deployment. An earlier version of this script
+# probed nginx on :80 and the NATS monitor on :8222 and reported four FAILs
+# against a perfectly healthy board: the SPA is served by FastAPI straight out of
+# frontend/dist, and the NATS monitor listens on loopback by design while
+# /api/v1/health/ready already reports whether NATS is usable. A smoke test that
+# fails on a healthy deployment is worse than no smoke test, because it teaches
+# everyone to read past the red.
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 HOST="${HOST:-192.168.5.25}"
-HTTP_PORT="${HTTP_PORT:-80}"
-CLOUD_PORT="${CLOUD_PORT:-8000}"
+HTTP_PORT="${HTTP_PORT:-8000}"
 QDRANT_PORT="${QDRANT_PORT:-6333}"
-NATS_MON_PORT="${NATS_MON_PORT:-8222}"
 SMOKE_AUTH_TOKEN="${SMOKE_AUTH_TOKEN:-}"
-CHECK_CLOUD_DIRECT="${CHECK_CLOUD_DIRECT:-0}"
+EXPECT_FRONTHEND_TREE="${EXPECT_FRONTHEND_TREE:-}"
 
 QDRANT_COLLECTIONS="ate_failures"
 HEALTH_PATH="/api/v1/health/ready"
@@ -70,7 +79,7 @@ record() {
     printf '  [%s] %-28s %s\n' "$1" "$2" "$3"
 }
 pass() { record "PASS" "$1" "$2"; }
-fail() { record "FAIL" "$1" "$2"; }
+fail() { record "FAIL" "$1" "$2"; FAIL_REQUIRED=1; }
 skip() { record "SKIP" "$1" "$2"; }
 
 log()  { printf '[smoke-live] %s\n' "$*"; }
@@ -105,7 +114,7 @@ tcp_open() {
     fi
 }
 
-# http_code <url> — print the HTTP status code (or "" on connection failure).
+# http_code <url> [curl args...] — print the HTTP status code (or "" on failure).
 http_code() {
     local url="$1"; shift
     curl -sS --connect-timeout "${CURL_CONNECT_TIMEOUT}" \
@@ -120,7 +129,22 @@ http_body() {
          --max-time "${CURL_MAX_TIME}" "$@" "${url}" 2>/dev/null || true
 }
 
-log "target: http://${HOST}  (nginx :${HTTP_PORT}, cloud :${CLOUD_PORT}, Qdrant :${QDRANT_PORT}, NATS mon :${NATS_MON_PORT})"
+# count_match <text> <extended-regex> — how many times the pattern occurs.
+#
+# Not `printf ... | grep -q`. `grep -q` exits on the first match and closes the
+# pipe; the writer dies of SIGPIPE and, under `set -o pipefail`, the pipeline
+# reports 141 — so a question that was answered "yes" is reported as a failure.
+#
+# And not `grep -c`, which counts matching LINES. Every response here is a single
+# line of JSON, so `grep -c` reports 1 for eleven occurrences; counting
+# occurrences is what makes "3 groups, 20 pages" come out as numbers a person
+# can check against the UI.
+count_match() {
+    local text="$1" pattern="$2"
+    printf '%s' "${text}" | grep -oE "${pattern}" 2>/dev/null | wc -l | tr -d ' ' 2>/dev/null || true
+}
+
+log "target: http://${HOST}:${HTTP_PORT}  (service :${HTTP_PORT}, Qdrant :${QDRANT_PORT})"
 log "note: short curl timeouts (connect ${CURL_CONNECT_TIMEOUT}s / max ${CURL_MAX_TIME}s) — an unreachable host fails fast."
 echo
 
@@ -136,73 +160,84 @@ check_tcp() {
         fail "tcp/${name}" "${HOST}:${port} unreachable (connection refused/timeout)"
     fi
 }
-check_tcp "${HTTP_PORT}"      "nginx"
-check_tcp "${QDRANT_PORT}"    "qdrant"
-check_tcp "${NATS_MON_PORT}"  "nats-mon"
-if [ "${CHECK_CLOUD_DIRECT}" = "1" ]; then
-    check_tcp "${CLOUD_PORT}" "cloud-direct"
-fi
+check_tcp "${HTTP_PORT}"   "service"
+check_tcp "${QDRANT_PORT}" "qdrant"
 echo
 
 # ---------------------------------------------------------------------------
-# (b) Readiness THROUGH nginx — THE key F3 check (required).
+# (b) Readiness (required).
+#
+# NATS is asserted here rather than by probing its monitor port: the monitor
+# listens on 127.0.0.1 and is not reachable from another host by design, while
+# this endpoint reports whether NATS is actually usable by the application.
 # ---------------------------------------------------------------------------
-log "== Readiness via nginx (required) =="
+log "== Readiness (required) =="
 ready_url="http://${HOST}:${HTTP_PORT}${HEALTH_PATH}"
 code="$(http_code "${ready_url}")"
 case "${code}" in
     200)
         body="$(http_body "${ready_url}")"
-        # The readiness JSON reports per-component "ok"/"down", e.g.
-        # {"database":"ok","nats":"ok","graph":"ok"}. database is the core
-        # dependency; require it to be "ok".
-        if printf '%s' "${body}" | grep -Eq '"database"[[:space:]]*:[[:space:]]*"ok"'; then
-            pass "health/ready (nginx)" "HTTP 200, database ok via nginx (new deploy): ${body}"
+        db_ok=0; nats_ok=0
+        [ "$(count_match "${body}" '"database"[[:space:]]*:[[:space:]]*"ok"')" -ge 1 ] && db_ok=1
+        [ "$(count_match "${body}" '"nats"[[:space:]]*:[[:space:]]*"ok"')" -ge 1 ] && nats_ok=1
+        if [ "${db_ok}" -eq 1 ] && [ "${nats_ok}" -eq 1 ]; then
+            pass "health/ready" "HTTP 200, database ok, nats ok: ${body}"
         else
-            fail "health/ready (nginx)" "HTTP 200 but a component is not ok: ${body:-<empty body>}"
-            FAIL_REQUIRED=1
+            fail "health/ready" "HTTP 200 but database=${db_ok} nats=${nats_ok}: ${body:-<empty body>}"
         fi
         ;;
-    404)
-        # The OLD cloud deploy does not have /api/v1/health/ready -> 404.
-        fail "health/ready (nginx)" "HTTP 404 from ${ready_url} — OLD deploy still serving (new deploy returns 200)"
-        FAIL_REQUIRED=1
-        ;;
     ""|000)
-        fail "health/ready (nginx)" "no HTTP response from ${ready_url} — host/nginx unreachable"
-        FAIL_REQUIRED=1
+        fail "health/ready" "no HTTP response from ${ready_url} — host unreachable or the service is down"
         ;;
     *)
-        fail "health/ready (nginx)" "unexpected HTTP ${code} from ${ready_url}"
-        FAIL_REQUIRED=1
+        fail "health/ready" "unexpected HTTP ${code} from ${ready_url}"
         ;;
 esac
 echo
 
-# Optional direct-to-cloud readiness (bypasses nginx; not required).
-if [ "${CHECK_CLOUD_DIRECT}" = "1" ]; then
-    log "== Readiness direct on :${CLOUD_PORT} (optional) =="
-    dcode="$(http_code "http://${HOST}:${CLOUD_PORT}${HEALTH_PATH}")"
-    if [ "${dcode}" = "200" ]; then
-        pass "health/ready (cloud:8000)" "HTTP 200 direct to cloud"
+# ---------------------------------------------------------------------------
+# (c) The SPA.
+#
+# This is the part that says the deploy actually installed a bundle, rather than
+# leaving whatever was there before. A backend-only deploy that never touched
+# frontend/dist would still pass (b) and (c)-readiness; only these two catch it.
+# ---------------------------------------------------------------------------
+log "== SPA =="
+spa_url="http://${HOST}:${HTTP_PORT}/"
+code="$(http_code "${spa_url}")"
+if [ "${code}" = "200" ]; then
+    index="$(http_body "${spa_url}")"
+    n_idx="$(printf '%s' "${index}" | wc -c | tr -d ' ')"
+    if [ "${n_idx}" -gt 1000 ] && [ "$(count_match "${index}" '<div id="app"')" -ge 1 ]; then
+        pass "spa/index" "HTTP 200, ${n_idx} bytes, mounts #app"
     else
-        skip "health/ready (cloud:8000)" "direct check returned '${dcode:-no response}' (CHECK_CLOUD_DIRECT)"
+        fail "spa/index" "HTTP 200 but the body is not an application shell (${n_idx} bytes, #app mount $( [ "$(count_match "${index}" '<div id="app"')" -ge 1 ] && echo present || echo missing))"
     fi
-    echo
+else
+    fail "spa/index" "GET ${spa_url} returned '${code:-no response}'"
 fi
 
-# ---------------------------------------------------------------------------
-# (c) The FalkorDB graph check is gone with the knowledge-graph subsystem.
-#
-# It ran `redis-cli PING` and then `GRAPH.QUERY fmea "RETURN 1"`, and FAILED the
-# smoke run on both. That is the correct behaviour for a service this system
-# needs, and the wrong behaviour for a service it has stopped needing: the
-# smoke test has been reporting a failure for a component that was never
-# deployed, which trained everyone to read past a red line in this output.
-# ---------------------------------------------------------------------------
+info_url="http://${HOST}:${HTTP_PORT}/.build-info.json"
+code="$(http_code "${info_url}")"
+if [ "${code}" != "200" ]; then
+    fail "spa/build-info" "GET ${info_url} returned '${code:-no response}' — the installed bundle cannot be traced to a commit"
+else
+    info="$(http_body "${info_url}")"
+    src="$(printf '%s' "${info}" | sed -n 's/.*"source_sha"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+    tree="$(printf '%s' "${info}" | sed -n 's/.*"frontend_tree"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+    built="$(printf '%s' "${info}" | sed -n 's/.*"built_by"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+    if [ -z "${src}" ] || [ -z "${tree}" ]; then
+        fail "spa/build-info" "the served .build-info.json names no source_sha/frontend_tree: ${info:-<empty>}"
+    elif [ -n "${EXPECT_FRONTHEND_TREE}" ] && [ "${tree}" != "${EXPECT_FRONTHEND_TREE}" ]; then
+        fail "spa/build-info" "bundle was built from frontend tree ${tree}, expected ${EXPECT_FRONTHEND_TREE}"
+    else
+        pass "spa/build-info" "bundle from ${src:0:12} (${built:-unknown}) frontend tree ${tree:0:12}"
+    fi
+fi
+echo
 
 # ---------------------------------------------------------------------------
-# (d) Qdrant — GET /collections expects 200; note expected collections.
+# (d) Qdrant — required, because api/v1/dashboard.py reads fault vectors from it.
 # ---------------------------------------------------------------------------
 log "== Qdrant vector DB =="
 qcode="$(http_code "http://${HOST}:${QDRANT_PORT}/collections")"
@@ -210,53 +245,89 @@ if [ "${qcode}" = "200" ]; then
     qbody="$(http_body "http://${HOST}:${QDRANT_PORT}/collections")"
     found=""
     for c in ${QDRANT_COLLECTIONS}; do
-        if printf '%s' "${qbody}" | grep -q "\"${c}\""; then
-            found="${found} ${c}"
-        fi
+        # Counting, not `grep -q` — see count_match.
+        [ "$(count_match "${qbody}" "${c}")" -ge 1 ] && found="${found} ${c}"
     done
     if [ -n "${found}" ]; then
         pass "qdrant/collections" "HTTP 200; found collections:${found}"
     else
-        pass "qdrant/collections" "HTTP 200 (expected collections [${QDRANT_COLLECTIONS}] not yet listed — may be pre-indexing)"
+        pass "qdrant/collections" "HTTP 200 (expected collections [${QDRANT_COLLECTIONS}] not listed — may be pre-indexing)"
     fi
 else
-    fail "qdrant/collections" "GET http://${HOST}:${QDRANT_PORT}/collections returned '${qcode:-no response}'"
+    fail "qdrant/collections" "GET http://${HOST}:${QDRANT_PORT}/collections returned '${qcode:-no response}' — the dashboard's fault queries will fail"
 fi
 echo
 
 # ---------------------------------------------------------------------------
-# NATS monitor — GET /varz expects 200.
+# (e) Authenticated product surface — only with a token.
 # ---------------------------------------------------------------------------
-log "== NATS monitor =="
-ncode="$(http_code "http://${HOST}:${NATS_MON_PORT}/varz")"
-if [ "${ncode}" = "200" ]; then
-    nbody="$(http_body "http://${HOST}:${NATS_MON_PORT}/varz")"
-    srv="$(printf '%s' "${nbody}" | grep -oE '"server_id"[^,]*' | head -1 || true)"
-    pass "nats/varz" "HTTP 200 monitor OK ${srv}"
-else
-    fail "nats/varz" "GET http://${HOST}:${NATS_MON_PORT}/varz returned '${ncode:-no response}'"
-fi
-echo
-
-# ---------------------------------------------------------------------------
-# (e) Optional authenticated diagnose reachability — only with a token.
-# ---------------------------------------------------------------------------
-log "== Authenticated diagnose probe (optional) =="
+log "== Authenticated API surface (optional) =="
 if [ -z "${SMOKE_AUTH_TOKEN}" ]; then
-    skip "diagnose/post" "SMOKE_AUTH_TOKEN not set — set it to a valid JWT to test POST /api/v1/diagnose"
+    skip "api/surface" "SMOKE_AUTH_TOKEN not set — set it to a JWT to check /auth/me, /apps, /plants, /stations, /fault-cases"
 else
-    durl="http://${HOST}:${HTTP_PORT}/api/v1/diagnose"
-    dcode="$(curl -sS --connect-timeout "${CURL_CONNECT_TIMEOUT}" --max-time "${CURL_MAX_TIME}" \
-                  -o /dev/null -w '%{http_code}' -X POST "${durl}" \
-                  -H "Authorization: Bearer ${SMOKE_AUTH_TOKEN}" \
-                  -H 'Content-Type: application/json' \
-                  -d '{"query":"smoke reachability ping","limit":1}' 2>/dev/null || true)"
-    case "${dcode}" in
-        200|201|202) pass "diagnose/post" "POST /api/v1/diagnose -> HTTP ${dcode} (reachable + authed)" ;;
-        401|403)     fail "diagnose/post" "HTTP ${dcode} — token rejected/forbidden" ;;
-        404)         fail "diagnose/post" "HTTP 404 — diagnose route not present (old deploy?)" ;;
-        *)           fail "diagnose/post" "unexpected HTTP '${dcode:-no response}' from /api/v1/diagnose" ;;
+    auth=(-H "Authorization: Bearer ${SMOKE_AUTH_TOKEN}")
+
+    me_code="$(http_code "http://${HOST}:${HTTP_PORT}/api/v1/auth/me" "${auth[@]}")"
+    case "${me_code}" in
+        200)
+            me="$(http_body "http://${HOST}:${HTTP_PORT}/api/v1/auth/me" "${auth[@]}")"
+            user="$(printf '%s' "${me}" | sed -n 's/.*"username"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+            role="$(printf '%s' "${me}" | sed -n 's/.*"role"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+            pass "api/auth-me" "HTTP 200 as ${user:-?}/${role:-?}"
+            ;;
+        401|403) fail "api/auth-me" "HTTP ${me_code} — the token was rejected" ;;
+        *)       fail "api/auth-me" "unexpected HTTP '${me_code:-no response}'" ;;
     esac
+
+    # The app LIST carries no menus. GET /api/v1/apps returns
+    # {"items":[{id,code,name,...}],"total":N} — the two-level IA only appears on
+    # GET /api/v1/apps/{id}, where each group holds a nested `children` array.
+    # Asserting on the list response finds zero groups and zero pages, which
+    # reads as "the seed did not run" on a perfectly healthy deployment.
+    #
+    # ids are pulled with grep because this script stays dependency-free. Every
+    # object in `items` has exactly one "id", and nothing else in the response
+    # does, so the matches are the app ids. If that ever stops being true the
+    # count check below fails loudly rather than silently passing.
+    apps_code="$(http_code "http://${HOST}:${HTTP_PORT}/api/v1/apps" "${auth[@]}")"
+    if [ "${apps_code}" = "200" ]; then
+        apps_body="$(http_body "http://${HOST}:${HTTP_PORT}/api/v1/apps" "${auth[@]}")"
+        app_ids="$(printf '%s' "${apps_body}" \
+                  | grep -oE '"id"[[:space:]]*:[[:space:]]*"[0-9a-f-]+"' \
+                  | grep -oE '[0-9a-f-]{8,}' || true)"
+        n_apps="$(printf '%s\n' "${app_ids}" | grep -c . || true)"
+        if [ "${n_apps}" -lt 1 ]; then
+            fail "api/apps" "HTTP 200 but no app id could be read from ${apps_body:-<empty>}"
+        else
+            n_groups=0; n_pages=0; bad=""
+            while read -r aid; do
+                [ -n "${aid}" ] || continue
+                one="$(http_body "http://${HOST}:${HTTP_PORT}/api/v1/apps/${aid}" "${auth[@]}")"
+                g="$(count_match "${one}" '"parent_id"[[:space:]]*:[[:space:]]*null')"
+                p="$(count_match "${one}" '"parent_id"[[:space:]]*:[[:space:]]*"')"
+                n_groups=$((n_groups + g)); n_pages=$((n_pages + p))
+                [ "${g}" -ge 1 ] || bad="${bad} ${aid}"
+            done <<< "${app_ids}"
+            if [ "${n_pages}" -lt 1 ]; then
+                fail "api/apps" "HTTP 200; ${n_apps} apps, ${n_groups} groups, 0 pages under them — the two-level seed did not run${bad:+ (apps with no group at all:${bad})}"
+            else
+                pass "api/apps" "HTTP 200; ${n_apps} apps, ${n_groups} groups, ${n_pages} pages nested under them"
+            fi
+        fi
+    else
+        fail "api/apps" "unexpected HTTP '${apps_code:-no response}' from /api/v1/apps"
+    fi
+
+    for p in plants stations fault-cases; do
+        c="$(http_code "http://${HOST}:${HTTP_PORT}/api/v1/${p}" "${auth[@]}")"
+        if [ "${c}" = "200" ]; then
+            b="$(http_body "http://${HOST}:${HTTP_PORT}/api/v1/${p}" "${auth[@]}")"
+            n="$(printf '%s' "${b}" | sed -n 's/.*"total"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')"
+            pass "api/${p}" "HTTP 200, total=${n:-?}"
+        else
+            fail "api/${p}" "unexpected HTTP '${c:-no response}' from /api/v1/${p}"
+        fi
+    done
 fi
 echo
 
@@ -281,12 +352,11 @@ log "--------------------------------------------------------------"
 log "totals: PASS=${n_pass}  FAIL=${n_fail}  SKIP=${n_skip}"
 
 if [ "${FAIL_REQUIRED}" -ne 0 ]; then
-    warn "a REQUIRED check failed (readiness via nginx at ${ready_url})."
-    warn "if the host is unreachable or this is an OLD deploy (404), the deploy is NOT healthy."
+    warn "a REQUIRED check failed."
     log "=============================================================="
     exit 1
 fi
 
-log "required readiness check passed (SKIPs are non-fatal)."
+log "all required checks passed (SKIPs are non-fatal)."
 log "=============================================================="
 exit 0
