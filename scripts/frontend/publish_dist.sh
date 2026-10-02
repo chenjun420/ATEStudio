@@ -201,8 +201,20 @@ TARGET_TIP="$(git rev-parse "refs/remotes/origin/${PUBLISH_BRANCH}")"
 if [ "${TARGET_TIP}" != "${SOURCE_SHA}" ]; then
     outcome "skipped-branch-tip-moved"
     log "origin/${PUBLISH_BRANCH} is at ${TARGET_TIP}, this build is ${SOURCE_SHA}."
-    log "A bundle is only published from the branch tip. Nothing was pushed; the"
-    log "next run on ${PUBLISH_BRANCH} will publish it."
+    log "A bundle is only published from the branch tip, so nothing was pushed."
+    if [ "${SOURCE_REF}" = "(detached)" ]; then
+        log "This build ran from a detached HEAD, which is normal in CI. On a push"
+        log "to ${PUBLISH_BRANCH} the tip is this commit and the publish proceeds."
+    else
+        log "You are on '${SOURCE_REF}' and it is not the tip of"
+        log "origin/${PUBLISH_BRANCH}. Publishing from here would put a bundle on a"
+        log "tree that is not the one it was built from. Bring the branch up to date"
+        log "first:"
+        log "  git pull --ff-only origin ${PUBLISH_BRANCH}"
+        log "and run this again. If the branch moved because a CI run just published a"
+        log "bundle, the second run will report skipped-frontend-unchanged, which is"
+        log "the correct answer."
+    fi
     exit 0
 fi
 
