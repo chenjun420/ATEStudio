@@ -107,6 +107,10 @@ ignore = ["B024"]  # Abstract class without abstract methods is intentional
 # Intentional re-export barrel: imports follow package init code and are the
 # public surface of the package (F401 unused-import is expected).
 "src/ate_cloud/models/__init__.py" = ["E402", "F401"]
+# alembic's own shape: the logging setup must run before the model import, and
+# env.py cannot be reshaped to avoid that without breaking
+# `alembic revision --autogenerate`. Same reason as the barrel above.
+"alembic/env.py" = ["E402"]
 
 [tool.ruff.lint.flake8-bugbear]
 # FastAPI dependency-injection calls in argument defaults are the framework's

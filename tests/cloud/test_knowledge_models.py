@@ -261,8 +261,8 @@ def test_migration_upgrade_downgrade_cycle_on_temp_sqlite(
 
     #: Revision that creates test_requirements / test_cases / fmeas / diagnoses.
     #: Its parent is the downgrade target — see the note at the call site.
-    KNOWLEDGE_TABLES_REV = "d1e2f3a4b5c6"
-    KNOWLEDGE_TABLES_PARENT_REV = "c9d0e1f2a3b4"
+    knowledge_tables_rev = "d1e2f3a4b5c6"
+    knowledge_tables_parent_rev = "c9d0e1f2a3b4"
 
     cfg = Config(str(Path(root) / "alembic.ini"))
 
@@ -278,7 +278,7 @@ def test_migration_upgrade_downgrade_cycle_on_temp_sqlite(
         finally:
             conn.close()
 
-    command.upgrade(cfg, KNOWLEDGE_TABLES_REV)
+    command.upgrade(cfg, knowledge_tables_rev)
     created = _tables()
     assert {"test_requirements", "test_cases", "fmeas", "diagnoses"} <= created
 
@@ -287,7 +287,7 @@ def test_migration_upgrade_downgrade_cycle_on_temp_sqlite(
     # migration is added on top — the P2 ATERag-bundle migration did exactly
     # that, which silently turned this into a test of the wrong migration.
     # Naming the target revision keeps the assertion about what it claims.
-    command.downgrade(cfg, KNOWLEDGE_TABLES_PARENT_REV)
+    command.downgrade(cfg, knowledge_tables_parent_rev)
     after_downgrade = _tables()
     assert "fmeas" not in after_downgrade
     assert "test_cases" not in after_downgrade

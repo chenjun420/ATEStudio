@@ -27,16 +27,17 @@ PostgreSQL 专有语法 —— 开发与 CI 跑 SQLite, 生产跑 PostgreSQL。
 ``sa.JSON`` 在两侧分别映射为 TEXT(JSON1) 与 JSONB, 行为一致。
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
+
 from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "b7c8d9e0f1a2"
-down_revision: Union[str, Sequence[str], None] = "d1e2f3a4b5c6"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = "d1e2f3a4b5c6"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:

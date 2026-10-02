@@ -9,6 +9,7 @@ Tests cover:
 """
 
 import asyncio
+import time
 
 import pytest
 
@@ -168,14 +169,23 @@ class TestWatchDogNormalOperation:
 
         watchdog.start()
 
-        # Let it run with 2 misses (below threshold)
+        # Wait for the scan loop to observe misses rather than sleeping a fixed
+        # span. A 0.06s sleep is only ~1.2 scan intervals at 0.05, so under load
+        # the loop can miss the window entirely and this fails without anything
+        # being wrong. Its sibling test was already loosened once for the same
+        # reason; polling removes the dependency instead of widening the margin.
         counter["value"] = 1
-        await asyncio.sleep(0.12)  # ~2 checks, misses should be 2
-        assert watchdog.consecutive_misses <= 2
+        deadline = time.monotonic() + 5.0
+        while watchdog.consecutive_misses < 2 and time.monotonic() < deadline:
+            await asyncio.sleep(0.01)
+        # 2 misses is below the 3-miss alarm threshold, so nothing has fired yet.
+        assert 2 <= watchdog.consecutive_misses <= 2
 
-        # Resume heartbeat
+        # Resume heartbeat, then wait for the loop to notice.
         counter["value"] = 2
-        await asyncio.sleep(0.06)
+        deadline = time.monotonic() + 5.0
+        while watchdog.consecutive_misses != 0 and time.monotonic() < deadline:
+            await asyncio.sleep(0.01)
         assert watchdog.consecutive_misses == 0
 
         await watchdog.stop()

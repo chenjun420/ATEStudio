@@ -5,7 +5,7 @@ It can be executed by ProcessExecutor in an isolated process.
 
 Usage:
     Executed via ProcessExecutor.execute() with params and short timeout.
-    
+
 Expected behavior:
     - Sleeps for extended duration
     - Should trigger timeout in executor

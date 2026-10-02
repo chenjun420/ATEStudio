@@ -5,17 +5,17 @@ Revises: fb11e0780a2a
 Create Date: 2026-07-19 22:28:14.735352
 
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
+
+import sqlalchemy as sa
 
 from alembic import op
-import sqlalchemy as sa
-from sqlalchemy.dialects import sqlite
 
 # revision identifiers, used by Alembic.
 revision: str = 'ec6f5c458757'
-down_revision: Union[str, Sequence[str], None] = 'fb11e0780a2a'
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = 'fb11e0780a2a'
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -27,8 +27,18 @@ def upgrade() -> None:
         sa.Column('type', sa.String(50), nullable=False),
         sa.Column('appearance', sa.JSON(), nullable=True),
         sa.Column('default_data', sa.JSON(), nullable=True),
-        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('CURRENT_TIMESTAMP'), nullable=False),
-        sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('CURRENT_TIMESTAMP'), nullable=False),
+        sa.Column(
+            'created_at',
+            sa.DateTime(timezone=True),
+            server_default=sa.text('CURRENT_TIMESTAMP'),
+            nullable=False,
+        ),
+        sa.Column(
+            'updated_at',
+            sa.DateTime(timezone=True),
+            server_default=sa.text('CURRENT_TIMESTAMP'),
+            nullable=False,
+        ),
         sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_node_templates_name'), 'node_templates', ['name'], unique=True)

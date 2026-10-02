@@ -5,7 +5,7 @@ It can be executed by ProcessExecutor in an isolated process.
 
 Usage:
     Executed via ProcessExecutor.execute() with params.
-    
+
 Expected behavior:
     - Sets multiple output values
     - Returns PASSED status with outputs dict

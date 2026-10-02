@@ -29,17 +29,17 @@ Create Date: 2026-10-01 10:00:00.000000
 downgrade 会把空 route_path 的行删掉而不是填路径 —— 删掉会掉菜单, 填路径会
 造出指向不存在页面的菜单, 两者都比"这个迁移回滚不了"更坏。
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
 
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "f2b3c4d5e6a7"
-down_revision: Union[str, Sequence[str], None] = "e5f6a7b8c9d0"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = "e5f6a7b8c9d0"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:

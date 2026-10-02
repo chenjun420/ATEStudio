@@ -7,17 +7,17 @@ Revises: e6f7a8b9c0d1
 Create Date: 2026-08-17
 
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
 
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = 'a5f6b7c8d9e0'
-down_revision: Union[str, Sequence[str], None] = 'e6f7a8b9c0d1'
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = 'e6f7a8b9c0d1'
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -31,8 +31,18 @@ def upgrade() -> None:
         sa.Column('topology_data', sa.JSON(), nullable=False),
         sa.Column('created_by', sa.String(100), nullable=True),
         sa.Column('tags', sa.JSON(), nullable=False),
-        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('CURRENT_TIMESTAMP'), nullable=False),
-        sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('CURRENT_TIMESTAMP'), nullable=False),
+        sa.Column(
+            'created_at',
+            sa.DateTime(timezone=True),
+            server_default=sa.text('CURRENT_TIMESTAMP'),
+            nullable=False,
+        ),
+        sa.Column(
+            'updated_at',
+            sa.DateTime(timezone=True),
+            server_default=sa.text('CURRENT_TIMESTAMP'),
+            nullable=False,
+        ),
         sa.PrimaryKeyConstraint('id'),
         sa.UniqueConstraint('name', 'version', name='uq_fixture_topologies_name_version')
     )
@@ -43,7 +53,12 @@ def upgrade() -> None:
         sa.Column('version', sa.String(50), nullable=False),
         sa.Column('change_log', sa.Text(), nullable=True),
         sa.Column('topology_data', sa.JSON(), nullable=False),
-        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('CURRENT_TIMESTAMP'), nullable=False),
+        sa.Column(
+            'created_at',
+            sa.DateTime(timezone=True),
+            server_default=sa.text('CURRENT_TIMESTAMP'),
+            nullable=False,
+        ),
         sa.ForeignKeyConstraint(['topology_id'], ['fixture_topologies.id']),
         sa.PrimaryKeyConstraint('id')
     )
@@ -57,7 +72,12 @@ def upgrade() -> None:
         sa.Column('manufacturer', sa.String(100), nullable=True),
         sa.Column('spec_data', sa.JSON(), nullable=False),
         sa.Column('icon', sa.String(50), nullable=True),
-        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('CURRENT_TIMESTAMP'), nullable=False),
+        sa.Column(
+            'created_at',
+            sa.DateTime(timezone=True),
+            server_default=sa.text('CURRENT_TIMESTAMP'),
+            nullable=False,
+        ),
         sa.PrimaryKeyConstraint('id')
     )
 

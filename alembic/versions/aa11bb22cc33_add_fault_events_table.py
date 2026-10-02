@@ -10,18 +10,18 @@ Revises: a5f6b7c8d9e0
 Create Date: 2026-08-26
 
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = 'aa11bb22cc33'
-down_revision: Union[str, Sequence[str], None] = 'a5f6b7c8d9e0'
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = 'a5f6b7c8d9e0'
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -34,7 +34,12 @@ def upgrade() -> None:
         sa.Column('fault_type', sa.String(100), nullable=False),
         sa.Column('source', sa.String(20), nullable=False),
         sa.Column('detail', sa.JSON().with_variant(postgresql.JSONB(), 'postgresql'), nullable=False),
-        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('CURRENT_TIMESTAMP'), nullable=False),
+        sa.Column(
+            'created_at',
+            sa.DateTime(timezone=True),
+            server_default=sa.text('CURRENT_TIMESTAMP'),
+            nullable=False,
+        ),
         sa.ForeignKeyConstraint(['fixture_id'], ['fixture_topologies.id']),
         sa.PrimaryKeyConstraint('id')
     )

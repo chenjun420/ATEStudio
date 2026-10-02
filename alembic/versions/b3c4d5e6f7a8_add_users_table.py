@@ -5,17 +5,17 @@ Revises: a2b3c4d5e6f7
 Create Date: 2026-08-02 13:00:00.000000
 
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
 
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = 'b3c4d5e6f7a9'
-down_revision: Union[str, Sequence[str], None] = 'a2b3c4d5e6f7'
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = 'a2b3c4d5e6f7'
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -24,7 +24,6 @@ def upgrade() -> None:
     The users table may already exist (created by b8c4d5e6f7a8).
     We only add the missing columns for preferences + user management.
     """
-    import sqlalchemy as sa
     from sqlalchemy import inspect
 
     bind = op.get_bind()
@@ -55,12 +54,14 @@ def upgrade() -> None:
         if 'language' not in existing_columns:
             op.add_column('users', sa.Column('language', sa.String(10), nullable=False, server_default='en'))
         if 'updated_at' not in existing_columns:
-            op.add_column('users', sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False))
+            op.add_column(
+                'users',
+                sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+            )
 
 
 def downgrade() -> None:
     """Downgrade schema — remove theme_mode, language, updated_at columns."""
-    import sqlalchemy as sa
     from sqlalchemy import inspect
 
     bind = op.get_bind()
