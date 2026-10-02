@@ -138,6 +138,30 @@ warn() { printf '[deploy-cloud] WARNING: %s\n' "$*" >&2; }
 die()  { printf '[deploy-cloud] ERROR: %s\n' "$*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
+# Run a command, retrying on failure. Used only for the network steps, which
+# fail transiently: this host has dropped a TLS connection to GitHub mid-fetch
+# with "GnuTLS recv error (-110)", having succeeded on the two fetches before
+# it. A deploy that aborts on a transient network blip, having already stopped
+# the service, is worse than one that waits.
+#
+# Not used for anything that changes state: a retried `git merge` or
+# `alembic upgrade` could act on a half-applied change.
+retry() {
+    local tries="$1"; shift
+    local n=1
+    while true; do
+        if "$@"; then
+            return 0
+        fi
+        if [ "$n" -ge "$tries" ]; then
+            return 1
+        fi
+        warn "attempt $n/$tries failed: $* — retrying in $((n * 5))s"
+        sleep $((n * 5))
+        n=$((n + 1))
+    done
+}
+
 ssh_target="${REMOTE_USER}@${REMOTE_HOST}"
 
 # ---------------------------------------------------------------------------
@@ -288,7 +312,11 @@ log "PASS: :8000 free"
 # ---------------------------------------------------------------------------
 if [ "${SKIP_PULL}" != "1" ]; then
     log "[code] fetching and fast-forwarding to ${REF}..."
-    service_git "fetch origin" 2>&1 | tail -3
+    # Retried: a network call to a host that has already dropped one TLS
+    # connection mid-fetch, and by this point the service is stopped.
+    if ! retry 3 service_git "fetch origin"; then
+        die "could not fetch from origin after 3 attempts"
+    fi
     # Detached HEAD is the normal state after a scripted checkout and it hides
     # what is deployed from `git log`. Move onto the branch.
     branch_cmd="rev-parse --abbrev-ref HEAD"
@@ -368,7 +396,9 @@ if [ "${SKIP_FRONTEND}" != "1" ]; then
     if [ "${FRONTEND_SOURCE}" = "bundle" ]; then
         log "[frontend] fetching bundle ref ${DIST_REF}..."
         bundle_fetch="fetch origin 'refs/heads/${DIST_REF}:refs/remotes/origin/${DIST_REF}' --force"
-        service_git "${bundle_fetch}" 2>&1 | tail -2
+        if ! retry 3 service_git "${bundle_fetch}"; then
+            die "could not fetch bundle ref ${DIST_REF} after 3 attempts"
+        fi
         # Commands are assembled into a variable and then passed to service_git.
         # Written inline as "$(remote_cmd "git ... 'ref')" it is a syntax error:
         # the inner " closes the outer quote, so the substitution is never
@@ -527,9 +557,59 @@ if [ "${SKIP_HEALTH}" != "1" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Not in this step, deliberately: the menu seed, the NATS status report and the
-# .deploy/current.json record. A deploy that lands without the seed shows menus
-# that do not match the code, which step two fixes.
+# Record what is actually deployed.
+#
+# This is the first thing anyone reads when the host misbehaves, so it records
+# observed values. It also matters that it is written on every deploy: the host
+# carried a record from a previous session claiming commit 071033c while
+# 5c09db1 was actually running, which is precisely the kind of stale claim that
+# sends the next person looking at the wrong code.
+# ---------------------------------------------------------------------------
+log "[record] writing ${APP_DIR}/.deploy/current.json..."
+if [ "${SKIP_FRONTEND}" = "1" ]; then
+    FRONTEND_HOW="skipped"
+elif [ "${FRONTEND_SOURCE}" = "bundle" ]; then
+    FRONTEND_HOW="bundle:${DIST_REF}@${BUNDLE_SHA}"
+else
+    FRONTEND_HOW="built-on-host"
+fi
+
+# Written to a local temp file and then copied, because the heredoc must expand
+# here (control machine) while its destination is on the host. Writing straight
+# to "${APP_DIR}/.deploy/current.json.tmp" would create that path on the control
+# machine, where /opt/atestudio is a different thing entirely.
+record_tmp="$(mktemp)"
+cat > "${record_tmp}" <<JSON
+{
+  "commit": "${DEPLOY_SHA}",
+  "ref": "${REF}",
+  "service_user": "${SERVICE_USER}",
+  "app_dir": "${APP_DIR}",
+  "venv": "${APP_DIR}/.venv",
+  "env_file": "${ENV_PATH}",
+  "alembic_head": "${HEAD_ID}",
+  "alembic_current": "${after}",
+  "frontend_source": "${FRONTEND_HOW}",
+  "deployed_at": "$(date -Iseconds)"
+}
+JSON
+if [ "${LOCAL_ONLY}" = "1" ]; then
+    install -o "${SERVICE_USER}" -g "${SERVICE_USER}" -m 644 "${record_tmp}" \
+        "${APP_DIR}/.deploy/current.json" 2>/dev/null \
+        || sudo install -o "${SERVICE_USER}" -g "${SERVICE_USER}" -m 644 "${record_tmp}" \
+               "${APP_DIR}/.deploy/current.json"
+else
+    # shellcheck disable=SC2086
+    ssh ${SSH_OPTS} "${ssh_target}" "cat > /tmp/.deploy-record.json" < "${record_tmp}"
+    remote_sudo "install -o '${SERVICE_USER}' -g '${SERVICE_USER}' -m 644 /tmp/.deploy-record.json '${APP_DIR}/.deploy/current.json' && rm -f /tmp/.deploy-record.json"
+fi
+rm -f "${record_tmp}"
+log "PASS: recorded"
+
+# ---------------------------------------------------------------------------
+# Not in this step, deliberately: the menu seed and the NATS status report. A
+# deploy that lands without the seed shows menus that do not match the code,
+# which step two fixes.
 # ---------------------------------------------------------------------------
 log "============================================================"
 log "deploy complete: ${SERVICE_NAME}"
