@@ -74,18 +74,12 @@ frontend/node_modules/
 frontend/dist/
 frontend/.vite/
 
-# `spa-bundle/` is the committed copy of frontend/dist/, and it must NOT be
-# added here. frontend/dist/ is ignored because it is a build product; ignoring
-# the committed copy too would be self-defeating, since git reports changes to
-# tracked files regardless of .gitignore — a developer's local `npm run build`
-# would then rewrite 198 tracked files and leave the tree permanently dirty.
-# Nothing ever writes spa-bundle/ into a working tree (publish_dist.sh builds it
-# with plumbing, into a temporary index), so it never shows up untracked.
-
-# publish_dist.sh's report of why it published or skipped. It lives at the
-# repository root rather than inside dist/ because two of its three exit paths
-# run before the build, when a fresh CI checkout has no dist/ yet.
-.publish-outcome
+# Where build_bundle.sh writes the tarball the deploy copies to the host. It is
+# build output and must never be committed: the repository is source, and a repo
+# that grows by 16.6 MB every time someone edits a stylesheet eventually hits
+# GitHub's 1 GB warning and 5 GB hard block with no way back short of rewriting
+# history.
+.spa-bundle/
 
 # =============================================================================
 # Data & Runtime

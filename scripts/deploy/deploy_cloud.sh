@@ -48,12 +48,13 @@
 #   3. UV_CACHE_DIR must be writable by the service user. A cache left owned by
 #      the deploying user makes uv refuse to start at all.
 #
-# The SPA comes from CI (scripts/frontend/publish_dist.sh), not from a build on
-# the host: 413 MB of node_modules on a box that serves 18 MB of static files
-# and whose .venv is 399 MB. The bundle records the hash of the frontend
-# sources it was built from, and this script refuses to install a bundle whose
-# hash does not match the deployed tree — see the FRONTEND section for why that
-# is checked against the frontend tree and not against the commit.
+# The SPA is built on this control machine (scripts/frontend/build_bundle.sh) and
+# copied over, not built on the host: 413 MB of node_modules on a box that
+# serves 18 MB of static files and whose .venv is 399 MB. The bundle records the
+# hash of the frontend sources it was built from, and this script refuses to
+# install a bundle whose hash does not match the deployed tree — see the
+# FRONTEND section for why that is checked against the frontend tree and not
+# against the commit.
 #
 # CREDENTIAL-FREE: no password or key appears in this file. SSH auth must work
 # via ssh-agent / keys for the remote mode; in LOCAL_ONLY mode the operator
@@ -72,11 +73,12 @@
 #   REMOTE_USER      default rpdzkj
 #   ENV_FILE         local path to the filled env file. Unset => the env file
 #                    already on the host is left untouched (with a warning).
-#   REF              git ref to deploy, default origin/dev. The SPA bundle is a
-#                    commit on that same branch, at BUNDLE_DIR, so one fetch
-#                    brings both the code and the interface it was built from.
-#   FRONTEND_SOURCE  bundle (default) installs the SPA committed on REF;
-#                    local builds it on the host (needs node; escape hatch)
+#   REF              git ref to deploy, default origin/dev.
+#   BUNDLE           a prebuilt spa-bundle.tar.gz to install. Unset (the
+#                    default) => build one from this checkout first.
+#   FRONTEND_SOURCE  bundle (default) installs the tarball built here and copied
+#                    over; local builds it on the host (needs node; escape
+#                    hatch)
 #   WITH_DEV=1       `uv sync --extra dev` (default: runtime-only)
 #   SKIP_PULL=1      do not fetch/merge (re-run migrations only)
 #   SKIP_FRONTEND=1  leave the SPA as-is — it will NOT match the commit
@@ -98,13 +100,20 @@ set -o pipefail
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
+# This script's own location, so it can find build_bundle.sh without anyone
+# having to pass a path. Deploying is "run this script", and a deploy that needs
+# a second path spelled out is a deploy that gets the path wrong.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+
 REMOTE_HOST="${REMOTE_HOST:-192.168.5.25}"
 REMOTE_USER="${REMOTE_USER:-rpdzkj}"
 ENV_FILE="${ENV_FILE:-}"
 REF="${REF:-origin/dev}"
-# Where the SPA bundle is committed, on the same branch as the code. Must match
-# BUNDLE_DIR in scripts/frontend/publish_dist.sh.
-BUNDLE_DIR="spa-bundle"
+# A prebuilt SPA tarball to install. Unset => build one from this checkout,
+# which is the default because "deploy" should stay one command, and because a
+# bundle supplied from elsewhere can be older than the code it ships with.
+BUNDLE="${BUNDLE:-}"
 FRONTEND_SOURCE="${FRONTEND_SOURCE:-bundle}"
 WITH_DEV="${WITH_DEV:-0}"
 SKIP_PULL="${SKIP_PULL:-0}"
@@ -116,7 +125,7 @@ SERVICE_NAME="${SERVICE_NAME:-ate-cloud}"
 HEALTH_PATH="${HEALTH_PATH:-/api/v1/health/ready}"
 
 # How a published bundle is checked for staleness. Must compute the same hash as
-# FRONTEND_INPUTS in scripts/frontend/publish_dist.sh over the same paths: the
+# FRONTEND_INPUTS in scripts/frontend/build_bundle.sh over the same paths: the
 # deploy compares its own hash of the deployed sources against the one the
 # bundle recorded, and if the two sides hash different file sets the comparison
 # can never succeed — reported as a stale bundle rather than as the mismatch it
@@ -166,6 +175,29 @@ retry() {
 }
 
 ssh_target="${REMOTE_USER}@${REMOTE_HOST}"
+
+# ---------------------------------------------------------------------------
+# Copy a file to the host
+# ---------------------------------------------------------------------------
+# The SPA bundle travels this way. It used to be fetched from GitHub by the host
+# itself, which put build output in the repository; copying it over the SSH
+# connection this script already opens removes that without adding a channel.
+#
+# scp is given -p off deliberately: the archive carries its own mtime and mode,
+# and preserving the control machine's timestamps would make two identical
+# bundles look different on the host. The checksum in the .sha256 file beside
+# the archive is what actually decides whether the copy arrived intact — a
+# truncated scp succeeds silently, which is why the caller must verify.
+upload_file() {
+    local local_path="$1" remote_path="$2"
+    if [ "${LOCAL_ONLY}" = "1" ]; then
+        cp -f "${local_path}" "${remote_path}"
+    else
+        have scp || die "scp not found on this control machine"
+        # shellcheck disable=SC2086
+        scp ${SSH_OPTS} -q "${local_path}" "${ssh_target}:${remote_path}"
+    fi
+}
 
 # ---------------------------------------------------------------------------
 # Remote execution
@@ -277,7 +309,7 @@ log "target       : ${APP_DIR}"
 log "service user : ${SERVICE_USER} (home ${SERVICE_HOME})"
 log "env file     : ${ENV_PATH:-<none declared>}"
 log "ref          : ${REF}"
-log "bundle path  : ${BUNDLE_DIR}/ on the same ref (${FRONTEND_SOURCE})"
+log "bundle       : built here and copied over (${FRONTEND_SOURCE})"
 
 # ---------------------------------------------------------------------------
 # Ownership repair, first: everything below writes into this tree, and one
@@ -389,6 +421,14 @@ log "PASS: now at ${after}"
 # ---------------------------------------------------------------------------
 # The SPA
 #
+# Built here and copied over. It used to be a commit on a ref of its own, then a
+# directory on dev, on the reasoning that the production host reaches GitHub
+# anonymously and that was the only zero-credential way to move an artifact. It
+# was never true: this script already opens an SSH connection to the host, so
+# the bundle rides the channel that is already there and the repository never
+# stores build output at all. Build output in git was the thing that was
+# actually wrong — 16.6 MB of hashed JS per publish, kept forever.
+#
 # Checked against the frontend tree, not the commit. A commit-SHA comparison is
 # safe but wrong: any backend-only commit moves the SHA while leaving the bundle
 # byte-identical, so it would reject every backend deploy and wait on a build
@@ -397,37 +437,65 @@ log "PASS: now at ${after}"
 # ---------------------------------------------------------------------------
 if [ "${SKIP_FRONTEND}" != "1" ]; then
     if [ "${FRONTEND_SOURCE}" = "bundle" ]; then
-        # The bundle is a commit on ${REF}, so the code fetch above already
-        # brought it. There is nothing to fetch here and nothing to keep in sync:
-        # one ref carries the code and the interface built from it, which is the
-        # whole reason the bundle moved off its own ref.
-        #
-        # The commit that last touched the bundle path is what identifies the
-        # bundle. HEAD is often a source commit sitting on top of a bundle
-        # commit, so naming HEAD would credit this deploy with a bundle it did
-        # not install.
-        #
-        # Commands are assembled into a variable and then passed to service_git.
-        # Written inline as "$(remote_cmd "git ... 'ref')" it is a syntax error:
-        # the inner " closes the outer quote, so the substitution is never
-        # closed and bash reports the error at the next `else` — hundreds of
-        # lines away from the line that is actually wrong. That rule is noted at
-        # the top of this file; it applies to every git call here, not just the
-        # one it was discovered on.
-        bundle_cmd="log -1 --format=%H HEAD -- ${BUNDLE_DIR}"
-        BUNDLE_SHA="$(service_git "${bundle_cmd}" 2>/dev/null || true)"
-        if [ -z "${BUNDLE_SHA}" ]; then
-            die "the deployed commit carries no ${BUNDLE_DIR}/ — there is no bundle to install.
-${REF} has no published SPA. Publish one from the code you intend to deploy:
-  scripts/frontend/publish_dist.sh
-Or bypass knowingly:  FRONTEND_SOURCE=local"
+        # Building is the default rather than a separate step, so "deploy" stays
+        # one command and the bundle can never be older than the checkout it is
+        # deployed against.
+        BUILD_SCRIPT="${SCRIPT_DIR}/../frontend/build_bundle.sh"
+        if [ -z "${BUNDLE}" ] || [ ! -f "${BUNDLE}" ]; then
+            [ -f "${BUILD_SCRIPT}" ] || die "no bundle given and ${BUILD_SCRIPT} does not exist"
+            log "[frontend] building the SPA bundle..."
+            "${BUILD_SCRIPT}" 2>&1 | tail -25 || die "the bundle build failed; nothing was uploaded"
+            BUNDLE="${REPO_ROOT}/.spa-bundle/spa-bundle.tar.gz"
         fi
-        BUNDLE_SHORT="$(service_git "rev-parse --short ${BUNDLE_SHA}")"
-        log "[frontend] bundle commit: ${BUNDLE_SHORT} (${BUNDLE_DIR}/)"
+        [ -f "${BUNDLE}" ] || die "no bundle at ${BUNDLE}"
+        # The checksum is not decoration. It is how a truncated copy is caught.
+        [ -f "${BUNDLE}.sha256" ] || die "no checksum beside the bundle at ${BUNDLE}.sha256.
+The deploy verifies the archive before unpacking it and will not do so blind.
+Rebuild it:  scripts/frontend/build_bundle.sh"
+        BUNDLE_SUM="$(awk '{print $1}' "${BUNDLE}.sha256")"
+        [ -n "${BUNDLE_SUM}" ] || die "could not read a checksum out of ${BUNDLE}.sha256"
+        log "[frontend] bundle: $(basename "${BUNDLE}")  ${BUNDLE_SUM:0:16}…  $(du -h "${BUNDLE}" | cut -f1)"
+
+        # The name on the host carries the checksum, so two deploys cannot
+        # collide over one file and a leftover from a previous run can never be
+        # mistaken for this one.
+        REMOTE_TMP="/tmp/spa-bundle-${BUNDLE_SUM:0:16}.tar.gz"
+        log "[frontend] copying to ${REMOTE_TMP}..."
+        upload_file "${BUNDLE}" "${REMOTE_TMP}"
+        upload_file "${BUNDLE}.sha256" "${REMOTE_TMP}.sha256"
+
+        # Verified before anything is unpacked. A copy that dies halfway can
+        # leave a short file, and unpacking a truncated archive installs a
+        # partial interface that looks exactly like success.
+        log "[frontend] verifying the copy..."
+        remote_sudo "cd /tmp && echo '${BUNDLE_SUM}  $(basename "${REMOTE_TMP}")' | sha256sum -c -" \
+            || die "the bundle on the host does not match the one built here (${BUNDLE_SUM}).
+Nothing was installed. Re-run the deploy; if it fails again the copy is being
+truncated, which is a network problem rather than a build problem."
+
+        # Unpacked to a staging directory rather than into frontend/dist. The
+        # staleness check below has to be able to refuse, and a bundle unpacked
+        # into place first would already be serving traffic for the moment it
+        # takes to read its provenance.
+        STAGE="${APP_DIR}/.deploy/frontend-stage"
+        log "[frontend] unpacking to ${STAGE}..."
+        remote_sudo "rm -rf '${STAGE}' && mkdir -p '${STAGE}' && tar -xzf '${REMOTE_TMP}' -C '${STAGE}'"
+        n_staged="$(remote_cmd "find '${STAGE}' -type f | wc -l" || true)"
+        case "${n_staged}" in
+            ''|*[!0-9]*) die "could not count the unpacked files (got '${n_staged}')" ;;
+        esac
+        [ "${n_staged}" -ge 100 ] || die "unpacked ${n_staged} files; a real bundle has about 198"
 
         log "[frontend] checking the bundle against the deployed frontend sources..."
-        show_cmd="show 'HEAD:${BUNDLE_DIR}/.build-info.json'"
-        bundle_info="$(service_git "${show_cmd}" || true)"
+        bundle_info="$(remote_cmd "cat '${STAGE}/.build-info.json' 2>/dev/null" || true)"
+        [ -n "${bundle_info}" ] || die "the bundle carries no .build-info.json, so there is nothing to check it against.
+Rebuild it:  scripts/frontend/build_bundle.sh
+Or bypass knowingly:  FRONTEND_SOURCE=local"
+        recorded_sha="$(printf '%s' "${bundle_info}" | sed -n 's/.*"source_sha": *"\([0-9a-f]*\)".*/\1/p')"
+        recorded_tree="$(printf '%s' "${bundle_info}" | sed -n 's/.*"frontend_tree": *"\([^"]*\)".*/\1/p')"
+        recorded_by="$(printf '%s' "${bundle_info}" | sed -n 's/.*"built_by": *"\([^"]*\)".*/\1/p')"
+        log "  bundle built from ${recorded_sha:-<unknown>} by ${recorded_by:-<unknown>}"
+        log "  frontend tree it was built from: ${recorded_tree:-<none>}"
         recorded_sha="$(printf '%s' "${bundle_info}" | sed -n 's/.*"source_sha": *"\([0-9a-f]*\)".*/\1/p')"
         recorded_tree="$(printf '%s' "${bundle_info}" | sed -n 's/.*"frontend_tree": *"\([^"]*\)".*/\1/p')"
         # The filter is written to a temp file on the host and sourced there, so
@@ -448,17 +516,17 @@ FILTER_EOF"
             if [ "${recorded_sha}" != "${DEPLOY_SHA}" ]; then
                 printf '%s\n' "${bundle_info}" >&2
                 die "bundle is from ${recorded_sha:-<none>}, this deploy is ${DEPLOY_SHA}, and neither can be compared on frontend sources.
-Republish:  scripts/frontend/publish_dist.sh"
+Rebuild the bundle from this checkout:  scripts/frontend/build_bundle.sh"
             fi
             log "PASS: bundle was built from the deployed commit"
         elif [ "${recorded_tree}" != "${deployed_tree}" ]; then
             printf '%s\n' "${bundle_info}" >&2
             die "bundle was built from frontend tree ${recorded_tree}
 but the deployed sources hash to ${deployed_tree}
-The interface would not match the API. Wait for the CI run on this commit, or
-publish a bundle from the code you intend to deploy:
-  scripts/frontend/publish_dist.sh
-Or bypass knowingly:  FRONTEND_SOURCE=local"
+The interface would not match the API. Build the bundle from the code you are
+deploying, on that same code:
+  git pull && scripts/frontend/build_bundle.sh
+then re-run this script. Or bypass knowingly:  FRONTEND_SOURCE=local"
         else
             log "PASS: frontend tree matches (${recorded_tree})"
         fi
@@ -467,42 +535,9 @@ Or bypass knowingly:  FRONTEND_SOURCE=local"
         # is content-hashed so a leftover file is never referenced by the new
         # index.html — but it is still served, and 16 MB of orphaned JS is what
         # makes a bundle impossible to reason about later.
-        log "[frontend] installing bundle into ${APP_DIR}/frontend/dist..."
-        # rm -rf runs as root on purpose: the directory is owned by the service
-        # user, and the archive is then written as that user.
-        remote_sudo "rm -rf '${APP_DIR}/frontend/dist' && mkdir -p '${APP_DIR}/frontend/dist'"
-        # Extract INTO the dist directory, with the one leading path component
-        # stripped: the archive holds ${BUNDLE_DIR}/... and the target wants the
-        # contents of dist/ directly. Extracting into APP_DIR instead put
-        # index.html and assets/ at the application root, which is how the first
-        # run reported "installed 0 files" while quietly littering the checkout
-        # with 197 untracked files.
-        #
-        # The pipeline lives in the string handed to remote_sudo, which runs it
-        # under `sudo bash -c`, so the `|` is a real pipe there. Two earlier
-        # attempts were wrong: writing it inside a quoted argument made the `|`
-        # literal (tar would run on the control machine), and routing it through
-        # `bash -c "$(printf '%q' ...)"` quoted the whole command into one word,
-        # so bash tried to execute that word as a program name.
-        # Only git needs to be the service user; tar can be root, and the chown
-        # afterwards fixes ownership.
-        #
-        # Archived from HEAD, so the bytes installed are the bytes committed on
-        # the deployed ref — read back out of the checkout, not fetched from
-        # somewhere else that could have moved since.
-        #
-        # `core.autocrlf=false` on the command line because git archive applies
-        # the same line-ending conversion a checkout would, and the control
-        # machine and the host do not agree: this repository sets
-        # core.autocrlf=true, so an archive taken on Windows rewrites the
-        # trailing newline of every text file. That is invisible in a diff of
-        # file counts and wrong in principle — vite names assets after a hash of
-        # their contents, so a bundle whose bytes no longer match its own
-        # filename is a bundle whose names are lies. Overriding the setting here
-        # makes the installed bytes the committed bytes regardless of how the
-        # host is configured, rather than correct only while nobody changes it.
-        archive_cmd="cd '${APP_DIR}' && sudo -u '${SERVICE_USER}' env HOME='${SERVICE_HOME}' git -c core.autocrlf=false archive 'HEAD' '${BUNDLE_DIR}' | tar -x -C '${APP_DIR}/frontend/dist' --strip-components=1"
-        remote_sudo "${archive_cmd}" 2>&1 | tail -3
+        log "[frontend] installing into ${APP_DIR}/frontend/dist..."
+        remote_sudo "rm -rf '${APP_DIR}/frontend/dist' && mkdir -p '${APP_DIR}/frontend/dist' && cp -a '${STAGE}/.' '${APP_DIR}/frontend/dist/'"
+        remote_sudo "rm -rf '${STAGE}' '${REMOTE_TMP}' '${REMOTE_TMP}.sha256'"
 
         # A run that extracted to the wrong place leaves the application root
         # full of SPA files. Detect it rather than leaving it to be discovered
@@ -599,7 +634,7 @@ log "[record] writing ${APP_DIR}/.deploy/current.json..."
 if [ "${SKIP_FRONTEND}" = "1" ]; then
     FRONTEND_HOW="skipped"
 elif [ "${FRONTEND_SOURCE}" = "bundle" ]; then
-    FRONTEND_HOW="bundle:HEAD@${BUNDLE_SHA} (${BUNDLE_DIR}/ on ${REF})"
+    FRONTEND_HOW="bundle:${BUNDLE_SUM:0:16} from ${recorded_sha:-unknown} (built_by=${recorded_by:-unknown})"
 else
     FRONTEND_HOW="built-on-host"
 fi

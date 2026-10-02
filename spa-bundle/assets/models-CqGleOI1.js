@@ -1,1 +1,0 @@
-import{i as e}from"./interceptor-d_b-J9wY.js";async function t(){return(await e.get(`/models`)).data}export{t as listModels};

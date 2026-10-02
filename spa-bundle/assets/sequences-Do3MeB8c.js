@@ -1,1 +1,0 @@
-import{i as e}from"./interceptor-d_b-J9wY.js";var t=e;async function n(){return(await t.get(`/sequences`)).data.items}async function r(e){return(await t.post(`/sequences`,e)).data}async function i(e,n){return(await t.put(`/sequences/${e}`,n)).data}async function a(e){await t.delete(`/sequences/${e}`)}export{i,a as n,n as r,r as t};
