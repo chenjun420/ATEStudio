@@ -337,7 +337,16 @@ trap cleanup EXIT
 rm -f "${TMP_INDEX}"   # git refuses to use an index file that already exists
 
 export GIT_INDEX_FILE="${TMP_INDEX}"
-git read-tree --empty
+# Start from the branch tip's tree, NOT from an empty one.
+#
+# `git commit-tree <tree> -p <parent>` uses <tree> verbatim; it does not layer
+# the change on top of the parent. An index seeded with `read-tree --empty`
+# therefore produces a commit whose tree is spa-bundle/ and nothing else — every
+# source file in the branch disappears, while the commit still names the right
+# parent, so the history reads as if nothing was wrong. That is exactly what
+# the first run of this did: 790 source files gone from dev, 198 bundle files
+# present, and the branch tip looking perfectly healthy.
+git read-tree "${TARGET_TIP}"
 # NUL-delimited throughout. vite names assets after their content, and nothing
 # stops a source filename from containing a space or a newline; a line-based
 # loop would silently drop or misattribute such a file.
@@ -351,8 +360,22 @@ TREE="$(git write-tree)"
 unset GIT_INDEX_FILE
 [ -n "${TREE}" ] || die "empty tree — dist/ staged nothing"
 
-FILE_COUNT="$(GIT_INDEX_FILE="${TMP_INDEX}" git ls-files | wc -l | tr -d ' ')"
-log "tree ${TREE} with ${FILE_COUNT} files"
+# The commit must be the branch tip plus spa-bundle/ and nothing else. Asserting
+# that here costs one diff-tree; discovering it on the branch costs the branch.
+# The check is on deletions specifically, because that is the failure the empty
+# index seed above produces: a publish that adds 198 files and drops 790, with
+# the commit still naming the right parent so the history looks unremarkable.
+dropped="$(git diff-tree -r --name-only --diff-filter=D "${TARGET_TIP}" "${TREE}" || true)"
+if [ -n "${dropped}" ]; then
+    n_dropped="$(printf '%s\n' "${dropped}" | grep -c . || true)"
+    printf '%s\n' "${dropped}" | head -5 | sed 's/^/    /'
+    [ "${n_dropped}" -le 5 ] || printf '    ... and %s more\n' "$((n_dropped - 5))"
+    die "the new tree would delete ${n_dropped} file(s) that ${PUBLISH_BRANCH} already has.
+The bundle is added to the branch; it never replaces it. Nothing was pushed."
+fi
+
+FILE_COUNT="$(git ls-tree -r --name-only "${TREE}" -- "${BUNDLE_DIR}" | grep -c . || true)"
+log "tree ${TREE}: branch tip plus ${FILE_COUNT} files at ${BUNDLE_DIR}/"
 
 # Parent is the branch tip, which the check above established is this build's
 # own source commit. So the bundle commit sits directly on the source it was
