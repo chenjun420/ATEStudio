@@ -81,25 +81,25 @@ jobs:
       - name: Vitest run
         run: npx vitest run
 
-  # Publish the SPA bundle to refs/heads/spa-dist so the deploy can install it
-  # without node on the production host.
+  # Build the SPA and commit it onto dev, at spa-bundle/, so the deploy can
+  # install it without node on the production host.
   #
   # `needs: [lint, test, frontend]` is the point of this job: a bundle is only
   # published from a commit whose Python and frontend checks both passed. The
   # alternative — building in the deploy — had no such gate, because the
   # production host ran no checks at all.
-  spa-dist:
+  spa-bundle:
     needs: [lint, test, frontend]
     runs-on: ubuntu-latest
     permissions:
-      contents: write   # required to push the spa-dist ref
+      contents: write   # required to push the bundle commit onto dev
     steps:
       - uses: actions/checkout@v4
         with:
           # The bundle records the SHA it was built from, and the deploy asserts
-          # it against the commit being deployed. With a shallow checkout the
-          # recorded SHA is still correct (it is HEAD), but a shallow history
-          # makes the ref's own parent lookup unreliable, so fetch depth 0.
+          # it against the commit being deployed. It is also committed as a
+          # child of the branch tip, so the tip has to be a real commit and not
+          # a grafted one.
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
@@ -109,21 +109,80 @@ jobs:
       - name: Install dependencies
         run: npm ci
         working-directory: frontend
-      - name: Build and publish bundle to origin/spa-dist
+      - name: Build, and publish the bundle onto dev
+        # Only a push to dev publishes. The bundle is committed *on* the branch,
+        # so a bundle built on any other ref would either be rejected as a
+        # non-fast-forward or, worse, land on a tree whose sources are not the
+        # ones it was built from. Other triggers still build it, so a broken
+        # build is caught everywhere, not just on dev.
+        if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
         run: scripts/frontend/publish_dist.sh
-      - name: Verify the published bundle records this commit
+      - name: Build only (not publishing)
+        if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/dev') }}
+        run: SKIP_PUBLISH=1 scripts/frontend/publish_dist.sh
+      - name: Verify what dev now carries
+        # Re-derived here rather than read from the publish step's own report:
+        # a check that trusts the thing it is checking proves nothing. The
+        # publish step has three honest outcomes and each is asserted
+        # differently, because "the bundle matches this run" is only true for
+        # one of them.
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/dev' }}
         run: |
           set -euo pipefail
           sha="$(git rev-parse HEAD)"
-          # Read the file out of the published ref, not the working tree: this
-          # checks what was actually pushed.
-          recorded="$(git --no-pager show origin/spa-dist:frontend/dist/.build-info.json \
-                      | sed -n 's/.*"source_sha": *"\([0-9a-f]\{40\}\)".*/\1/p')"
-          if [ "$recorded" != "$sha" ]; then
-            echo "::error::bundle records source_sha=$recorded but this run is $sha"
+          outcome="$(sed -n 's/^outcome=//p' .publish-outcome)"
+          echo "publish outcome: ${outcome:-<none>}"
+
+          # Read the bundle out of the pushed branch, not out of the working
+          # tree: this is what checks what was actually published.
+          git fetch --quiet origin dev
+          bundle_commit="$(git log -1 --format=%H origin/dev -- spa-bundle)"
+          if [ -z "${bundle_commit}" ]; then
+            echo "::error::dev carries no spa-bundle/ after this run"
             exit 1
           fi
-          echo "bundle records $recorded, matches this run"
+          published_sha="$(git show "origin/dev:spa-bundle/.build-info.json" \
+                          | sed -n 's/.*"source_sha": *"\([0-9a-f]*\)".*/\1/p')"
+          echo "dev carries bundle ${bundle_commit} from source ${published_sha}"
+
+          # The post-condition, checked with git's own tree comparison rather
+          # than by re-hashing the frontend sources: if no frontend file differs
+          # between the commit that last wrote the bundle and the branch tip,
+          # then that bundle was built from exactly these sources.
+          #
+          # `git diff -- frontend` is a complete statement here precisely
+          # because dist/ and node_modules/ are gitignored and spa-bundle/ sits
+          # at the repository root: the pathspec sees source files and nothing
+          # else. Re-deriving the hash with a third copy of publish_dist.sh's
+          # exclusion filter would be the alternative, and duplicated filters are
+          # how the two sides of this comparison drift apart — the deploy
+          # script's copy of that filter already carries a comment about it.
+          if ! git diff --quiet "${bundle_commit}" origin/dev -- frontend; then
+            echo "::error::frontend sources differ between the bundle commit and dev:"
+            git --no-pager diff --stat "${bundle_commit}" origin/dev -- frontend
+            exit 1
+          fi
+          echo "PASS: dev's bundle matches dev's frontend sources"
+
+          case "${outcome}" in
+            published)
+              if [ "${published_sha}" != "${sha}" ]; then
+                echo "::error::outcome says published, but dev's bundle is from ${published_sha}, not ${sha}"
+                exit 1
+              fi
+              echo "PASS: published from this run"
+              ;;
+            skipped-frontend-unchanged)
+              # Nothing to compare against this run: the build produced a bundle
+              # byte-identical to the one already on dev, which is why it was not
+              # committed. The diff above is what establishes dev is current.
+              echo "PASS: frontend unchanged, dev's existing bundle is current"
+              ;;
+            *)
+              echo "::error::unexpected publish outcome '${outcome}' on a push to dev"
+              exit 1
+              ;;
+          esac
 
   # AC-12: 无头仿真输出 JUnit 报告并接入流水线（§7.11）
   # 在 ATE_SIMULATION_MODE=true 下以纯仿真方式运行 v3.2 生产序列，

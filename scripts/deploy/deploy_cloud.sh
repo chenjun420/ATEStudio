@@ -72,9 +72,10 @@
 #   REMOTE_USER      default rpdzkj
 #   ENV_FILE         local path to the filled env file. Unset => the env file
 #                    already on the host is left untouched (with a warning).
-#   REF              git ref to deploy, default origin/main. Pass REF=origin/dev to deploy the development branch instead.
-#   DIST_REF         SPA bundle ref, default spa-dist
-#   FRONTEND_SOURCE  bundle (default) installs the CI-built SPA;
+#   REF              git ref to deploy, default origin/dev. The SPA bundle is a
+#                    commit on that same branch, at BUNDLE_DIR, so one fetch
+#                    brings both the code and the interface it was built from.
+#   FRONTEND_SOURCE  bundle (default) installs the SPA committed on REF;
 #                    local builds it on the host (needs node; escape hatch)
 #   WITH_DEV=1       `uv sync --extra dev` (default: runtime-only)
 #   SKIP_PULL=1      do not fetch/merge (re-run migrations only)
@@ -100,8 +101,10 @@ set -o pipefail
 REMOTE_HOST="${REMOTE_HOST:-192.168.5.25}"
 REMOTE_USER="${REMOTE_USER:-rpdzkj}"
 ENV_FILE="${ENV_FILE:-}"
-REF="${REF:-origin/main}"
-DIST_REF="${DIST_REF:-spa-dist}"
+REF="${REF:-origin/dev}"
+# Where the SPA bundle is committed, on the same branch as the code. Must match
+# BUNDLE_DIR in scripts/frontend/publish_dist.sh.
+BUNDLE_DIR="spa-bundle"
 FRONTEND_SOURCE="${FRONTEND_SOURCE:-bundle}"
 WITH_DEV="${WITH_DEV:-0}"
 SKIP_PULL="${SKIP_PULL:-0}"
@@ -274,7 +277,7 @@ log "target       : ${APP_DIR}"
 log "service user : ${SERVICE_USER} (home ${SERVICE_HOME})"
 log "env file     : ${ENV_PATH:-<none declared>}"
 log "ref          : ${REF}"
-log "bundle ref   : ${DIST_REF} (${FRONTEND_SOURCE})"
+log "bundle path  : ${BUNDLE_DIR}/ on the same ref (${FRONTEND_SOURCE})"
 
 # ---------------------------------------------------------------------------
 # Ownership repair, first: everything below writes into this tree, and one
@@ -394,11 +397,16 @@ log "PASS: now at ${after}"
 # ---------------------------------------------------------------------------
 if [ "${SKIP_FRONTEND}" != "1" ]; then
     if [ "${FRONTEND_SOURCE}" = "bundle" ]; then
-        log "[frontend] fetching bundle ref ${DIST_REF}..."
-        bundle_fetch="fetch origin 'refs/heads/${DIST_REF}:refs/remotes/origin/${DIST_REF}' --force"
-        if ! retry 3 service_git "${bundle_fetch}"; then
-            die "could not fetch bundle ref ${DIST_REF} after 3 attempts"
-        fi
+        # The bundle is a commit on ${REF}, so the code fetch above already
+        # brought it. There is nothing to fetch here and nothing to keep in sync:
+        # one ref carries the code and the interface built from it, which is the
+        # whole reason the bundle moved off its own ref.
+        #
+        # The commit that last touched the bundle path is what identifies the
+        # bundle. HEAD is often a source commit sitting on top of a bundle
+        # commit, so naming HEAD would credit this deploy with a bundle it did
+        # not install.
+        #
         # Commands are assembled into a variable and then passed to service_git.
         # Written inline as "$(remote_cmd "git ... 'ref')" it is a syntax error:
         # the inner " closes the outer quote, so the substitution is never
@@ -406,12 +414,19 @@ if [ "${SKIP_FRONTEND}" != "1" ]; then
         # lines away from the line that is actually wrong. That rule is noted at
         # the top of this file; it applies to every git call here, not just the
         # one it was discovered on.
-        resolve_cmd="rev-parse 'refs/remotes/origin/${DIST_REF}'"
-        BUNDLE_SHA="$(service_git "${resolve_cmd}")"
-        log "  bundle commit: ${BUNDLE_SHA}"
+        bundle_cmd="log -1 --format=%H HEAD -- ${BUNDLE_DIR}"
+        BUNDLE_SHA="$(service_git "${bundle_cmd}" 2>/dev/null || true)"
+        if [ -z "${BUNDLE_SHA}" ]; then
+            die "the deployed commit carries no ${BUNDLE_DIR}/ — there is no bundle to install.
+${REF} has no published SPA. Publish one from the code you intend to deploy:
+  scripts/frontend/publish_dist.sh
+Or bypass knowingly:  FRONTEND_SOURCE=local"
+        fi
+        BUNDLE_SHORT="$(service_git "rev-parse --short ${BUNDLE_SHA}")"
+        log "[frontend] bundle commit: ${BUNDLE_SHORT} (${BUNDLE_DIR}/)"
 
         log "[frontend] checking the bundle against the deployed frontend sources..."
-        show_cmd="show 'refs/remotes/origin/${DIST_REF}:frontend/dist/.build-info.json'"
+        show_cmd="show 'HEAD:${BUNDLE_DIR}/.build-info.json'"
         bundle_info="$(service_git "${show_cmd}" || true)"
         recorded_sha="$(printf '%s' "${bundle_info}" | sed -n 's/.*"source_sha": *"\([0-9a-f]*\)".*/\1/p')"
         recorded_tree="$(printf '%s' "${bundle_info}" | sed -n 's/.*"frontend_tree": *"\([^"]*\)".*/\1/p')"
@@ -456,8 +471,8 @@ Or bypass knowingly:  FRONTEND_SOURCE=local"
         # rm -rf runs as root on purpose: the directory is owned by the service
         # user, and the archive is then written as that user.
         remote_sudo "rm -rf '${APP_DIR}/frontend/dist' && mkdir -p '${APP_DIR}/frontend/dist'"
-        # Extract INTO the dist directory, with the two leading path components
-        # stripped: the archive holds frontend/dist/... and the target wants the
+        # Extract INTO the dist directory, with the one leading path component
+        # stripped: the archive holds ${BUNDLE_DIR}/... and the target wants the
         # contents of dist/ directly. Extracting into APP_DIR instead put
         # index.html and assets/ at the application root, which is how the first
         # run reported "installed 0 files" while quietly littering the checkout
@@ -471,7 +486,11 @@ Or bypass knowingly:  FRONTEND_SOURCE=local"
         # so bash tried to execute that word as a program name.
         # Only git needs to be the service user; tar can be root, and the chown
         # afterwards fixes ownership.
-        archive_cmd="cd '${APP_DIR}' && sudo -u '${SERVICE_USER}' env HOME='${SERVICE_HOME}' git archive 'refs/remotes/origin/${DIST_REF}' frontend/dist | tar -x -C '${APP_DIR}/frontend/dist' --strip-components=2"
+        #
+        # Archived from HEAD, so the bytes installed are the bytes committed on
+        # the deployed ref — read back out of the checkout, not fetched from
+        # somewhere else that could have moved since.
+        archive_cmd="cd '${APP_DIR}' && sudo -u '${SERVICE_USER}' env HOME='${SERVICE_HOME}' git archive 'HEAD' '${BUNDLE_DIR}' | tar -x -C '${APP_DIR}/frontend/dist' --strip-components=1"
         remote_sudo "${archive_cmd}" 2>&1 | tail -3
 
         # A run that extracted to the wrong place leaves the application root
@@ -569,7 +588,7 @@ log "[record] writing ${APP_DIR}/.deploy/current.json..."
 if [ "${SKIP_FRONTEND}" = "1" ]; then
     FRONTEND_HOW="skipped"
 elif [ "${FRONTEND_SOURCE}" = "bundle" ]; then
-    FRONTEND_HOW="bundle:${DIST_REF}@${BUNDLE_SHA}"
+    FRONTEND_HOW="bundle:HEAD@${BUNDLE_SHA} (${BUNDLE_DIR}/ on ${REF})"
 else
     FRONTEND_HOW="built-on-host"
 fi

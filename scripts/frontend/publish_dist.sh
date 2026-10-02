@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# publish_dist.sh — build the SPA and publish it as a standalone git ref
+# publish_dist.sh — build the SPA and commit it onto the development branch
 #
 # Why this exists
 # ---------------
@@ -15,33 +15,48 @@
 #   * two sources of truth for the bundle, because whoever built it last decided
 #     what the interface looked like.
 #
-# Building in CI and shipping the result as a git ref removes node from the
-# production host and keeps the deploy atomic: the bundle records the source
-# commit it was built from, and deploy_cloud.sh refuses to install a bundle
-# that does not match the commit it is deploying.
+# Building in CI and committing the result removes node from the production host
+# and keeps the deploy atomic: the bundle records the source commit it was built
+# from, and deploy_cloud.sh refuses to install a bundle that does not match the
+# commit it is deploying.
 #
-# Why a git ref rather than a release asset or a workflow artifact
-# -----------------------------------------------------------------
-# The production host fetches this repository anonymously over HTTPS, as a
-# public repo, with no token and no `gh` CLI and no API access to speak of. A
-# plain `git fetch origin spa-dist` is the only artifact transport that works
-# there without provisioning credentials on a host that should not have them.
-# A release asset would need a token; a workflow artifact always needs one.
+# Why the bundle lives on dev, at spa-bundle/
+# -------------------------------------------
+# The bundle used to be published to a separate `spa-dist` ref, on the reasoning
+# that a build output does not belong in a source branch. That reasoning was
+# half right: the output does not belong *mixed into* the source history, but
+# putting it on a branch of its own creates a second thing to keep in sync, and
+# a ref that looks like a development branch while never being reviewed or
+# merged. So the bundle is a commit on dev, at spa-bundle/ — a directory nothing
+# else uses, holding build output and nothing but build output.
 #
-# The ref is an orphan: it shares no history with the source branch, holds only
-# `dist/`, and is force-pushed on every publish. That is deliberate — it is a
-# build output, not a branch anyone reviews or merges.
+# It cannot live at frontend/dist/, because that path is in .gitignore, and git
+# reports modifications to tracked files whether or not .gitignore covers them:
+# a developer's local `npm run build` would rewrite 198 tracked files and leave
+# the tree permanently dirty. Nothing ever writes spa-bundle/ into a working
+# tree — the tree is built with plumbing into a temporary index — so it never
+# appears untracked either.
+#
+# Why publishing is skipped when the frontend did not change
+# ----------------------------------------------------------
+# The bundle is 198 files and 16.6 MB. Committing it on every push would put
+# megabytes of build output into dev's history for backend-only work, which is
+# the exact coupling this script exists to remove. The `frontend_tree` hash
+# below already answers "would this bundle differ from the current sources?", so
+# it gates the commit as well as the install: a push that touches no frontend
+# file publishes nothing and costs zero bytes. GitHub warns a repository at 1 GB
+# and blocks uploads at 5 GB; at 16.6 MB per frontend change that is roughly 60
+# frontend changes to the warning.
 #
 # Usage
 # -----
-#   scripts/frontend/publish_dist.sh              # build, record, push
-#   DIST_REF=local/dist scripts/frontend/publish_dist.sh   # to another ref
+#   scripts/frontend/publish_dist.sh              # build, record, commit, push
+#   PUBLISH_BRANCH=dev scripts/frontend/publish_dist.sh   # to another branch
 #   SKIP_BUILD=1 scripts/frontend/publish_dist.sh  # republish existing dist/
 #
 # Run from the repository root or from anywhere; paths are resolved from the
 # repository top level, which this script locates from its own path.
 set -euo pipefail
-set -o pipefail  # redundant with -e above, but a pipe must never hide a failure
 
 # Quoting rule, learned the hard way in deploy_cloud.sh: a redirection operator
 # must not sit inside a double-quoted word that is inside a command substitution.
@@ -55,14 +70,40 @@ set -o pipefail  # redundant with -e above, but a pipe must never hide a failure
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-DIST_REF="${DIST_REF:-spa-dist}"
+PUBLISH_BRANCH="${PUBLISH_BRANCH:-dev}"
 SKIP_BUILD="${SKIP_BUILD:-0}"
+# Build and record, but do not commit or push. This is a real mode, not a
+# testing convenience: CI runs the build on every trigger, but only a push to
+# the publish branch may commit a bundle, and a build that cannot be exercised
+# outside that one case is a build nobody notices breaking.
+SKIP_PUBLISH="${SKIP_PUBLISH:-0}"
 FRONTEND_DIR="${REPO_ROOT}/frontend"
 DIST_DIR="${FRONTEND_DIR}/dist"
 BUILD_INFO="${DIST_DIR}/.build-info.json"
+# Where the bundle is committed, relative to the repository root.
+BUNDLE_DIR="spa-bundle"
+# Where the outcome is written for a caller to read, including CI. It records
+# why the publish ended the way it did, and on which frontend tree, so a caller
+# never has to infer either from the absence of a push.
+#
+# At the repository root, not inside dist/, and that is load-bearing. Two of the
+# three exits happen *before* the build, so on a fresh CI checkout dist/ does not
+# exist yet and a file written there would silently fail — leaving the caller to
+# read a file that was never created. The root always exists. It is gitignored,
+# so writing it does not dirty the checkout.
+OUTCOME_FILE="${REPO_ROOT}/.publish-outcome"
 
 log()  { printf '[publish-dist] %s\n' "$*"; }
 die()  { printf '[publish-dist] ERROR: %s\n' "$*" >&2; exit 1; }
+
+# Records why the publish ended the way it did, and on what tree, and leaves.
+# Written before every exit path, including the skips.
+outcome() {
+    printf 'outcome=%s\nfrontend_tree=%s\nsource_sha=%s\nbranch=%s\n' \
+        "$1" "${FRONTEND_TREE:-unknown}" "${SOURCE_SHA:-unknown}" "${PUBLISH_BRANCH}" \
+        > "${OUTCOME_FILE}" 2>/dev/null || true
+    log "outcome: ${1} (recorded in $(basename "${OUTCOME_FILE}"))"
+}
 
 cd "${REPO_ROOT}"
 command -v git >/dev/null 2>&1 || die "git not found"
@@ -140,9 +181,57 @@ if [ -n "${dirty_frontend}" ]; then
 Commit them, or publish from a clean checkout."
 fi
 
-log "repository : ${REPO_ROOT}"
-log "source     : ${SOURCE_SHA} (${SOURCE_REF})"
-log "target ref : refs/heads/${DIST_REF}"
+log "repository   : ${REPO_ROOT}"
+log "source       : ${SOURCE_SHA} (${SOURCE_REF})"
+log "publish to   : refs/heads/${PUBLISH_BRANCH}"
+log "bundle path  : ${BUNDLE_DIR}/"
+
+# ---------------------------------------------------------------------------
+# Resolve the target branch
+# ---------------------------------------------------------------------------
+# The bundle is committed *on* the branch, so the commit has to be a child of
+# that branch's tip. Only an exact match is published: a bundle built from a
+# commit that is not the branch tip would sit on a tree whose sources are not
+# the ones the bundle was built from, which is the provenance confusion this
+# whole mechanism exists to prevent.
+git fetch --quiet origin "refs/heads/${PUBLISH_BRANCH}:refs/remotes/origin/${PUBLISH_BRANCH}" \
+    || die "could not fetch origin/${PUBLISH_BRANCH}"
+TARGET_TIP="$(git rev-parse "refs/remotes/origin/${PUBLISH_BRANCH}")"
+
+if [ "${TARGET_TIP}" != "${SOURCE_SHA}" ]; then
+    outcome "skipped-branch-tip-moved"
+    log "origin/${PUBLISH_BRANCH} is at ${TARGET_TIP}, this build is ${SOURCE_SHA}."
+    log "A bundle is only published from the branch tip. Nothing was pushed; the"
+    log "next run on ${PUBLISH_BRANCH} will publish it."
+    exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Skip when the frontend did not change
+# ---------------------------------------------------------------------------
+# Read the bundle already on the branch, not any local copy: the question is
+# whether the branch is already carrying a bundle built from these sources.
+PUBLISHED_INFO=""
+if git cat-file -e "refs/remotes/origin/${PUBLISH_BRANCH}:${BUNDLE_DIR}/.build-info.json" 2>/dev/null; then
+    PUBLISHED_INFO="$(git show "refs/remotes/origin/${PUBLISH_BRANCH}:${BUNDLE_DIR}/.build-info.json" || true)"
+fi
+if [ -n "${PUBLISHED_INFO}" ]; then
+    published_tree="$(printf '%s' "${PUBLISHED_INFO}" | sed -n 's/.*"frontend_tree": *"\([^"]*\)".*/\1/p')"
+    published_sha="$(printf '%s' "${PUBLISHED_INFO}" | sed -n 's/.*"source_sha": *"\([0-9a-f]\{7,40\}\)".*/\1/p')"
+    if [ "${published_tree}" = "${FRONTEND_TREE}" ]; then
+        outcome "skipped-frontend-unchanged"
+        log "origin/${PUBLISH_BRANCH} already carries a bundle built from frontend tree"
+        log "${FRONTEND_TREE} (source ${published_sha:-unknown}). The frontend did not"
+        log "change, so the bundle would be byte-identical and committing it would"
+        log "add 16.6 MB of build output for nothing. Nothing was pushed."
+        exit 0
+    fi
+    log "published bundle is from a different frontend tree:"
+    log "  on branch : ${published_tree:-<none>} (source ${published_sha:-unknown})"
+    log "  this build: ${FRONTEND_TREE}"
+else
+    log "origin/${PUBLISH_BRANCH} carries no bundle yet; this publish will add one."
+fi
 
 # ---------------------------------------------------------------------------
 # Build
@@ -195,53 +284,9 @@ cat > "${BUILD_INFO}" <<JSON
   "built_by": "${BUILT_BY}",
   "ci_run": "${GITHUB_RUN_ID:-}",
   "node_version": "${NODE_VERSION}",
-  "bundle_ref": "refs/heads/${DIST_REF}"
+  "bundle_path": "${BUNDLE_DIR}"
 }
 JSON
-
-# ---------------------------------------------------------------------------
-# Publish as an orphan ref, without touching the working tree
-# ---------------------------------------------------------------------------
-# A temporary index keeps the source branch's index and working tree untouched,
-# so this cannot leave the checkout in a half-staged state — the failure mode
-# that bit a commit earlier in this project, where `git commit -- <path>`
-# carried along everything else that happened to be staged.
-#
-# `git add -f` is required: dist/ is in .gitignore, which is correct for the
-# source branch and wrong for a branch whose entire content is dist/.
-log "staging dist/ into a temporary index..."
-TMP_INDEX="$(mktemp)"
-cleanup() { rm -f "${TMP_INDEX}"; }
-trap cleanup EXIT
-rm -f "${TMP_INDEX}"   # git refuses to use an index file that already exists
-
-# The path must be repo-relative: the temp index starts empty, so git resolves
-# it against the cwd, which is REPO_ROOT.
-GIT_INDEX_FILE="${TMP_INDEX}" git add -f -- frontend/dist \
-  || die "could not stage frontend/dist — is ${DIST_DIR} inside the repository?"
-TREE="$(GIT_INDEX_FILE="${TMP_INDEX}" git write-tree)"
-[ -n "${TREE}" ] || die "empty tree — dist/ staged nothing"
-
-FILE_COUNT="$(GIT_INDEX_FILE="${TMP_INDEX}" git ls-files | wc -l | tr -d ' ')"
-log "tree ${TREE} with ${FILE_COUNT} files"
-
-# Parent: the previous bundle, so the ref has history you can diff. Falls back
-# to no parent on the first publish.
-PREV="$(git ls-remote --heads origin "refs/heads/${DIST_REF}" 2>/dev/null | awk '{print $1}' || true)"
-if [ -n "${PREV}" ] && git cat-file -e "${PREV}^{commit}" 2>/dev/null; then
-    PARENT="${PREV}"
-    log "parent  : ${PREV} (previous bundle)"
-else
-    PARENT=""
-    log "parent  : none (first publish, orphan)"
-fi
-
-if [ -n "${PARENT}" ]; then
-    COMMIT="$(git commit-tree "${TREE}" -p "${PARENT}" -m "spa: ${SOURCE_SHA} (${SOURCE_REF})")"
-else
-    COMMIT="$(git commit-tree "${TREE}" -m "spa: ${SOURCE_SHA} (${SOURCE_REF})")"
-fi
-log "commit  : ${COMMIT}"
 
 # Two things must never be silently wrong, because both would make the bundle
 # misrepresent itself and the deploy-time assertion would then be checking a
@@ -260,15 +305,82 @@ RECORDED_BY="$(sed -n 's/.*"built_by": *"\([^"]*\)".*/\1/p' "${BUILD_INFO}")"
 [ "${RECORDED_BY}" = "${BUILT_BY}" ] \
   || die "build-info records built_by=${RECORDED_BY} but this run is ${BUILT_BY} — refusing to publish a bundle that misreports who built it"
 
-log "pushing to origin refs/heads/${DIST_REF}..."
-# Force: this is a build output on an orphan ref, so fast-forward is not a
-# meaningful expectation and a rejected push would leave the board on an old
-# bundle with no signal as to why.
-git push --force origin "${COMMIT}:refs/heads/${DIST_REF}"
+if [ "${SKIP_PUBLISH}" = "1" ]; then
+    outcome "skipped-not-publishing"
+    log "SKIP_PUBLISH=1 — the bundle was built and recorded, and nothing was"
+    log "committed or pushed. ${BUNDLE_DIR}/ on ${PUBLISH_BRANCH} is unchanged."
+    exit 0
+fi
 
+# ---------------------------------------------------------------------------
+# Commit the bundle, without touching the working tree
+# ---------------------------------------------------------------------------
+# The tree is assembled with plumbing into a temporary index rather than by
+# copying dist/ into the checkout and staging it. Two reasons, both learned the
+# hard way:
+#
+#   * a temporary index keeps the source branch's index and working tree
+#     untouched, so this cannot leave the checkout in a half-staged state — the
+#     failure mode that bit a commit earlier in this project, where
+#     `git commit -- <path>` carried along everything else that was staged;
+#   * spa-bundle/ must never exist as a working-tree directory, or a developer's
+#     next `npm run build` would show 198 modified tracked files.
+#
+# `git add -f` is not usable here: the temp index starts empty, so git resolves
+# paths against the cwd, and the files we want are in dist/, not at the bundle
+# path. Hashing them and feeding `update-index --index-info` puts them at the
+# right path without ever writing them there.
+log "hashing ${DIST_DIR} into a ${BUNDLE_DIR}/ tree..."
+TMP_INDEX="$(mktemp)"
+cleanup() { rm -f "${TMP_INDEX}"; }
+trap cleanup EXIT
+rm -f "${TMP_INDEX}"   # git refuses to use an index file that already exists
+
+export GIT_INDEX_FILE="${TMP_INDEX}"
+git read-tree --empty
+# NUL-delimited throughout. vite names assets after their content, and nothing
+# stops a source filename from containing a space or a newline; a line-based
+# loop would silently drop or misattribute such a file.
+while IFS= read -r -d '' path; do
+    rel="${path#./}"
+    sha="$(git hash-object -w -- "${DIST_DIR}/${rel}")"
+    printf '100644 blob %s\t%s/%s\0' "${sha}" "${BUNDLE_DIR}" "${rel}"
+done < <(cd "${DIST_DIR}" && find . -type f -print0) \
+    | git update-index -z --index-info
+TREE="$(git write-tree)"
+unset GIT_INDEX_FILE
+[ -n "${TREE}" ] || die "empty tree — dist/ staged nothing"
+
+FILE_COUNT="$(GIT_INDEX_FILE="${TMP_INDEX}" git ls-files | wc -l | tr -d ' ')"
+log "tree ${TREE} with ${FILE_COUNT} files"
+
+# Parent is the branch tip, which the check above established is this build's
+# own source commit. So the bundle commit sits directly on the source it was
+# built from, and the deploy can name either.
+log "parent  : ${TARGET_TIP} (refs/heads/${PUBLISH_BRANCH})"
+COMMIT="$(git commit-tree "${TREE}" -p "${TARGET_TIP}" \
+    -m "spa: bundle for ${SOURCE_SHA} (frontend tree ${FRONTEND_TREE})")"
+log "commit  : ${COMMIT}"
+
+# ---------------------------------------------------------------------------
+# Push
+# ---------------------------------------------------------------------------
+# No force. The commit is a child of the branch tip, so this is a fast-forward
+# and a rejection means someone pushed in the last few seconds — in which case
+# their commit is the new tip and the next CI run publishes against it. Forcing
+# would silently discard whatever they pushed, which for a source branch is not
+# a trade this script is allowed to make on its own.
+log "pushing to origin refs/heads/${PUBLISH_BRANCH}..."
+if ! git push origin "${COMMIT}:refs/heads/${PUBLISH_BRANCH}"; then
+    outcome "push-rejected"
+    die "could not push the bundle onto ${PUBLISH_BRANCH}. Nothing was overwritten; re-run once the branch settles."
+fi
+
+outcome "published"
 log "============================================================"
 log "published ${COMMIT}"
 log "  source : ${SOURCE_SHA} (${SOURCE_REF})"
-log "  ref    : origin/${DIST_REF}"
+log "  branch : origin/${PUBLISH_BRANCH}"
+log "  path   : ${BUNDLE_DIR}/"
 log "  files  : ${FILE_COUNT}"
 log "============================================================"
