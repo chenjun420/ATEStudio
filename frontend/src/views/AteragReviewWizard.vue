@@ -638,8 +638,16 @@ onMounted(loadSummary)
                     has no way to know these are the ones the red line is about:
                     unapproved criteria that must not become production bounds.
                   -->
+                  <!--
+                    Cast: ElTableColumn types its scoped slot row as DefaultRow,
+                    but :data is `conditions` (TestCondition[]), so the value at
+                    runtime is a TestCondition. vue-tsc cannot see through the
+                    table's slot typing, hence the cast. The build's own `tsc`
+                    step does not type-check templates at all, so this error is
+                    invisible to `npm run build` and only `vue-tsc` reports it.
+                  -->
                   <ElTag
-                    v-if="isAnnotationDraft(row)"
+                    v-if="isAnnotationDraft(row as TestCondition)"
                     size="small"
                     type="danger"
                     class="mt-1"

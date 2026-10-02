@@ -37,7 +37,7 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
       - name: Install dependencies
-        run: uv sync --group dev
+        run: uv sync --extra dev
       - name: Ruff check
         run: uv run ruff check .
       - name: MyPy type check
@@ -56,7 +56,7 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
       - name: Install dependencies
-        run: uv sync --group dev
+        run: uv sync --extra dev
       - name: Install pytest-cov
         run: uv pip install pytest-cov
       - name: Run tests with coverage
@@ -141,7 +141,7 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
       - name: Install dependencies
-        run: uv sync --group dev
+        run: uv sync --extra dev
       - name: Headless simulation tests (JUnit)
         run: |
           ATE_SIMULATION_MODE=true uv run pytest \
