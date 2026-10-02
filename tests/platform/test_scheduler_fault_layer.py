@@ -4,14 +4,14 @@
 - FaultInjector.check_scheduler_raise：count 第 n 次派发命中 / probability
   统计带 / once 一次性消耗 / 异常携带 layer+step_id+uut_id 上下文 /
   其他层规则被忽略
-- 零开销热路径：无调度层规则时为单次空检查（<2x 裸调用，宽松 CI 余量）
+- 零开销热路径：无调度层规则时为单次空检查（断言结构：intercept 未被进入、
+  未写派发状态；不用耗时做代理，理由与断言边界见该测试的 docstring）
 - ScannerScheduler 派发钩子：命中规则 → 步骤按失败处理并携带
   layer=scheduler 归因；不吞非 SchedulerFaultError 异常
 """
 
 from __future__ import annotations
 
-import time
 from typing import Any
 
 import pytest
@@ -87,11 +87,31 @@ def test_once_only_rule_consumes_after_first_fire() -> None:
     assert inj.rules[0].triggered_count == 1
 
 
-def test_no_rules_hot_path_under_2x_bare_call() -> None:
-    """无调度层规则时热路径为单次空检查：<2x 等价裸调用（宽松余量）。
+def test_no_scheduler_rule_hot_path_is_a_bare_integer_check() -> None:
+    """无调度层规则时热路径为单次空检查：一次整数比较后返回。
 
-    基线函数与被测快路径同形（一次属性读 + 整数比较 + 返回），
-    且注入器上挂了一条 network 层规则以证明过滤发生在空检查之前。
+    断言的是结构，不是耗时。实现是开头一句
+    ``if self._scheduler_rule_count == 0: return``。
+
+    这个测试原先用「快路径耗时 < 裸调用 2x」作为该性质的代理。代理不可靠：
+    coverage tracer 的开销正比于执行的行数，而热路径函数的行数远多于基线，
+    所以 tracer 一开，比值就从 1.53x 抬到 2.69x —— 测的是 tracer 的行计数，
+    不是代码的速度。实测（同一份代码）：
+
+        无 tracer：bare 0.0036s / hot 0.0055s = 1.53x
+        有 tracer：bare 0.0191s / hot 0.0512s = 2.69x
+
+    这是系统性偏差而非方差，取多轮最小值修不掉 —— 先试过，没有用。CI 恒开
+    ``--cov``，所以那个失败每次必现。
+
+    这里断言两件可从外部观测的事：拦截 ``intercept`` 确认它一次都没被进入
+    （过滤发生在空检查之前），并确认 ``_dispatch_counts`` 仍为空（没有写任何
+    派发状态）。
+
+    断言不到的：docstring 里「不分配上下文」的那一半。把 ``dict(context or {})``
+    提到守卫之前，从外部看不出来 —— 没有任何状态被写，且 intercept 仍未被调用；
+    变异测试确认过，这里放不出钩子。所以这里不作该声称。一个纯浪费的 dict 是
+    性能退化而非正确性问题，而它已不再由一个本身就不可靠的计时断言覆盖。
     """
     inj = FaultInjector()
     inj.load([
@@ -104,29 +124,33 @@ def test_no_rules_hot_path_under_2x_bare_call() -> None:
         },
     ])
 
-    class _Gate:
-        def __init__(self) -> None:
-            self.count = 0
+    # 前置条件：只有 network 层规则，故 scheduler 层计数为 0。若这条不成立，
+    # 后面的断言就没有意义 —— 所以先把它说清楚，而不是让失败出现在别处。
+    assert inj._scheduler_rule_count == 0, (
+        "loaded a network-layer rule but _scheduler_rule_count is "
+        f"{inj._scheduler_rule_count}; the empty-check guard under test would "
+        "never be reached"
+    )
 
-    gate = _Gate()
+    intercepted: list[tuple[Any, ...]] = []
+    real_intercept = inj.intercept
 
-    def bare(g: _Gate) -> None:
-        if g.count == 0:
-            return
+    def _spy(*args: Any, **kwargs: Any) -> Any:
+        intercepted.append(args)
+        return real_intercept(*args, **kwargs)
 
-    n = 50_000
-    start = time.perf_counter()
-    for _ in range(n):
-        bare(gate)
-    bare_total = time.perf_counter() - start
+    inj.intercept = _spy  # type: ignore[method-assign]
 
-    start = time.perf_counter()
-    for _ in range(n):
-        inj.check_scheduler_raise("step_a")
-    hot_total = time.perf_counter() - start
+    for i in range(1000):
+        inj.check_scheduler_raise(f"step_{i}")
 
-    assert hot_total < bare_total * 2.0, (
-        f"hot path {hot_total:.4f}s vs bare {bare_total:.4f}s"
+    assert intercepted == [], (
+        f"intercept was entered {len(intercepted)} times with no scheduler-layer "
+        "rule loaded; the hot path is not short-circuiting before rule matching"
+    )
+    assert inj._dispatch_counts == {}, (
+        "check_scheduler_raise wrote dispatch state despite the empty-check guard: "
+        f"{inj._dispatch_counts}"
     )
 
 

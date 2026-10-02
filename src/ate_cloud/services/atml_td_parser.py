@@ -6,8 +6,9 @@ documents. It turns a TestDescription XML document into plain dataclasses that
 the importer service (``atml_importer.py``) maps to ORM rows.
 
 Design notes:
-- Uses stdlib ``xml.etree.ElementTree`` (consistent with the exporter — no new
-  dependency).
+- Parses with ``defusedxml`` rather than the stdlib parser. The exporter still
+  *generates* XML with stdlib ``xml.etree.ElementTree``, which is not a risk;
+  parsing externally-supplied documents is. See :func:`parse_test_description`.
 - **Namespace-tolerant**: elements/attributes are matched by their *local
   name* (the part after ``{...}``), so a document with the real
   ``urn:IEEE-1671:2010:TestDescription`` / ``:Common`` namespaces and a
@@ -24,6 +25,9 @@ from __future__ import annotations
 
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
+
+from defusedxml.common import DTDForbidden, EntitiesForbidden
+from defusedxml.ElementTree import fromstring as _defused_fromstring
 
 
 class ATMLParseError(ValueError):
@@ -182,7 +186,26 @@ def parse_test_description(xml: str | bytes) -> ParsedTestDescription:
     if xml is None or not str(xml).strip():
         raise ATMLParseError("Empty TestDescription document")
     try:
-        root = ET.fromstring(xml)
+        # defusedxml, not the stdlib parser.
+        #
+        # A TestDescription arrives from outside: it is a customer-authored test
+        # specification uploaded through the API, so it is untrusted input by
+        # definition. The stdlib parser refuses undefined entities, which closes
+        # the classic external-entity file-disclosure case, but it still expands
+        # internal entity definitions and so accepts a billion-laughs document —
+        # and the response is a parse that consumes the process's memory rather
+        # than one that fails.
+        #
+        # The exception set below is what makes this a real fix rather than a
+        # different parser call. DTDForbidden and EntitiesForbidden are raised
+        # *instead of* a document, and they are not ParseError subclasses, so
+        # without them an attack payload would escape as an unhandled traceback
+        # rather than the documented ATMLParseError → HTTP 400.
+        root = _defused_fromstring(xml)
+    except (DTDForbidden, EntitiesForbidden) as exc:
+        raise ATMLParseError(
+            f"TestDescription XML declares entities or a DTD, which is not accepted: {exc}"
+        ) from exc
     except ET.ParseError as exc:
         raise ATMLParseError(f"Malformed TestDescription XML: {exc}") from exc
 

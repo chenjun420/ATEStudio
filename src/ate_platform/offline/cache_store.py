@@ -175,7 +175,7 @@ class OfflineCacheStore:
         now = time.time()
         with self._lock:
             row = self._conn.execute(
-                f"SELECT payload, checksum FROM {table} WHERE id = ? AND version = ?",
+                f"SELECT payload, checksum FROM {table} WHERE id = ? AND version = ?",  # nosec B608
                 (entry_id, version),
             ).fetchone()
             if row is not None and row[0] == payload and row[1] == computed:
@@ -206,7 +206,7 @@ class OfflineCacheStore:
         ts = time.time() if acked_at is None else acked_at
         with self._lock:
             cur = self._conn.execute(
-                f"UPDATE {table} SET state = ?, acked_at = ? WHERE id = ? AND version = ?",
+                f"UPDATE {table} SET state = ?, acked_at = ? WHERE id = ? AND version = ?",  # nosec B608
                 (_STATE_ACKED, ts, entry_id, version),
             )
             self._conn.commit()
@@ -239,7 +239,7 @@ class OfflineCacheStore:
         with self._lock:
             if version is None:
                 row = self._conn.execute(
-                    f"SELECT payload, checksum, state, version FROM {table} "
+                    f"SELECT payload, checksum, state, version FROM {table} "  # nosec B608
                     "WHERE id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1",
                     (entry_id,),
                 ).fetchone()
@@ -247,13 +247,13 @@ class OfflineCacheStore:
                     raise CacheMissError(f"{kind}/{entry_id}: no cached versions")
             else:
                 row = self._conn.execute(
-                    f"SELECT payload, checksum, state, version FROM {table} "
+                    f"SELECT payload, checksum, state, version FROM {table} "  # nosec B608
                     "WHERE id = ? AND version = ?",
                     (entry_id, version),
                 ).fetchone()
                 if row is None:
                     exists = self._conn.execute(
-                        f"SELECT 1 FROM {table} WHERE id = ?", (entry_id,)
+                        f"SELECT 1 FROM {table} WHERE id = ?", (entry_id,)  # nosec B608
                     ).fetchone()
                     if exists:
                         raise VersionMismatchError(
@@ -289,7 +289,7 @@ class OfflineCacheStore:
             for k in kinds:
                 table = _resolve_table(k)
                 rows = self._conn.execute(
-                    f"SELECT id, version, state, checksum, created_at, acked_at FROM {table} "
+                    f"SELECT id, version, state, checksum, created_at, acked_at FROM {table} "  # nosec B608
                     "ORDER BY id, created_at DESC, rowid DESC"
                 ).fetchall()
                 entries.extend(
@@ -311,10 +311,10 @@ class OfflineCacheStore:
         table = _resolve_table(kind)
         with self._lock:
             if version is None:
-                cur = self._conn.execute(f"DELETE FROM {table} WHERE id = ?", (entry_id,))
+                cur = self._conn.execute(f"DELETE FROM {table} WHERE id = ?", (entry_id,))  # nosec B608
             else:
                 cur = self._conn.execute(
-                    f"DELETE FROM {table} WHERE id = ? AND version = ?", (entry_id, version)
+                    f"DELETE FROM {table} WHERE id = ? AND version = ?", (entry_id, version)  # nosec B608
                 )
             self._conn.commit()
             return cur.rowcount
@@ -330,7 +330,7 @@ class OfflineCacheStore:
         table = _resolve_table(kind)
         with self._lock:
             rows = self._conn.execute(
-                f"SELECT id, version FROM {table} ORDER BY id, created_at DESC, rowid DESC"
+                f"SELECT id, version FROM {table} ORDER BY id, created_at DESC, rowid DESC"  # nosec B608
             ).fetchall()
             per_id: dict[str, list[str]] = {}
             for entry_id, ver in rows:
@@ -338,7 +338,7 @@ class OfflineCacheStore:
             doomed = [(eid, ver) for eid, vers in per_id.items() for ver in vers[keep_last_n:]]
             if doomed:
                 self._conn.executemany(
-                    f"DELETE FROM {table} WHERE id = ? AND version = ?", doomed
+                    f"DELETE FROM {table} WHERE id = ? AND version = ?", doomed  # nosec B608
                 )
                 self._conn.commit()
             return len(doomed)

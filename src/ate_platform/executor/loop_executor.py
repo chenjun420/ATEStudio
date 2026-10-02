@@ -646,7 +646,7 @@ class LoopExecutor:
 
             # Try to resolve any remaining variable references from VariableSpace
             # e.g., "scope.counter < 5" after ${} resolution
-            result = eval(resolved, {"__builtins__": {}}, allowed_names)  # noqa: S307
+            result = eval(resolved, {"__builtins__": {}}, allowed_names)  # noqa: S307  # nosec B307
             return bool(result)
         except Exception:
             logger.debug("Condition evaluation failed for: %s", expression)
@@ -670,7 +670,7 @@ class LoopExecutor:
         # If resolution changed the expression, try to evaluate it
         if resolved != collection_expr:
             try:
-                result = eval(resolved, {"__builtins__": {}}, {})  # noqa: S307
+                result = eval(resolved, {"__builtins__": {}}, {})  # noqa: S307  # nosec B307
                 if isinstance(result, (list, tuple)):
                     return list(result)
             except Exception:

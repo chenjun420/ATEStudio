@@ -178,7 +178,7 @@ class UploadQueue:
             raise ValueError("payload_path must be a non-empty str")
         with self._lock:
             existing = self._conn.execute(
-                f"SELECT {_RECORD_COLUMNS} FROM upload_records "
+                f"SELECT {_RECORD_COLUMNS} FROM upload_records "  # nosec B608
                 "WHERE station_id = ? AND execution_id = ? AND seq_no = ?",
                 (station_id, execution_id, seq_no),
             ).fetchone()
@@ -199,7 +199,7 @@ class UploadQueue:
             )
             self._conn.commit()
             row = self._conn.execute(
-                f"SELECT {_RECORD_COLUMNS} FROM upload_records WHERE id = ?",
+                f"SELECT {_RECORD_COLUMNS} FROM upload_records WHERE id = ?",  # nosec B608
                 (cur.lastrowid,),
             ).fetchone()
         logger.debug(
@@ -292,7 +292,7 @@ class UploadQueue:
         """按行 id 取单条记录；不存在返回 None。"""
         with self._lock:
             row = self._conn.execute(
-                f"SELECT {_RECORD_COLUMNS} FROM upload_records WHERE id = ?",
+                f"SELECT {_RECORD_COLUMNS} FROM upload_records WHERE id = ?",  # nosec B608
                 (record_id,),
             ).fetchone()
         return _row_to_record(row) if row is not None else None
@@ -301,7 +301,7 @@ class UploadQueue:
         """列出全部 pending 记录（插入序 = 上传批次序）。"""
         with self._lock:
             rows = self._conn.execute(
-                f"SELECT {_RECORD_COLUMNS} FROM upload_records WHERE state = ? ORDER BY id",
+                f"SELECT {_RECORD_COLUMNS} FROM upload_records WHERE state = ? ORDER BY id",  # nosec B608
                 (STATE_PENDING,),
             ).fetchall()
         return [_row_to_record(r) for r in rows]
@@ -310,7 +310,7 @@ class UploadQueue:
         """列出全部记录（插入序），供诊断/测试视图。"""
         with self._lock:
             rows = self._conn.execute(
-                f"SELECT {_RECORD_COLUMNS} FROM upload_records ORDER BY id"
+                f"SELECT {_RECORD_COLUMNS} FROM upload_records ORDER BY id"  # nosec B608
             ).fetchall()
         return [_row_to_record(r) for r in rows]
 

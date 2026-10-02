@@ -122,8 +122,14 @@ class ReportExporter:
             Tuple of ``(content_bytes, media_type)``.
         """
         try:
-            import pyarrow as pa  # type: ignore[import-not-found]
-            import pyarrow.parquet as pq  # type: ignore[import-not-found]
+            # pyarrow ships no stubs and none are published, so this is silenced in
+            # pyproject's mypy overrides rather than here. A per-line ignore also
+            # bit: pyarrow *is* installed, so mypy reported import-untyped while the
+            # comment claimed import-not-found, and the mismatch itself became two
+            # more errors. The dependency's presence is asserted properly by
+            # tests/cloud/test_declared_dependencies.py instead.
+            import pyarrow as pa
+            import pyarrow.parquet as pq
         except ImportError:
             logger.warning(
                 "pyarrow not installed — falling back to CSV for Parquet export"

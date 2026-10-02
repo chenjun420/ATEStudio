@@ -38,7 +38,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import yaml  # type: ignore[import-untyped]
+import yaml
 
 from ate_cloud.schemas.aterag_bundle import BundleModel, RequirementModel, ScenarioModel
 

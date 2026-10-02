@@ -564,7 +564,7 @@ def _run_script_in_thread(script_path: str, params: dict[str, Any], step_id: str
         code = compile(script_content, script_path, "exec")
 
         # Execute the script
-        exec(code, script_globals)
+        exec(code, script_globals)  # nosec B102 — the script executor: running a step script is its purpose
 
         # Check for explicit result in script
         if "result" in script_globals:
@@ -659,7 +659,7 @@ def _run_script(script_path: str, params: dict[str, Any], step_id: str) -> dict[
         code = compile(script_content, script_path, "exec")
 
         # Execute the script
-        exec(code, script_globals)
+        exec(code, script_globals)  # nosec B102 — the script executor: running a step script is its purpose
 
         # Check for explicit result in script
         if "result" in script_globals:

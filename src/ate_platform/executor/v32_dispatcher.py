@@ -410,7 +410,7 @@ class V32PlanDispatcher:
             "true": True,
             "false": False,
         }
-        result = eval(expression, {"__builtins__": {}}, allowed_names)  # noqa: S307
+        result = eval(expression, {"__builtins__": {}}, allowed_names)  # noqa: S307  # nosec B307
         return bool(result)
 
     async def _dispatch_script(self, step: YamlStep) -> StepOutcome:

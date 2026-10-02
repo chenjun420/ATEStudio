@@ -523,13 +523,30 @@ class TestWatchDogProperties:
         counter["value"] = 0
         watchdog.start()
 
-        # Wait for a few misses
-        await asyncio.sleep(0.12)
-        assert watchdog.consecutive_misses > 0
+        # Poll for both transitions rather than sleeping fixed spans. 0.12s is
+        # ~2.4 scan intervals and 0.07s is ~1.4, so under load the scan loop can
+        # step over both windows and this fails with nothing actually wrong.
+        # Same reasoning and same shape as
+        # test_consecutive_misses_reset_on_recovery above, which is why that one
+        # polls rather than sleeps.
+        #
+        # Waiting for 2 rather than 1 keeps the assertion clear of the
+        # 3-miss alarm threshold: the property under test is "the counter moved
+        # off zero", and stopping one tick short of the alarm keeps the test from
+        # racing a state change it is not about.
+        deadline = time.monotonic() + 5.0
+        while watchdog.consecutive_misses < 2 and time.monotonic() < deadline:
+            await asyncio.sleep(0.01)
+        assert watchdog.consecutive_misses > 0, (
+            f"scan loop never registered a miss within 5s "
+            f"(consecutive_misses={watchdog.consecutive_misses})"
+        )
 
-        # Resume heartbeat
+        # Resume heartbeat, then wait for the loop to notice.
         counter["value"] += 1
-        await asyncio.sleep(0.07)
+        deadline = time.monotonic() + 5.0
+        while watchdog.consecutive_misses != 0 and time.monotonic() < deadline:
+            await asyncio.sleep(0.01)
         assert watchdog.consecutive_misses == 0
 
         await watchdog.stop()

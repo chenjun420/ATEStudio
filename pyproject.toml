@@ -47,6 +47,13 @@ dependencies = [
     # Parquet got CSV and a log line nobody reads. Declared so the capability
     # is a decision rather than an accident of someone else's dependency list.
     "pyarrow>=15.0.0",
+    # Parses externally-supplied ATML — customer-authored test specifications,
+    # so untrusted by definition. The stdlib parser rejects undefined entities but
+    # still expands internal entity definitions, so a billion-laughs document still
+    # parses, at the cost of the process's memory. defusedxml refuses the DTD
+    # outright and turns the attempt into the same ATMLParseError → HTTP 400 that
+    # any other malformed document gets.
+    "defusedxml>=0.7.1",
     # The knowledge-graph backend is gone: semantica[graph-falkordb,shacl] and
     # falkordb were removed with the subsystem. Nothing imports either now.
     #
@@ -77,6 +84,24 @@ dev = [
     "hypothesis>=6.100.0",
     "ruff>=0.4.0",
     "mypy>=1.10.0",
+    # The tools CI runs, declared rather than pip-installed inside the workflow.
+    # Both were being added by a `uv pip install` step in ci.yml, which means the
+    # version that checked the code was whatever the index served that day and
+    # nothing in the lock file recorded it. A tool whose version is not pinned is
+    # a tool whose findings change without a commit.
+    "bandit>=1.7.0",
+    "pytest-cov>=5.0.0",
+    # Stubs for a runtime dependency. PyYAML is used across the codebase and does
+    # publish type information separately, so this buys real checking on every
+    # `yaml.safe_load` rather than another line in the ignore list above. yaml
+    # returns `Any`, so this is mostly about catching wrong argument names — which
+    # is exactly the class of bug that reaches production as a silently empty
+    # config.
+    "types-PyYAML>=6.0.12",
+    # Stubs for defusedxml, which is a runtime dependency of the ATML importer.
+    # The stub package versions independently of the runtime one, so this is not
+    # tied to defusedxml's version — 0.7.0.x is the current line.
+    "types-defusedxml>=0.7.0",
 ]
 openhtf = [
     "openhtf>=0.12.0",
@@ -134,8 +159,55 @@ python_version = "3.12"
 strict = true
 warn_return_any = true
 warn_unused_configs = true
+# Third-party packages mypy cannot see, and must not be asked about twice.
+#
+# Each entry is here because the package is either not installed or ships no type
+# information, so a missing-import error carries no signal: it says "this
+# distribution is not present", which `tests/cloud/test_declared_dependencies.py`
+# already checks properly — that test states *why* each one is acceptable, which
+# a config file cannot. This list exists to stop mypy repeating a fact that is
+# already recorded, and the two are kept in step deliberately.
+#
+# `yaml` is deliberately NOT here: PyYAML does ship stubs, so `types-PyYAML` is a
+# declared dev dependency and yaml usage is genuinely checked.
+#
+# `opentelemetry` is the one to watch. observability/telemetry.py imports it
+# unguarded, so `import ate_cloud.observability` raises ModuleNotFoundError on a
+# host without it. That is a real defect, recorded in
+# TRANSITIVE_BY_DESIGN in that test as "built but never enabled" — nothing imports
+# the package. Suppressing the error here does not fix it and is not meant to; it
+# only stops CI failing on a gap a test already tracks. The fix is to either wire
+# telemetry up and declare the dependency, or delete the module.
+#
+# `grpc.*` was here until 2026-10-02: only a bare `import grpc` exists, so the
+# wildcard matched nothing and warn_unused_configs reported it every run.
 [[tool.mypy.overrides]]
-module = ["pyvisa", "pyvisa.*", "nats", "nats.*", "aiosqlite", "httpx", "sqlalchemy", "sqlalchemy.*", "asyncpg", "git", "git.*", "grpc", "grpc.*", "google.protobuf", "google.protobuf.*", "simpleeval", "simpleeval.*"]
+module = [
+    "pyvisa", "pyvisa.*",
+    "nats", "nats.*",
+    "aiosqlite",
+    "httpx",
+    "sqlalchemy", "sqlalchemy.*",
+    "asyncpg",
+    "git", "git.*",
+    "grpc",
+    "google.protobuf", "google.protobuf.*",
+    # no `simpleeval.*`: every import is `from simpleeval import ...`, and the
+    # wildcard matched nothing, which warn_unused_configs reported every run
+    "simpleeval",
+    # declared and installed, but ships neither stubs nor a py.typed marker, and
+    # none are published. report_exporter.py imports it inside a try/except with a
+    # CSV fallback, so the boundary is already handled at runtime.
+    "pyarrow", "pyarrow.*",
+    # optional by design, guarded by _ORTOOLS_AVAILABLE with a heuristic fallback.
+    # The submodule is listed because that is what the code imports
+    # (`from ortools.sat.python import cp_model`), and mypy does not apply a
+    # silenced parent to its submodules. Narrower than `ortools.*`, which matched
+    # nothing and was reported unused on every run.
+    "ortools.sat.python",
+    # see the note above: a recorded gap, not a missing declaration
+    "opentelemetry", "opentelemetry.*",
+]
 ignore_missing_imports = true
 
 # Dynamic protobuf message classes (built at runtime via descriptor_pool +

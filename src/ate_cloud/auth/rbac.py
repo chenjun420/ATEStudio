@@ -66,7 +66,14 @@ def is_superuser(scopes: set[str] | frozenset[str] | list[str] | None) -> bool:
     wildcard is not, and overusing this turns it into a way to silence checks
     rather than satisfy them.
     """
-    return bool(scopes) and SCOPE_ADMIN in scopes
+    # Spelled as an early return rather than `bool(scopes) and SCOPE_ADMIN in scopes`
+    # because mypy does not narrow a union across `and`: `None` stays in the type of
+    # `scopes` on the right-hand side, and `in None` is a runtime TypeError waiting
+    # for the one caller that passes nothing. The short-circuit made it correct and
+    # the type checker right to complain; this is both.
+    if not scopes:
+        return False
+    return SCOPE_ADMIN in scopes
 
 
 #: Namespaced permission scopes, as the menu seed spells them.

@@ -469,7 +469,7 @@ class ThreadStepExecutor:
         try:
             with open(script_path, encoding="utf-8") as f:
                 code = compile(f.read(), script_path, "exec")
-                exec(code, exec_namespace)  # noqa: S102
+                exec(code, exec_namespace)  # noqa: S102  # nosec B102
 
             # Extract outputs (same protocol as ProcessExecutor)
             outputs: dict[str, Any] = {}

@@ -2,7 +2,10 @@ name: CI
 
 on:
   push:
-    branches: [main, master, dev]
+    # main and dev only. `master` was removed when the repositories were unified
+    # onto main (release) + dev (development); leaving it listed would silently
+    # skip every push to a branch that no longer exists.
+    branches: [main, dev]
     paths:
       - 'src/**'
       - 'frontend/src/**'
@@ -11,7 +14,7 @@ on:
       - 'uv.lock'
       - '.github/workflows/**'
   pull_request:
-    branches: [main, master]
+    branches: [main]
     paths:
       - 'src/**'
       - 'frontend/src/**'
@@ -19,9 +22,14 @@ on:
       - 'pyproject.toml'
       - 'uv.lock'
       - '.github/workflows/**'
-  # The SPA is served by FastAPI from frontend/dist, so a deploy without a
-  # bundle leaves the API ahead of the interface. Being able to publish a
-  # bundle on demand is what makes that recoverable without a code push.
+  # Re-run on demand.
+  #
+  # The SPA bundle is no longer published from CI: it is built on the control
+  # machine by scripts/frontend/build_bundle.sh and shipped by scp, because an
+  # 18 MB bundle of hashed assets does not belong in the git object store. What CI
+  # still owes the build is the `Production build` step in the frontend job — the
+  # only place a real production build is exercised, since the deploy machine is
+  # the worst place to discover vite is broken.
   workflow_dispatch:
 
 jobs:
@@ -57,8 +65,6 @@ jobs:
           cache-dependency-glob: "uv.lock"
       - name: Install dependencies
         run: uv sync --extra dev
-      - name: Install pytest-cov
-        run: uv pip install pytest-cov
       - name: Run tests with coverage
         run: uv run pytest tests/ -v --cov=src/ --cov-branch --cov-fail-under=80
 
@@ -136,7 +142,16 @@ jobs:
 
   security:
     runs-on: ubuntu-latest
-    continue-on-error: true
+    # No continue-on-error. The job carried it while bandit reported 22 medium
+    # findings on every run, which made it a job that could not fail and
+    # therefore a job nobody had to read. Those findings are now either marked
+    # at the site with a reason or actually fixed — ATML XML parsing moved to
+    # defusedxml — so the scan is clean and can gate again.
+    #
+    # Installs the dev extra because bandit lives there now. It used to be
+    # pip-installed by a step below, which left its version unrecorded in
+    # uv.lock: a scanner whose version floats is a scanner whose findings change
+    # without a commit.
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -145,9 +160,8 @@ jobs:
       - uses: astral-sh/setup-uv@v3
         with:
           enable-cache: true
+          cache-dependency-glob: "uv.lock"
       - name: Install dependencies
-        run: uv sync
-      - name: Install bandit
-        run: uv pip install bandit
+        run: uv sync --extra dev
       - name: Bandit security scan
         run: uv run bandit -r src/ -ll

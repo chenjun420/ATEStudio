@@ -40,7 +40,16 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    # Imported for annotations only. The module deliberately imports langchain
+    # lazily inside functions — building the agent must not be able to fail at
+    # import time, or an unreachable ATERag would stop the whole service starting
+    # (see the Runtime note above). A top-level runtime import would reintroduce
+    # exactly that, so these names exist for the type checker and nothing else.
+    from langchain_core.tools.base import BaseTool
+    from langchain_mcp_adapters.client import MultiServerMCPClient
 
 logger = logging.getLogger(__name__)
 
@@ -163,7 +172,7 @@ def _is_control_flow(exc: BaseException) -> bool:
     return False
 
 
-def _build_client(url: str):
+def _build_client(url: str) -> MultiServerMCPClient:
     from langchain_mcp_adapters.client import MultiServerMCPClient
 
     return MultiServerMCPClient(
@@ -171,7 +180,7 @@ def _build_client(url: str):
     )
 
 
-async def _fetch_tools(url: str) -> list:
+async def _fetch_tools(url: str) -> list[BaseTool]:
     """Fetch the MCP tool list, converting any failure to one error type.
 
     The conversion has to catch ``BaseException``: ``anyio`` runs MCP sessions
@@ -198,7 +207,18 @@ async def list_available_tools(url: str = DEFAULT_MCP_URL) -> list[str]:
     return sorted(t.name for t in await _fetch_tools(url))
 
 
-async def build_agent(url: str = DEFAULT_MCP_URL, *, model: str = ""):
+# The three functions below are annotated `-> Any` on purpose. Their real return
+# types are langchain generics — a four-parameter CompiledStateGraph, a
+# BaseChatModel | _ConfigurableModel union — whose parameter lists change between
+# langchain minor releases. Naming them here would make this file fail to type-check
+# on every langchain upgrade, for annotations no caller inspects: the agent is
+# handed straight to `.ainvoke()`/`.astream()` and cached untyped. `Any` is the
+# honest annotation at this boundary. It is not a way to avoid checking the code
+# that matters — the MCP URL, the tool allow-list, and the refusal on an empty
+# allow-list are all checked, and none of them live behind these signatures.
+
+
+async def build_agent(url: str = DEFAULT_MCP_URL, *, model: str = "") -> Any:
     """Assemble the agent with the allowed read tools bound in.
 
     Raises :class:`AgentUnavailableError` rather than degrading to a tool-less
@@ -228,7 +248,7 @@ async def build_agent(url: str = DEFAULT_MCP_URL, *, model: str = ""):
     return create_agent(model=chat, tools=allowed, system_prompt=SYSTEM_PROMPT)
 
 
-def _build_model(model: str = ""):
+def _build_model(model: str = "") -> Any:
     """Chat model, from the same OpenAI-compatible config as the rest of app.
 
     Read from env rather than the app ``Settings`` so the agent can be used
@@ -256,7 +276,7 @@ _agent_cache: dict[str, Any] = {}
 _lock = asyncio.Lock()
 
 
-async def get_agent(url: str = DEFAULT_MCP_URL, *, model: str = ""):
+async def get_agent(url: str = DEFAULT_MCP_URL, *, model: str = "") -> Any:
     """Cached agent handle.
 
     Cached because each build opens an MCP session; rebuilt per request it
