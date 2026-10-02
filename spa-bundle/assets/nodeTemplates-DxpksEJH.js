@@ -1,0 +1,1 @@
+import{i as e}from"./interceptor-d_b-J9wY.js";var t=e;async function n(){return(await t.get(`/node-templates`)).data.items}async function r(e){return(await t.post(`/node-templates`,e)).data}async function i(e,n){return(await t.put(`/node-templates/${e}`,n)).data}async function a(e){await t.delete(`/node-templates/${e}`)}export{i,a as n,n as r,r as t};
