@@ -1,7 +1,7 @@
 """conftest for REAL remote-service integration tests.
 
 These tests exercise the REAL services on the debug server
-(192.168.5.24 by default) with real clients (nats-py, qdrant-client,
+(192.168.5.25 by default) with real clients (nats-py, qdrant-client,
 httpx). They are marker-gated and DEFAULT-SKIPPED:
 
 * Every test module in this directory that talks to a remote service
@@ -20,7 +20,7 @@ Environment contract (ALL connection params and credentials come from
 ENV — no secrets are ever hardcoded):
 
     ATE_RUN_INTEGRATION           master gate (default off)
-    ATE_INTEGRATION_HOST          target host (default 192.168.5.24)
+    ATE_INTEGRATION_HOST          target host (default 192.168.5.25)
     ATE_INTEGRATION_NATS_PORT     NATS port      (default 4222)
     ATE_INTEGRATION_NATS_USER     NATS user      (optional; skip cred if unset)
     ATE_INTEGRATION_NATS_PASSWORD NATS password  (optional; skip cred if unset)
@@ -55,7 +55,7 @@ if find_spec("openhtf") is None:
 RUN_ENV_VAR = "ATE_RUN_INTEGRATION"
 #: Target host for the remote debug server.
 HOST_ENV_VAR = "ATE_INTEGRATION_HOST"
-DEFAULT_HOST = "192.168.5.24"
+DEFAULT_HOST = "192.168.5.25"
 
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 PROBE_TIMEOUT_SECONDS = 3.0

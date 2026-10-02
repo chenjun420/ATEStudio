@@ -249,7 +249,7 @@ class TestAgentCaching:
 
 
 #: Exactly what `aterag-mcp` advertised over tools/list on 2026-09-30 at
-#: http://192.168.5.24:8080/mcp (commit e7b5cc7), captured with the
+#: http://192.168.5.25:8080/mcp (commit e7b5cc7), captured with the
 #: initialize -> initialized -> tools/list handshake rather than read off a
 #: docstring.
 #:

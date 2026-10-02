@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# deploy_cloud.sh — deploy the ATE Studio cloud app to 192.168.5.24
+# deploy_cloud.sh — deploy the ATE Studio cloud app to 192.168.5.25
 # (Debian 12, bare metal, systemd)
 #
 # Scope, stated up front
@@ -68,7 +68,7 @@
 #     ./scripts/deploy/deploy_cloud.sh
 #
 # Flags (env vars):
-#   REMOTE_HOST      default 192.168.5.24
+#   REMOTE_HOST      default 192.168.5.25
 #   REMOTE_USER      default rpdzkj
 #   ENV_FILE         local path to the filled env file. Unset => the env file
 #                    already on the host is left untouched (with a warning).
@@ -97,7 +97,7 @@ set -o pipefail
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-REMOTE_HOST="${REMOTE_HOST:-192.168.5.24}"
+REMOTE_HOST="${REMOTE_HOST:-192.168.5.25}"
 REMOTE_USER="${REMOTE_USER:-rpdzkj}"
 ENV_FILE="${ENV_FILE:-}"
 REF="${REF:-origin/dev}"

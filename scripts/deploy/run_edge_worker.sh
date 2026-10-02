@@ -10,7 +10,7 @@
 #   scripts/deploy/run_edge_worker.sh [path/to/edge.env]
 #
 # Relevant variables (see config/edge-node.env.example for the full list):
-#   ATE_PLATFORM_NATS_URL    nats://192.168.5.24:4222   NATS JetStream URL
+#   ATE_PLATFORM_NATS_URL    nats://192.168.5.25:4222   NATS JetStream URL
 #   ATE_SIMULATION_MODE      true                         mock instruments, no hardware
 #   ATE_PLATFORM_DATA_DIR    /var/lib/ate-platform        local state + SQLite cache
 #   ATE_PLATFORM_SNAPSHOT_DIR (optional) crash-recovery snapshots

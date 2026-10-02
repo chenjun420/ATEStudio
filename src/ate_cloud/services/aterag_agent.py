@@ -46,7 +46,15 @@ logger = logging.getLogger(__name__)
 
 #: Default ATERag MCP endpoint. Overridable by env so the same build talks to a
 #: board at the factory or a laptop over a tunnel.
-DEFAULT_MCP_URL = os.getenv("ATERAG_MCP_URL", "http://192.168.5.24:8080/mcp")
+#:
+#: Loopback, not the board's LAN address. ATERag runs on the same host as this
+#: service, and a hardcoded LAN address was a standing outage waiting to happen:
+#: the board moved from 192.168.5.24 to 192.168.5.25, and every product-type
+#: lookup started failing with "无法连接 ATERag MCP (http://192.168.5.24:8080/mcp)"
+#: while nothing about ATERag had actually broken. A default that is correct only
+#: until the next DHCP lease is not a default, it is a countdown. ATERAG_MCP_URL
+#: still overrides it for the laptop-over-a-tunnel case the comment above names.
+DEFAULT_MCP_URL = os.getenv("ATERAG_MCP_URL", "http://127.0.0.1:8080/mcp")
 
 #: Read-only tools this agent is allowed to use.
 #:

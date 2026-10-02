@@ -2,7 +2,7 @@
 #
 # smoke_live.sh — agent-runnable LIVE smoke test for an ATE Studio cloud deploy.
 #
-# Verifies a deployed cloud on a bare-metal host (default 192.168.5.24):
+# Verifies a deployed cloud on a bare-metal host (default 192.168.5.25):
 #   * TCP reachability of nginx:80, Qdrant:6333, NATS monitor:8222
 #   * HTTP readiness THROUGH nginx:  GET /api/v1/health/ready  (F3 key check —
 #     the OLD deploy returns 404 for this path; a 404 is a clear FAIL meaning
@@ -26,11 +26,11 @@
 #
 # Usage:
 #   ./scripts/deploy/smoke_live.sh
-#   HOST=192.168.5.24 HTTP_PORT=80 ./scripts/deploy/smoke_live.sh
+#   HOST=192.168.5.25 HTTP_PORT=80 ./scripts/deploy/smoke_live.sh
 #   SMOKE_AUTH_TOKEN=<jwt> ./scripts/deploy/smoke_live.sh   # also tests /diagnose
 #
 # Config (env-overridable, all with sensible defaults):
-#   HOST             target host            (default 192.168.5.24)
+#   HOST             target host            (default 192.168.5.25)
 #   HTTP_PORT        nginx HTTP port        (default 80)
 #   CLOUD_PORT       direct cloud port      (default 8000; optional direct check)
 #   QDRANT_PORT      Qdrant HTTP port       (default 6333)
@@ -43,7 +43,7 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-HOST="${HOST:-192.168.5.24}"
+HOST="${HOST:-192.168.5.25}"
 HTTP_PORT="${HTTP_PORT:-80}"
 CLOUD_PORT="${CLOUD_PORT:-8000}"
 QDRANT_PORT="${QDRANT_PORT:-6333}"

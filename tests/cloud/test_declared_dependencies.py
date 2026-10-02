@@ -6,7 +6,7 @@ point:
 1. Every module-level third-party import is a declared dependency.
    `structlog` was imported by 18 files, declared nowhere, and installed only
    because `semantica` depended on it. Removing semantica left the deployed
-   service on 192.168.5.24 unable to import, with a traceback naming structlog
+   service on 192.168.5.25 unable to import, with a traceback naming structlog
    and nothing about the dependency change that caused it. No test could have
    caught it: the local environment already had the package.
 

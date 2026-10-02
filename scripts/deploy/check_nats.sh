@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# check_nats.sh — DEPLOY-2: report-only NATS health check for 192.168.5.24.
+# check_nats.sh — DEPLOY-2: report-only NATS health check for 192.168.5.25.
 #
 # Reports the nats-server version, systemd unit status, and verifies the
 # JetStream streams / KV buckets the cloud app requires:
