@@ -490,7 +490,18 @@ Or bypass knowingly:  FRONTEND_SOURCE=local"
         # Archived from HEAD, so the bytes installed are the bytes committed on
         # the deployed ref — read back out of the checkout, not fetched from
         # somewhere else that could have moved since.
-        archive_cmd="cd '${APP_DIR}' && sudo -u '${SERVICE_USER}' env HOME='${SERVICE_HOME}' git archive 'HEAD' '${BUNDLE_DIR}' | tar -x -C '${APP_DIR}/frontend/dist' --strip-components=1"
+        #
+        # `core.autocrlf=false` on the command line because git archive applies
+        # the same line-ending conversion a checkout would, and the control
+        # machine and the host do not agree: this repository sets
+        # core.autocrlf=true, so an archive taken on Windows rewrites the
+        # trailing newline of every text file. That is invisible in a diff of
+        # file counts and wrong in principle — vite names assets after a hash of
+        # their contents, so a bundle whose bytes no longer match its own
+        # filename is a bundle whose names are lies. Overriding the setting here
+        # makes the installed bytes the committed bytes regardless of how the
+        # host is configured, rather than correct only while nobody changes it.
+        archive_cmd="cd '${APP_DIR}' && sudo -u '${SERVICE_USER}' env HOME='${SERVICE_HOME}' git -c core.autocrlf=false archive 'HEAD' '${BUNDLE_DIR}' | tar -x -C '${APP_DIR}/frontend/dist' --strip-components=1"
         remote_sudo "${archive_cmd}" 2>&1 | tail -3
 
         # A run that extracted to the wrong place leaves the application root
