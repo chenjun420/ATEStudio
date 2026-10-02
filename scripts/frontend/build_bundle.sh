@@ -282,7 +282,15 @@ CHECKSUM="$(awk '{print $1}' "${TARBALL}.sha256")"
 
 # The archive must contain the provenance file, or the deploy has nothing to
 # check staleness against and would have to install it unverified.
-tar -tzf "${TARBALL}" | grep -qx '\./\.build-info\.json\|\.build-info\.json' \
+# `grep -q` cannot be used to test the listing. It exits on the first match and
+# closes the pipe, tar dies of SIGPIPE, and under `set -o pipefail` the pipeline
+# reports 141 — a failure for a check that succeeded. Counting consumes all the
+# input and returns a value rather than a signal.
+n_info="$(tar -tzf "${TARBALL}" | grep -c 'build-info\.json' || true)"
+case "${n_info}" in
+    ''|*[!0-9]*) die "could not read the archive listing" ;;
+esac
+[ "${n_info}" -ge 1 ] \
   || die "the archive has no .build-info.json — the deploy could not verify it"
 
 log "============================================================"

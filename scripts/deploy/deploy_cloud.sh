@@ -214,10 +214,16 @@ remote_cmd() {
 
 remote_sudo() {
     local cmd="$*"
-    if [ "$(id -u)" = "0" ]; then
-        bash -c "${cmd}"
-    elif [ "${LOCAL_ONLY}" = "1" ]; then
-        if [ -n "${SSH_PASSWORD:-}" ]; then
+    # LOCAL_ONLY is tested first, and that ordering is load-bearing. This used
+    # to ask `id -u` first, which reports the *control machine's* uid: a
+    # deploy run from a root shell would then take the local branch and execute
+    # every privileged step against the control machine instead of the host —
+    # stopping and restarting a service that was never running, and writing into
+    # whatever /opt/atestudio happened to be on the machine you sat at.
+    if [ "${LOCAL_ONLY}" = "1" ]; then
+        if [ "$(id -u)" = "0" ]; then
+            bash -c "${cmd}"
+        elif [ -n "${SSH_PASSWORD:-}" ]; then
             printf '%s\n' "${SSH_PASSWORD}" | sudo -S -p '' bash -c "${cmd}"
         else
             sudo bash -c "${cmd}"
@@ -294,16 +300,32 @@ ENV_PATH="$(printf '%s\n' "${UNIT_DUMP}" | sed -n 's/^EnvironmentFile=//p' | gre
 
 [ -n "${SERVICE_USER}" ] || die "no User= in ${SERVICE_NAME}.service"
 [ -n "${APP_DIR}" ]     || die "no WorkingDirectory= in ${SERVICE_NAME}.service"
-[ -d "${APP_DIR}" ]     || die "WorkingDirectory ${APP_DIR} does not exist on the host"
+# On the host, not here. `[ -d "${APP_DIR}" ]` tests the control machine's
+# filesystem, which never has the host's application directory on it — so the
+# check failed on every SSH deploy and passed only under LOCAL_ONLY, where the
+# two machines happen to be the same one. It read as a guard against a bad
+# WorkingDirectory and was instead a guard against deploying over SSH at all.
+host_dir="$(remote_cmd "test -d '${APP_DIR}' && echo present" 2>/dev/null || true)"
+[ "${host_dir}" = "present" ] \
+    || die "WorkingDirectory ${APP_DIR} does not exist on ${REMOTE_HOST}"
 
-# Home from passwd, not from $HOME or a guess: on this host the service user's
-# home is /var/lib/atestudio and /home/<user> does not exist, which is enough to
-# make npm fail with a misleading error.
-SERVICE_HOME="$(getent passwd "${SERVICE_USER}" | cut -d: -f6)"
-[ -n "${SERVICE_HOME}" ] || die "no passwd entry for ${SERVICE_USER}"
+# Home from the host's passwd, not from $HOME or a guess: on this host the
+# service user's home is /var/lib/atestudio and /home/<user> does not exist,
+# which is enough to make npm fail with a misleading error.
+#
+# Read over SSH because that is where the answer lives. `getent` on the control
+# machine reads the control machine's passwd — which on Windows is not even a
+# command — so this used to abort the deploy before it started.
+SERVICE_HOME="$(remote_cmd "getent passwd '${SERVICE_USER}' | cut -d: -f6" 2>/dev/null || true)"
+[ -n "${SERVICE_HOME}" ] || die "no passwd entry for ${SERVICE_USER} on ${REMOTE_HOST}"
 
-UV_BIN="$(command -v uv || echo /usr/local/bin/uv)"
-[ -x "${UV_BIN}" ] || die "uv not found (looked in PATH and /usr/local/bin)"
+# Resolved on the host for the same reason as the directory check: uv is on the
+# host, and a control machine without uv would otherwise fail here with "uv not
+# found" while the host was perfectly able to deploy.
+host_uv="$(remote_cmd "command -v uv || echo /usr/local/bin/uv" 2>/dev/null || true)"
+UV_BIN="${host_uv:-/usr/local/bin/uv}"
+host_uv_ok="$(remote_cmd "test -x '${UV_BIN}' && echo present" 2>/dev/null || true)"
+[ "${host_uv_ok}" = "present" ] || die "uv not found on ${REMOTE_HOST} (looked for ${UV_BIN})"
 
 log "target       : ${APP_DIR}"
 log "service user : ${SERVICE_USER} (home ${SERVICE_HOME})"
@@ -332,11 +354,24 @@ log "PASS: ownership consistent"
 # ---------------------------------------------------------------------------
 log "stopping ${SERVICE_NAME}..."
 remote_sudo "systemctl stop '${SERVICE_NAME}'" 2>/dev/null || true
-if remote_cmd 'ss -tlnp 2>/dev/null | grep -q ":8000 "'; then
+# Counting, not `grep -q`. A `-q` grep exits on the first match and closes the
+# pipe, so the writer dies of SIGPIPE and — under pipefail, on any shell that
+# has it — the pipeline reports 141 for a check that succeeded. Here the failure
+# direction is the dangerous one: a false "the port is free" sends the deploy on
+# to run migrations and then fail to bind.
+port_8000_held() {
+    local n
+    n="$(remote_cmd 'ss -tlnp 2>/dev/null' 2>/dev/null | grep -c ':8000 ' || true)"
+    case "${n}" in
+        ''|*[!0-9]*) return 1 ;;
+        *) [ "${n}" -ge 1 ] ;;
+    esac
+}
+if port_8000_held; then
     warn ":8000 still held after stopping the service"
     remote_cmd 'ss -tlnp 2>/dev/null | grep ":8000 " || true; pgrep -af "uvicorn.*ate_cloud" || true'
     remote_sudo 'pkill -f "uvicorn ate_cloud.main:app" 2>/dev/null || true; sleep 2'
-    if remote_cmd 'ss -tlnp 2>/dev/null | grep -q ":8000 "'; then
+    if port_8000_held; then
         die ":8000 is STILL held by another process"
     fi
 fi
