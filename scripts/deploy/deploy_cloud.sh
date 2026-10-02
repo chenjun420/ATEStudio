@@ -72,7 +72,7 @@
 #   REMOTE_USER      default rpdzkj
 #   ENV_FILE         local path to the filled env file. Unset => the env file
 #                    already on the host is left untouched (with a warning).
-#   REF              git ref to deploy, default origin/master. Pass REF=origin/dev to deploy the development branch instead.
+#   REF              git ref to deploy, default origin/main. Pass REF=origin/dev to deploy the development branch instead.
 #   DIST_REF         SPA bundle ref, default spa-dist
 #   FRONTEND_SOURCE  bundle (default) installs the CI-built SPA;
 #                    local builds it on the host (needs node; escape hatch)
@@ -100,7 +100,7 @@ set -o pipefail
 REMOTE_HOST="${REMOTE_HOST:-192.168.5.25}"
 REMOTE_USER="${REMOTE_USER:-rpdzkj}"
 ENV_FILE="${ENV_FILE:-}"
-REF="${REF:-origin/master}"
+REF="${REF:-origin/main}"
 DIST_REF="${DIST_REF:-spa-dist}"
 FRONTEND_SOURCE="${FRONTEND_SOURCE:-bundle}"
 WITH_DEV="${WITH_DEV:-0}"
