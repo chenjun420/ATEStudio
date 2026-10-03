@@ -1,5 +1,52 @@
 name: CI
 
+# Every path below earns its place by being something a job can actually check.
+# The test: "if this file changes, could CI tell me I broke it?" A path that no
+# job reads only spends runner minutes, and a path that CI is supposed to
+# protect but does not list silently disables that protection.
+#
+# What each entry is for:
+#   src/**, tests/**    lint, test and security jobs.
+#   frontend/**         The frontend job runs `npm ci`, `vue-tsc --noEmit`,
+#                       `vitest run` and `npm run build`, which read
+#                       package.json, package-lock.json, tsconfig.json,
+#                       vitest.config.ts, vite.config.ts, index.html,
+#                       postcss.config.js, tailwind.config.js and public/.
+#                       This used to be `frontend/src/**`, which listed none of
+#                       them -- so editing vite.config.ts alone skipped the
+#                       very Production build step that exists to catch a
+#                       broken vite config. (node_modules is gitignored and so
+#                       can never appear in a diff; `frontend/**` is safe.)
+#   pyproject.toml      Dependencies, mypy/ruff config, the dev extra.
+#   uv.lock             Pinned versions for every job that installs.
+#   .coveragerc         The test job's coverage gate reads it. `--cov=src/` on
+#                       the command line overrides `source`, but nothing
+#                       overrides `omit` -- editing it silently changes the
+#                       denominator the 80% threshold is measured against.
+#   alembic/**          No job runs migrations, but `ruff check .` lints 27 of
+#                       its 29 tracked files (all but README and
+#                       script.py.mako), so a push touching only migrations
+#                       would otherwise skip even that.
+#   scripts/**          7 of its 16 tracked files are Python that `ruff check .`
+#                       covers; nothing currently executes any of them.
+#   examples/**         9 of its 10 tracked files are Python, same situation as
+#                       scripts/. Listed for the same reason: nothing executes
+#                       them, but ruff lints them, and excluding them while
+#                       including scripts would be an arbitrary line. (The
+#                       `examples` imports in tests/ are ate_platform.drivers.
+#                       examples -- a src/ package, not this directory.)
+#   .github/workflows/**  A workflow edit can disable any job in any file here.
+#
+# Deliberately NOT listed, because no job can check them today -- add each
+# together with the job that would validate it, not before:
+#   config/**              Human-facing deployment templates. Nothing in src/
+#                          or tests/ reads them (config/test_method_bindings.yaml
+#                          has zero readers anywhere in the repo).
+#   Dockerfile             CI never builds the image.
+#   docker-compose.yml     CI never runs compose.
+#   main.py                Not worth a runner: it is a 4-line `uv init`
+#                          leftover that prints a greeting. The real entry
+#                          point is `uvicorn ate_cloud.main:app` (Dockerfile).
 on:
   push:
     # main and dev only. `master` was removed when the repositories were unified
@@ -8,19 +55,27 @@ on:
     branches: [main, dev]
     paths:
       - 'src/**'
-      - 'frontend/src/**'
+      - 'frontend/**'
       - 'tests/**'
       - 'pyproject.toml'
       - 'uv.lock'
+      - '.coveragerc'
+      - 'alembic/**'
+      - 'scripts/**'
+      - 'examples/**'
       - '.github/workflows/**'
   pull_request:
     branches: [main]
     paths:
       - 'src/**'
-      - 'frontend/src/**'
+      - 'frontend/**'
       - 'tests/**'
       - 'pyproject.toml'
       - 'uv.lock'
+      - '.coveragerc'
+      - 'alembic/**'
+      - 'scripts/**'
+      - 'examples/**'
       - '.github/workflows/**'
   # Re-run on demand.
   #
