@@ -70,10 +70,14 @@ TRANSITIVE_BY_DESIGN = {
     "grpcio": "the gRPC instrument driver; no startup path imports it",
     "protobuf": "same gRPC layer; generated stubs only, and `google` maps here too",
     "numpy": "pulled in by the langchain/scientific stack already depended on",
-    "opentelemetry": "observability/telemetry.py imports it unguarded, but "
-                     "nothing imports that module — the telemetry setup has "
-                     "never been wired in. A separate 'built but never "
-                     "enabled' finding, not a dependency one",
+    "opentelemetry": "observability/telemetry.py imports it unguarded, and "
+                     "deliberately so — it is the OTel integration itself. What "
+                     "keeps it off the import path is the lazy PEP 562 "
+                     "__getattr__ in observability/__init__.py, so importing "
+                     "ate_cloud.observability works on a host without the SDK "
+                     "while still refusing to hand out one of its functions. "
+                     "No caller anywhere yet, so the tracing capability is "
+                     "unreachable rather than merely unwired",
 }
 
 #: Declared but never imported, because they are entry points or runtime-resolved.

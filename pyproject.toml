@@ -171,13 +171,16 @@ warn_unused_configs = true
 # `yaml` is deliberately NOT here: PyYAML does ship stubs, so `types-PyYAML` is a
 # declared dev dependency and yaml usage is genuinely checked.
 #
-# `opentelemetry` is the one to watch. observability/telemetry.py imports it
-# unguarded, so `import ate_cloud.observability` raises ModuleNotFoundError on a
-# host without it. That is a real defect, recorded in
-# TRANSITIVE_BY_DESIGN in that test as "built but never enabled" — nothing imports
-# the package. Suppressing the error here does not fix it and is not meant to; it
-# only stops CI failing on a gap a test already tracks. The fix is to either wire
-# telemetry up and declare the dependency, or delete the module.
+# `opentelemetry` is the one to watch. It is declared nowhere and installed
+# nowhere — not in pyproject.toml, not in uv.lock, not in the venv — so
+# observability/telemetry.py cannot be imported in CI at all. The import-time
+# failure that used to follow from that is fixed: observability/__init__.py reaches
+# telemetry through a lazy PEP 562 __getattr__, so `import ate_cloud.observability`
+# works on a host with no SDK while still refusing to hand out a telemetry function.
+# This override is still needed, because the CI environment still has no SDK, and
+# the capability itself is still unreachable — nothing in src/ calls
+# setup_telemetry. See TRANSITIVE_BY_DESIGN in
+# tests/cloud/test_declared_dependencies.py.
 #
 # `grpc.*` was here until 2026-10-02: only a bare `import grpc` exists, so the
 # wildcard matched nothing and warn_unused_configs reported it every run.

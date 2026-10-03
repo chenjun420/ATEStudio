@@ -3,6 +3,18 @@
 Configures BatchSpanProcessor (never SimpleSpanProcessor — it blocks the event loop)
 with OTLP gRPC exporters for both traces and metrics. Health-check, metrics, and
 docs endpoints are excluded from FastAPI auto-instrumentation.
+
+Unlike observability.logging, the SDK is a hard requirement here: this module *is*
+the OpenTelemetry integration, so importing it without ``opentelemetry`` installed
+is a caller error rather than a degradation to paper over. The imports below are
+therefore deliberately unguarded, and the ModuleNotFoundError naming
+``opentelemetry`` is the useful answer to the question actually being asked.
+
+Nothing imports this module at runtime today. observability/__init__.py resolves
+these functions through a lazy PEP 562 __getattr__, which is what lets
+``import ate_cloud.observability`` work on a host without the SDK while still
+refusing to hand out one of these functions. See TRANSITIVE_BY_DESIGN in
+tests/cloud/test_declared_dependencies.py for why the SDK is not declared.
 """
 
 import logging

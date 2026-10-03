@@ -1,16 +1,35 @@
-"""structlog configuration with OpenTelemetry trace_id/span_id injection.
+"""structlog configuration with optional OpenTelemetry trace_id/span_id injection.
 
 Configures structlog for JSON output and routes standard library ``logging``
 through structlog's ProcessorFormatter, so that both ``structlog.get_logger()``
-and existing ``logging.getLogger(__name__)`` calls produce the same JSON format
-with trace_id and span_id fields from the active OTel span.
+and existing ``logging.getLogger(__name__)`` calls produce the same JSON format.
+
+``opentelemetry`` is optional here and this module imports without it. It used to
+be a bare module-level import, which meant a host without the SDK could not import
+the logger at all — even though the SDK was used for one optional enrichment step,
+adding trace_id and span_id to records emitted inside a trace. Losing those two
+fields is a loss of detail; losing structured logging entirely is a loss of the
+service. So the processor degrades to a pass-through instead.
+
+``ate_cloud.observability.telemetry`` is the opposite case and stays unguarded:
+it is the OTel integration itself, so importing it without the SDK is a caller
+error rather than something to paper over. ``observability/__init__.py`` keeps it
+behind a lazy module ``__getattr__`` so that importing this package never pulls it
+in.
 """
 
 import logging
 from typing import Any
 
 import structlog
-from opentelemetry import trace
+
+try:
+    from opentelemetry import trace
+except ImportError:
+    # Not a runtime dependency, so absence is a supported mode. Assigning None
+    # rather than guarding every call site keeps the whole no-SDK path to the
+    # single branch in _add_otel_trace_ids below.
+    trace = None
 
 
 def _add_otel_trace_ids(
@@ -21,8 +40,13 @@ def _add_otel_trace_ids(
     """structlog processor: inject trace_id and span_id from the current OTel span.
 
     If no valid span context is active (outside a trace), the keys are omitted
-    rather than set to None, keeping log entries clean outside of a trace.
+    rather than set to None, keeping log entries clean outside of a trace. The
+    same happens when opentelemetry is not installed at all, for the reason given
+    in the module docstring.
     """
+    if trace is None:
+        return event_dict
+
     span = trace.get_current_span()
     span_context = span.get_span_context()
     if span_context.is_valid:
@@ -36,7 +60,7 @@ def setup_structlog(log_level: int = logging.INFO) -> None:
 
     Also routes standard library ``logging`` through structlog's
     ProcessorFormatter so that existing ``logging.getLogger(__name__)`` calls
-    produce the same JSON structure with trace_id/span_id.
+    produce the same JSON structure with trace_id and span_id.
 
     Args:
         log_level: The minimum log level (default: ``logging.INFO``).
