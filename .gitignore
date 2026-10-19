@@ -57,6 +57,10 @@ htmlcov/
 .tox/
 .nox/
 .hypothesis/
+# Commission & demo scripts generate artifacts under tests/tmp (e.g. dry-run
+# commission_set_voltage.py with CodeGlobals-referenced `params`). Not source.
+tests/tmp/
+scripts/tmp/
 
 # =============================================================================
 # Type Checking & Linting
@@ -84,7 +88,14 @@ frontend/.vite/
 # =============================================================================
 # Data & Runtime
 # =============================================================================
-data/
+data/*
+!data/commission/
+!data/commission/**
+!data/reports/
+!data/reports/**
+# 排除 pycache 即使在 whitelist 下
+__pycache__/
+*.pyc
 *.db
 *.sqlite
 *.sqlite3

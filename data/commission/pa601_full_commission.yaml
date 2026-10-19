@@ -1,0 +1,487 @@
+# =============================================================================
+# PA601-D54A 全量 commissioning 计划模板（23-TC 真板上板 bring-up）
+# =============================================================================
+#
+# 定位
+#   这是 PA601-D54A（54V 直流输出电源）真板上板用的 **23 项产测用例全量
+#   commissioning 计划模板**，覆盖业界电源产测基准 TC-01..TC-23（安全/输入/
+#   输出/保护/环境五类）。每个 TC 编译为一个 DSL v3.2 `type: action` 步骤，
+#   供真机 bring-up 时逐项落地"测量判据 + cond_fingerprint 归因链"。
+#
+# !! 不可直接 dry-run / 不可直接上板执行 !!
+#   本文件是"上板 bring-up 骨架"而非可运行计划：
+#     - 除 TC-10 复用既有 commission_measure_voltage.py 外，其余 22 个 step 的
+#       script 均为 **TBD（待编写）**，仓内不存在对应 .py；
+#     - YamlParser().parse() **不校验 script 文件是否存在**（仅校验 name/
+#       version/scope/step.id/step.script 非空；文件存在性校验缺失，实测见
+#       交接报告）。因此本 YAML 可被解析，但真机执行到 TBD 步骤会因脚本缺失
+#       由执行器 fail-fast 中止（ProcessExecutor 找不到脚本）。
+#     - value 限值中 limit_source 带【占位】的，来自基准表缺数值项，上板前
+#       必须以 PA601 规格书替换为实测/规格值。
+#   正式上板前必须：补齐全部 TBD 脚本 + 用规格书替换所有【占位】限值。
+#
+# 使用前置（真机）
+#   1. 现场硬件：PSU/DMM/AC 源/电子负载/示波器/功率计/安规仪/温箱/老化架就位
+#      并按下述 resources 接线；安全类（TC-01..TC-04）须先做绝缘电阻/接地
+#      连续性预测试，再做耐压（IEC 62368-1 顺序）。
+#   2. 数据链：ATEStudio edge → MatDeviceHttpDriver → mat-device-control →
+#      SCPI(TCP) 已按 docs/commissioning/real-board-runbook.md 九步打通。
+#   3. 夹具：现场夹具编号（FX-xxxx）已确认；安全回路（急停/放电/隔离）就绪。
+#   4. 判据：所有 value 限值已由 PA601 规格书核定（删除全部【占位】标记）。
+#
+# 安全要求
+#   - TC-01 HIPOT 属高压作业：仅授权人员、隔离区、测试后强制放电。
+#   - TC-18..TC-21（OCP/OVP/UVP/SCP）会触发保护并可能锁存，须确认复位流程。
+#   - TC-22 OTP / TC-23 Burn-In 涉及温箱与长时满负载，全程温度/电流监控。
+#   - fail-fast：on_failure: abort，任一步失败即中止后续，不静默降级。
+#
+# TBD 脚本清单（除注明外均待编写）
+#   既有（复用）: commission_measure_voltage.py              → TC-10
+#   待编写 TBD   : commission_hipot.py                       → TC-01
+#                 commission_measure_insulation.py          → TC-02
+#                 commission_measure_ground_bond.py         → TC-03
+#                 commission_measure_touch_current.py       → TC-04
+#                 commission_power_sequence.py              → TC-05
+#                 commission_measure_inrush.py              → TC-06
+#                 commission_holdup.py                      → TC-07
+#                 commission_measure_uvlo.py                → TC-08
+#                 commission_measure_pf.py                  → TC-09
+#                 commission_measure_regulation.py          → TC-11
+#                 commission_measure_cross_reg.py           → TC-12
+#                 commission_measure_ripple.py              → TC-13
+#                 commission_measure_transient.py           → TC-14
+#                 commission_measure_startup.py             → TC-15
+#                 commission_measure_overshoot.py           → TC-16
+#                 commission_measure_efficiency.py          → TC-17
+#                 commission_ocp.py                         → TC-18
+#                 commission_ovp.py                         → TC-19
+#                 commission_uvp.py                         → TC-20
+#                 commission_scp.py                         → TC-21
+#                 commission_otp.py                         → TC-22
+#                 commission_burn_in.py                     → TC-23
+#
+# 字段来源
+#   - TC 基准（名称/测量/标准）: MATRag/data/reports/end-to-end-gap-assessment-2026-10-19.md
+#   - M-* 方法本体           : MATRag/data/domain/source/power_test_methods.yaml
+#   - 仪器 id                : MATRag/data/domain/source/instrument_catalog.yaml
+#   - 步骤字段结构           : data/commission/mini_commission_pa601.yaml
+# =============================================================================
+name: PA601-D54A 全量 commissioning 计划模板（23-TC 上板 bring-up）
+version: "3.2"
+scope:
+  variables: {}
+max_concurrency: 1
+uut_count: 1
+steps:
+  # -------- 安全（TC-01..TC-04）：先绝缘电阻/接地连续性，后耐压 --------
+  - id: tc01_hipot
+    type: action
+    script: commission_hipot.py  # TBD
+    resources: [HIPOT_1]
+    timeout: 120
+    on_failure: abort
+    params:
+      condition_kind: hipot_leakage
+      condition_text: "TC-01 HIPOT 电介质强度（输入-输出/外壳）"
+      cond_fingerprint: pa601-tc01-hipot
+      script_status: TBD
+      test_voltage_v: 1500
+      value:
+        max: 5.0
+        unit: mA
+      limit_source: "基准 TC-01: primary/secondary 4-5kVac, 漏电流 ≤ mA；1500Vac/5mA 为 54V SELV 产品【占位】，上板前按 IEC 62368-1 + 规格书核定"
+
+  - id: tc02_insulation
+    type: action
+    script: commission_measure_insulation.py  # TBD
+    resources: [IR_1]
+    depends_on: [tc01_hipot]
+    timeout: 90
+    on_failure: abort
+    params:
+      condition_kind: insulation_resistance
+      condition_text: "TC-02 绝缘电阻（输入-外壳/输出）"
+      cond_fingerprint: pa601-tc02-insulation
+      script_status: TBD
+      test_voltage_v: 500
+      value:
+        min: 10.0
+        typ: 100.0
+        unit: MOhm
+      limit_source: "基准 TC-02: 500Vdc, ≥10MΩ（typ ≥100MΩ）；IEC 62368-1（M-INSULATION-RES）"
+
+  - id: tc03_ground_bond
+    type: action
+    script: commission_measure_ground_bond.py  # TBD
+    resources: [BOND_1]
+    depends_on: [tc02_insulation]
+    timeout: 90
+    on_failure: abort
+    params:
+      condition_kind: ground_bond_resistance
+      condition_text: "TC-03 接地连续性（保护接地端子-可触及金属外壳）"
+      cond_fingerprint: pa601-tc03-ground-bond
+      script_status: TBD
+      test_current_a: 25
+      value:
+        max: 0.1
+        unit: Ohm
+      limit_source: "基准 TC-03: 25A/30A, ≤0.1Ω（大电流低电阻法）；IEC 62368-1（M-GROUND-BOND）"
+
+  - id: tc04_touch_current
+    type: action
+    script: commission_measure_touch_current.py  # TBD
+    resources: [LEAKAGE_1]
+    depends_on: [tc03_ground_bond]
+    timeout: 90
+    on_failure: abort
+    params:
+      condition_kind: touch_current
+      condition_text: "TC-04 接触电流/漏电流（正常+单一故障，极性正反）"
+      cond_fingerprint: pa601-tc04-touch-current
+      script_status: TBD
+      value:
+        max: 3.5
+        unit: mA
+      limit_source: "基准 TC-04: ≤3.5mA AC；IEC 60990（M-TOUCH-CURRENT）"
+
+  # -------- 输入（TC-05..TC-09） --------
+  - id: tc05_power_sequence
+    type: action
+    script: commission_power_sequence.py  # TBD
+    resources: [AC_SRC_1]
+    depends_on: [tc04_touch_current]
+    timeout: 90
+    on_failure: abort
+    params:
+      condition_kind: power_sequence
+      condition_text: "TC-05 交流上电/掉电时序（turn-on/off timing）"
+      cond_fingerprint: pa601-tc05-power-sequence
+      script_status: TBD
+      value:
+        max: 0.0
+        unit: ms
+      limit_source: "【占位】基准 TC-05 未给数值（80 PLUS; Tek）；M-* 缺（需补 M-STARTUP-TIME/sequencing），上板前按规格书核定"
+
+  - id: tc06_inrush
+    type: action
+    script: commission_measure_inrush.py  # TBD
+    resources: [SCOPE_1]
+    depends_on: [tc05_power_sequence]
+    timeout: 90
+    on_failure: abort
+    params:
+      condition_kind: inrush_current
+      condition_text: "TC-06 输入浪涌电流（峰值点接通 90°/270°，冷/热启动）"
+      cond_fingerprint: pa601-tc06-inrush
+      script_status: TBD
+      value:
+        max: 0.0
+        unit: A
+      limit_source: "【占位】基准 TC-06: peak A within 50ms，未给具体 A 值（ICE-3 5/8; UL）；M-INRUSH，上板前按规格书/保险丝 I²t 核定"
+
+  - id: tc07_holdup
+    type: action
+    script: commission_holdup.py  # TBD
+    resources: [AC_SRC_1, ELOAD_1]
+    depends_on: [tc06_inrush]
+    timeout: 120
+    on_failure: abort
+    params:
+      condition_kind: holdup_time
+      condition_text: "TC-07 掉电保持时间（切断 AC 后输出维持 ≥90% 标称）"
+      cond_fingerprint: pa601-tc07-holdup
+      script_status: TBD
+      value:
+        min: 16.0
+        typ: 20.0
+        unit: ms
+      limit_source: "基准 TC-07: ≥16-20ms @ 80% 标称输入；IEC 61000-4-11（M-HOLDUP）"
+
+  - id: tc08_uvlo
+    type: action
+    script: commission_measure_uvlo.py  # TBD
+    resources: [AC_SRC_1]
+    depends_on: [tc07_holdup]
+    timeout: 120
+    on_failure: abort
+    params:
+      condition_kind: uvlo_threshold
+      condition_text: "TC-08 输入欠压锁定/过压锁定阈值（trip/recovery hysteresis）"
+      cond_fingerprint: pa601-tc08-uvlo
+      script_status: TBD
+      value:
+        min: 0.0
+        unit: V
+      limit_source: "【占位】基准 TC-08 trip/recovery hysteresis 未给数值；IEC 61204（M-UVLO/M-INPUT-SLOW），上板前按规格书核定回差 ≥ max(设定×1%, 输入噪声pp×2)"
+
+  - id: tc09_pf
+    type: action
+    script: commission_measure_pf.py  # TBD
+    resources: [PWR_METER_1]
+    depends_on: [tc08_uvlo]
+    timeout: 120
+    on_failure: abort
+    params:
+      condition_kind: power_factor
+      condition_text: "TC-09 功率因数/谐波电流（115/230Vac 多负载点）"
+      cond_fingerprint: pa601-tc09-pf
+      script_status: TBD
+      value:
+        min: 0.9
+        unit: ""
+      limit_source: "基准 TC-09: PF ≥0.9；THD 按 IEC 61000-3-2 Class A/B/D（M-PF，谐波 Class 待规格书核定）"
+
+  # -------- 输出（TC-10..TC-17） --------
+  - id: tc10_output_voltage
+    type: action
+    script: commission_measure_voltage.py  # 既有（复用 mini plan 测量脚本）
+    resources: [DMM_1]
+    depends_on: [tc09_pf]
+    timeout: 60
+    on_failure: abort
+    params:
+      condition_kind: output_voltage
+      condition_text: "TC-10 输出电压容差（54V 标称 ±5%）"
+      cond_fingerprint: pa601-tc10-output-voltage
+      script_status: existing
+      device_id: psu001
+      channel: 1
+      set_value: 54.0
+      value:
+        min: 51.3
+        typ: 54.0
+        max: 56.7
+        unit: V
+      limit_source: "基准 TC-10: ±5% min/typ/max；54V ±5% = 51.3..56.7V（通用，54V 标称来自 mini plan）"
+
+  - id: tc11_regulation
+    type: action
+    script: commission_measure_regulation.py  # TBD
+    resources: [SCOPE_1, PWR_METER_1]
+    depends_on: [tc10_output_voltage]
+    timeout: 120
+    on_failure: abort
+    params:
+      condition_kind: regulation
+      condition_text: "TC-11 线性/负载调整率（输入 90~264Vac；负载 10%→100%）"
+      cond_fingerprint: pa601-tc11-regulation
+      script_status: TBD
+      value:
+        max: 1.0
+        unit: "%"
+      limit_source: "基准 TC-11: ≤1%；IEC 61204（M-REGULATION）"
+
+  - id: tc12_cross_regulation
+    type: action
+    script: commission_measure_cross_reg.py  # TBD
+    resources: [DMM_1]
+    depends_on: [tc11_regulation]
+    timeout: 120
+    on_failure: abort
+    params:
+      condition_kind: cross_regulation
+      condition_text: "TC-12 交叉调整率（多轨间耦合）"
+      cond_fingerprint: pa601-tc12-cross-reg
+      script_status: TBD
+      value:
+        max: 2.0
+        unit: "%"
+      limit_source: "基准 TC-12: multi-rail ±2%；M-* 缺（需补 M-CROSS-REG），上板前按规格书核定"
+
+  - id: tc13_ripple
+    type: action
+    script: commission_measure_ripple.py  # TBD
+    resources: [SCOPE_1]
+    depends_on: [tc12_cross_regulation]
+    timeout: 90
+    on_failure: abort
+    params:
+      condition_kind: ripple_noise
+      condition_text: "TC-13 输出纹波与噪声（20MHz 带宽限制、靠接法）"
+      cond_fingerprint: pa601-tc13-ripple
+      script_status: TBD
+      value:
+        typ: 100.0
+        max: 540.0
+        unit: mVpp
+      limit_source: "基准 TC-13: ≤1%·Vout（54V→540mVpp），行业常取 ≤50-100mVpp；IEC 61204-3 / JEITA-RC9131A（M-RIPPLE-NOISE）"
+
+  - id: tc14_transient
+    type: action
+    script: commission_measure_transient.py  # TBD
+    resources: [SCOPE_1, ELOAD_1]
+    depends_on: [tc13_ripple]
+    timeout: 120
+    on_failure: abort
+    params:
+      condition_kind: transient_response
+      condition_text: "TC-14 动态响应（负载阶跃 25/50/75%）"
+      cond_fingerprint: pa601-tc14-transient
+      script_status: TBD
+      step_load_pct: 25
+      value:
+        max: 500.0
+        unit: us
+      limit_source: "基准 TC-14: step load 25/50/75%, recovery ≤500µs；IEC 61204（M-TRANSIENT）"
+
+  - id: tc15_startup
+    type: action
+    script: commission_measure_startup.py  # TBD
+    resources: [SCOPE_1]
+    depends_on: [tc14_transient]
+    timeout: 90
+    on_failure: abort
+    params:
+      condition_kind: startup_time
+      condition_text: "TC-15 开机延迟/输出上升时间"
+      cond_fingerprint: pa601-tc15-startup
+      script_status: TBD
+      value:
+        max: 100.0
+        unit: ms
+      limit_source: "基准 TC-15: <100ms sometimes（通用）；M-STARTUP，上板前按规格书核定"
+
+  - id: tc16_overshoot
+    type: action
+    script: commission_measure_overshoot.py  # TBD
+    resources: [SCOPE_1]
+    depends_on: [tc15_startup]
+    timeout: 90
+    on_failure: abort
+    params:
+      condition_kind: overshoot
+      condition_text: "TC-16 启动过冲（on turn-on）"
+      cond_fingerprint: pa601-tc16-overshoot
+      script_status: TBD
+      value:
+        max: 5.0
+        unit: "%"
+      limit_source: "基准 TC-16: ≤5%；M-* 缺（需补 M-OVERSHOOT），上板前按规格书核定"
+
+  - id: tc17_efficiency
+    type: action
+    script: commission_measure_efficiency.py  # TBD
+    resources: [PWR_METER_1]
+    depends_on: [tc16_overshoot]
+    timeout: 300
+    on_failure: abort
+    params:
+      condition_kind: efficiency
+      condition_text: "TC-17 效率/功率损耗（25/50/75/100% 负载点 η 曲线）"
+      cond_fingerprint: pa601-tc17-efficiency
+      script_status: TBD
+      value:
+        min: 85.0
+        unit: "%"
+      limit_source: "【占位】基准 TC-17: η curve 25/50/75/100%，未给数值（80 PLUS; ETSI EN 303470）；M-EFFICIENCY，上板前按 80 PLUS 等级 + 规格书核定"
+
+  # -------- 保护（TC-18..TC-22） --------
+  - id: tc18_ocp
+    type: action
+    script: commission_ocp.py  # TBD
+    resources: [ELOAD_1]
+    depends_on: [tc17_efficiency]
+    timeout: 120
+    on_failure: abort
+    params:
+      condition_kind: ocp_threshold
+      condition_text: "TC-18 过流保护（CC 递增，cycle/foldback）"
+      cond_fingerprint: pa601-tc18-ocp
+      script_status: TBD
+      value:
+        min: 110.0
+        max: 150.0
+        unit: "%Irated"
+      limit_source: "基准 TC-18: 110-150% rated I, cycle or foldback；IEC 60950-1 / IEC 62368-1（M-OCP），额定电流待规格书"
+
+  - id: tc19_ovp
+    type: action
+    script: commission_ovp.py  # TBD
+    resources: [ELOAD_1]
+    depends_on: [tc18_ocp]
+    timeout: 120
+    on_failure: abort
+    params:
+      condition_kind: ovp_threshold
+      condition_text: "TC-19 过压保护（latch）"
+      cond_fingerprint: pa601-tc19-ovp
+      script_status: TBD
+      value:
+        min: 110.0
+        max: 130.0
+        unit: "%Vrated"
+      limit_source: "基准 TC-19: 110-130% rated V, latch；IEC 61204-3（M-OVP）"
+
+  - id: tc20_uvp
+    type: action
+    script: commission_uvp.py  # TBD
+    resources: [ELOAD_1]
+    depends_on: [tc19_ovp]
+    timeout: 120
+    on_failure: abort
+    params:
+      condition_kind: uvp_threshold
+      condition_text: "TC-20 欠压保护（latch 或自动恢复）"
+      cond_fingerprint: pa601-tc20-uvp
+      script_status: TBD
+      value:
+        min: 80.0
+        max: 90.0
+        unit: "%Vrated"
+      limit_source: "基准 TC-20: 80-90% rated V, latch or auto-recovery；IEC 61204（M-UVP）"
+
+  - id: tc21_scp
+    type: action
+    script: commission_scp.py  # TBD
+    resources: [ELOAD_1]
+    depends_on: [tc20_uvp]
+    timeout: 120
+    on_failure: abort
+    params:
+      condition_kind: scp_recovery
+      condition_text: "TC-21 短路保护（continuous vs hiccup recovery）"
+      cond_fingerprint: pa601-tc21-scp
+      script_status: TBD
+      value:
+        max: 0.0
+        unit: s
+      limit_source: "【占位】基准 TC-21: continuous vs hiccup recovery，未给数值；IEC 61204（M-SCP，当前 MU 经 OCP fallback），上板前按规格书核定恢复行为"
+
+  - id: tc22_otp
+    type: action
+    script: commission_otp.py  # TBD
+    resources: [THERMO_1]
+    depends_on: [tc21_scp]
+    timeout: 600
+    on_failure: abort
+    params:
+      condition_kind: otp_temperature
+      condition_text: "TC-22 过温保护（温箱升温，thermistor trip）"
+      cond_fingerprint: pa601-tc22-otp
+      script_status: TBD
+      value:
+        max: 0.0
+        unit: "C"
+      limit_source: "【占位】基准 TC-22: thermistor trip，未给数值（UL/IEC 62368-1 cl.9）；M-OTP，上板前按规格书核定触发点/回差"
+
+  # -------- 环境（TC-23） --------
+  - id: tc23_burn_in
+    type: action
+    script: commission_burn_in.py  # TBD
+    resources: [AGING_RACK_1, THERMO_1]
+    depends_on: [tc22_otp]
+    timeout: 0
+    on_failure: abort
+    params:
+      condition_kind: burn_in
+      condition_text: "TC-23 老化/Burn-In（50°C，满载，≥48h）"
+      cond_fingerprint: pa601-tc23-burn-in
+      script_status: TBD
+      ambient_c: 50
+      load_pct: 100
+      value:
+        min: 48.0
+        typ: 72.0
+        unit: h
+      limit_source: "基准 TC-23: 48hr or 168hr, 50°C, full load；Tek/ActionPower/OCP 48V（M-BURN-IN）；timeout=0 表示无超时（长时老化专用）"
