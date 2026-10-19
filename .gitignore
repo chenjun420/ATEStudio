@@ -93,6 +93,8 @@ data/*
 !data/commission/**
 !data/reports/
 !data/reports/**
+!data/domain/
+!data/domain/**
 # 排除 pycache 即使在 whitelist 下
 __pycache__/
 *.pyc
